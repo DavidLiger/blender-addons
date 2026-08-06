@@ -2656,7 +2656,7 @@ def register():
         name="Cadrer sur le point", default=False,
         description="Recentre la vue sur le point selectionne")
     S.rm_show_names = bpy.props.BoolProperty(name="Noms visibles", default=True)
-    S.rm_tube_radius = bpy.props.FloatProperty(name="Rayon", default=0.05, min=0.001, max=5.0)
+    S.rm_tube_radius = bpy.props.FloatProperty(name="Rayon", default=0.02, min=0.001, max=5.0)
     S.rm_tube_res = bpy.props.IntProperty(name="Lissage", default=4, min=0, max=32)
     S.rm_tube_caps = bpy.props.BoolProperty(name="Fermer les extremites", default=True)
     S.rm_tube_material = bpy.props.PointerProperty(
