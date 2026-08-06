@@ -515,6 +515,17 @@ class RBM_OT_new_character(bpy.types.Operator):
             "    bg.inputs[0].default_value = (0.0513, 0.0513, 0.0545, 1.0)",
             "    bg.inputs[1].default_value = 1.0",
             "bpy.context.scene.world = world",
+            # Lampe surface au-dessus de la zone ou nait le squelette
+            # (robot d'environ 1,80 m, centre sur l'origine)
+            "light = bpy.data.lights.new('Key', type='AREA')",
+            "light.shape = 'RECTANGLE'",
+            "light.size = 3.0",
+            "light.size_y = 2.0",
+            "light.energy = 400.0",
+            "key = bpy.data.objects.new('Key', light)",
+            "bpy.context.scene.collection.objects.link(key)",
+            "key.location = (0.0, -1.5, 3.6)",
+            "key.rotation_euler = (0.35, 0.0, 0.0)",
             "bpy.ops.wm.save_as_mainfile(filepath={})".format(repr(blend_path)),
             "try:",
             "    import addon_utils",
