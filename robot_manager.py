@@ -578,6 +578,83 @@ class RBM_OT_edit_character(bpy.types.Operator):
         self.report({'INFO'}, "Ouverture de {}.blend".format(self.name))
         return {'FINISHED'}
 
+class RBM_OT_delete_character(bpy.types.Operator):
+    bl_idname = "rbm.delete_character"
+    bl_label = "Supprimer le personnage"
+    bl_description = ("Supprime definitivement le dossier du personnage : .blend, "
+                      "postures, animations, expressions, tout son contenu")
+
+    name: bpy.props.StringProperty()
+    confirm: bpy.props.BoolProperty(
+        name="Je confirme la suppression definitive", default=False)
+
+    def invoke(self, context, event):
+        self.confirm = False
+        return context.window_manager.invoke_props_dialog(self, width=420)
+
+    def draw(self, context):
+        layout = self.layout
+        folder = robot_dir(self.name)
+
+        col = layout.column(align=True)
+        col.alert = True
+        col.label(text="Suppression definitive de '{}'".format(self.name),
+                  icon='ERROR')
+
+        sub = layout.column(align=True)
+        sub.scale_y = 0.8
+        sub.label(text=folder)
+
+        # Ce que le dossier contient reellement
+        counts = []
+        for sub_name in (D_POSE, D_ANIM, D_RIGGED, "expressions", "prototype"):
+            path = os.path.join(folder, sub_name)
+            if os.path.isdir(path):
+                files = [f for f in os.listdir(path)
+                         if os.path.isfile(os.path.join(path, f))]
+                if files:
+                    counts.append("{} : {} fichier(s)".format(sub_name, len(files)))
+
+        for line in counts:
+            sub.label(text=line)
+
+        layout.separator()
+        layout.prop(self, "confirm")
+
+    def execute(self, context):
+        import shutil
+
+        if not self.confirm:
+            self.report({'WARNING'}, "Suppression annulee : case non cochee")
+            return {'CANCELLED'}
+
+        folder = robot_dir(self.name)
+        root = root_path()
+
+        # Garde-fou : ne jamais sortir de creations/
+        expected = os.path.normpath(os.path.join(root, CREATIONS))
+        if not folder or not os.path.normpath(folder).startswith(expected):
+            self.report({'ERROR'}, "Chemin inattendu, suppression refusee")
+            return {'CANCELLED'}
+
+        if not os.path.isdir(folder):
+            self.report({'ERROR'}, "Dossier introuvable")
+            return {'CANCELLED'}
+
+        try:
+            shutil.rmtree(folder)
+        except Exception as e:
+            self.report({'ERROR'}, "Suppression impossible : {} "
+                                   "(le .blend est peut-etre ouvert)".format(e))
+            return {'CANCELLED'}
+
+        scan_all(context)
+        if context.scene.rbm_robot == self.name:
+            context.scene.rbm_robot = _robots[0][0] if _robots else ""
+
+        self.report({'INFO'}, "'{}' supprime".format(self.name))
+        return {'FINISHED'}
+
 class RBM_OT_select_robot(bpy.types.Operator):
     bl_idname = "rbm.select_robot"
     bl_label = "Choisir ce robot"
@@ -966,6 +1043,7 @@ class RBM_PT_panel(bpy.types.Panel):
         row = box.row(align=True)
         row.label(text="Robots", icon='OUTLINER_OB_ARMATURE')
         row.operator("rbm.new_character", text="", icon='ADD')
+        row.prop(scene, "rbm_edit", text="", icon='TRASH', toggle=True)
         row.operator("rbm.scan", text="", icon='FILE_REFRESH')
 
         if not root_path():
@@ -987,6 +1065,9 @@ class RBM_PT_panel(bpy.types.Panel):
                               depress=(name == robot)).name = name
                 line.operator("rbm.edit_character", text="",
                               icon='GREASEPENCIL').name = name
+                if scene.rbm_edit:
+                    line.operator("rbm.delete_character", text="",
+                                  icon='TRASH').name = name
 
             r = box.row(align=True)
             r.prop(scene, "rbm_columns", text="Colonnes")
@@ -1087,6 +1168,7 @@ classes = (
     RBM_PT_panel,
     RBM_OT_new_character,
     RBM_OT_edit_character,
+    RBM_OT_delete_character,
 )
 
 
