@@ -1,0 +1,757 @@
+bl_info = {
+    "name": "Multi-Cam BD",
+    "author": "David",
+    "version": (1, 0, 0),
+    "blender": (4, 0, 0),
+    "location": "View3D > Sidebar (N) > Multi-Cam BD",
+    "description": "Liste, previsualise et rend en batch les cameras de planches BD (res_x/res_y et frame par camera)",
+    "category": "3D View",
+}
+
+import bpy
+import os
+import re
+
+
+# ---------------------------------------------------------------------------
+# PropertyGroup : un element de la liste = une camera
+# ---------------------------------------------------------------------------
+class MULTICAM_CameraItem(bpy.types.PropertyGroup):
+    name: bpy.props.StringProperty(name="Nom camera")
+    enabled: bpy.props.BoolProperty(name="Rendre", default=True)
+
+
+# ---------------------------------------------------------------------------
+# UIList : affichage de chaque camera (checkbox / nom / resolution / preview)
+# ---------------------------------------------------------------------------
+class MULTICAM_UL_cameras(bpy.types.UIList):
+    # Proportions partagees avec l'en-tete du panneau (voir MULTICAM_PT_panel)
+    NAME_FACTOR = 0.42
+
+    def draw_item(self, context, layout, data, item, icon, active_data, active_propname, index):
+        row = layout.row(align=True)
+        row.prop(item, "enabled", text="")
+
+        cam = bpy.data.objects.get(item.name)
+
+        if cam is None:
+            row.label(text=item.name + "  (introuvable)", icon='ERROR')
+            return
+
+        split = row.split(factor=self.NAME_FACTOR, align=True)
+        split.label(text=item.name)
+
+        fields = split.row(align=True)
+
+        # Largeur / hauteur
+        if "res_x" in cam and "res_y" in cam:
+            fields.prop(cam, '["res_x"]', text="")
+            fields.prop(cam, '["res_y"]', text="")
+        else:
+            op = fields.operator("multicam.set_resolution", text="res ?")
+            op.camera_name = item.name
+
+        # Frame de la timeline utilisee pour le rendu de cette camera
+        if "frame" in cam:
+            fields.prop(cam, '["frame"]', text="")
+        else:
+            op = fields.operator("multicam.set_frame", text="f ?")
+            op.camera_name = item.name
+
+        op = fields.operator("multicam.preview", text="", icon='HIDE_OFF')
+        op.camera_name = item.name
+
+
+# ---------------------------------------------------------------------------
+# Operateur : ajouter res_x / res_y sur une camera qui n'en a pas
+# ---------------------------------------------------------------------------
+class MULTICAM_OT_set_resolution(bpy.types.Operator):
+    bl_idname = "multicam.set_resolution"
+    bl_label = "Definir resolution"
+    bl_description = "Ajoute les proprietes res_x / res_y (1000 x 1000 par defaut) sur cette camera"
+
+    camera_name: bpy.props.StringProperty()
+
+    def execute(self, context):
+        cam = bpy.data.objects.get(self.camera_name)
+        if cam is None:
+            return {'CANCELLED'}
+
+        cam["res_x"] = 1000
+        cam["res_y"] = 1000
+
+        _multicam_fix_res_bounds(cam)
+
+        return {'FINISHED'}
+
+
+# ---------------------------------------------------------------------------
+# Operateur : definir la frame d'une camera
+# ---------------------------------------------------------------------------
+class MULTICAM_OT_set_frame(bpy.types.Operator):
+    bl_idname = "multicam.set_frame"
+    bl_label = "Definir la frame"
+    bl_description = ("Ajoute la propriete 'frame' sur cette camera : la timeline sera "
+                      "placee sur cette frame au moment du rendu (animation de vehicules, "
+                      "destruction de batiment...)")
+
+    camera_name: bpy.props.StringProperty()
+
+    def execute(self, context):
+        cam = bpy.data.objects.get(self.camera_name)
+        if cam is None:
+            return {'CANCELLED'}
+
+        cam["frame"] = context.scene.frame_current
+        _multicam_fix_res_bounds(cam)
+        return {'FINISHED'}
+
+
+# ---------------------------------------------------------------------------
+# Operateur : repartir automatiquement les frames (0, 10, 20... par defaut)
+# ---------------------------------------------------------------------------
+class MULTICAM_OT_auto_frames(bpy.types.Operator):
+    bl_idname = "multicam.auto_frames"
+    bl_label = "Repartir les frames"
+    bl_description = ("Attribue une frame a chaque camera de la liste, par pas regulier. "
+                      "Les valeurs restent modifiables ensuite camera par camera")
+    bl_options = {'REGISTER', 'UNDO'}
+
+    start: bpy.props.IntProperty(name="Premiere frame", default=0, min=0)
+    step: bpy.props.IntProperty(name="Pas", default=10, min=1)
+    only_enabled: bpy.props.BoolProperty(
+        name="Uniquement les cameras cochees", default=False)
+
+    def invoke(self, context, event):
+        return context.window_manager.invoke_props_dialog(self)
+
+    def execute(self, context):
+        scene = context.scene
+        frame = self.start
+        count = 0
+
+        for item in scene.multicam_items:
+            if self.only_enabled and not item.enabled:
+                continue
+            cam = bpy.data.objects.get(item.name)
+            if cam is None or cam.type != 'CAMERA':
+                continue
+
+            cam["frame"] = frame
+            _multicam_fix_res_bounds(cam)
+            frame += self.step
+            count += 1
+
+        self.report({'INFO'}, "{} camera(s) : frames {} a {}".format(
+            count, self.start, max(self.start, frame - self.step)))
+        return {'FINISHED'}
+
+
+def _multicam_fix_res_bounds(cam):
+    """S'assure que res_x / res_y / frame peuvent etre edites librement
+    (corrige aussi les anciennes proprietes bloquees a Max=1)."""
+    for key in ("res_x", "res_y"):
+        if key in cam:
+            try:
+                cam.id_properties_ui(key).update(min=1, max=20000)
+            except Exception:
+                pass
+    if "frame" in cam:
+        try:
+            cam.id_properties_ui("frame").update(min=0, max=1048574)
+        except Exception:
+            pass
+
+
+# ---------------------------------------------------------------------------
+# Operateur : rafraichir la liste depuis la scene
+# ---------------------------------------------------------------------------
+class MULTICAM_OT_refresh(bpy.types.Operator):
+    bl_idname = "multicam.refresh"
+    bl_label = "Rafraichir la liste"
+    bl_description = "Recharge la liste des cameras possedant res_x / res_y"
+
+    def execute(self, context):
+        scene = context.scene
+
+        # On garde en memoire l'etat des cases deja cochees / decochees
+        previous_state = {item.name: item.enabled for item in scene.multicam_items}
+
+        scene.multicam_items.clear()
+
+        cams = [obj for obj in bpy.data.objects if obj.type == 'CAMERA']
+        cams.sort(key=lambda o: o.name)
+
+        for cam in cams:
+            item = scene.multicam_items.add()
+            item.name = cam.name
+            # Si la camera existait deja dans la liste, on garde son etat
+            item.enabled = previous_state.get(cam.name, True)
+
+            # Corrige les bornes UI des anciennes res_x/res_y (ex: Max=1)
+            _multicam_fix_res_bounds(cam)
+
+        self.report({'INFO'}, "{} camera(s) trouvee(s)".format(len(cams)))
+        return {'FINISHED'}
+
+
+# ---------------------------------------------------------------------------
+# Regroupement par planche : "Camera.01.A" -> planche "01"
+# ---------------------------------------------------------------------------
+_PAGE_RE = re.compile(r"\.(\d+)\.")
+
+# Convention de dossiers : .../planches/<NN>/rendus-XXX
+_PATH_PAGE_RE = re.compile(r"(planches[\\/])(\d+)([\\/])", re.IGNORECASE)
+
+
+def _multicam_retarget_path(path, page):
+    """Remplace le numero de planche dans un chemin de type planches/<NN>/...
+    Renvoie (nouveau_chemin, True) si la substitution a eu lieu."""
+    if not path:
+        return path, False
+
+    new_path, count = _PATH_PAGE_RE.subn(
+        lambda m: m.group(1) + page + m.group(3), path, count=1)
+    return new_path, bool(count)
+
+
+def _multicam_page_of(name):
+    """Numero de planche extrait du nom de camera, ou None."""
+    m = _PAGE_RE.search(name)
+    return m.group(1) if m else None
+
+
+def _multicam_pages(scene):
+    """Liste triee des planches presentes dans la liste des cameras."""
+    pages = {_multicam_page_of(item.name) for item in scene.multicam_items}
+    pages.discard(None)
+    return sorted(pages, key=lambda p: (len(p), p))
+
+
+class MULTICAM_OT_select_page(bpy.types.Operator):
+    bl_idname = "multicam.select_page"
+    bl_label = "Cocher une planche"
+    bl_description = "Coche toutes les cameras de cette planche et decoche toutes les autres"
+
+    page: bpy.props.StringProperty()
+
+    def execute(self, context):
+        scene = context.scene
+
+        count = 0
+        for item in scene.multicam_items:
+            match = (_multicam_page_of(item.name) == self.page)
+            item.enabled = match
+            if match:
+                count += 1
+
+        msg = "Planche {} : {} camera(s)".format(self.page, count)
+
+        # Adapte les dossiers de sortie a la planche selectionnee
+        if scene.multicam_follow_page:
+            retargeted = False
+            for prop in ("multicam_output_eevee", "multicam_output_cycles"):
+                new_path, changed = _multicam_retarget_path(getattr(scene, prop), self.page)
+                if changed:
+                    setattr(scene, prop, new_path)
+                    retargeted = True
+
+            if retargeted:
+                msg += " - dossiers de sortie adaptes"
+            elif scene.multicam_output_eevee or scene.multicam_output_cycles:
+                msg += " - chemins inchanges (motif 'planches/<NN>/' absent)"
+
+        self.report({'INFO'}, msg)
+        return {'FINISHED'}
+
+
+# ---------------------------------------------------------------------------
+# Operateur : tout cocher / tout decocher
+# ---------------------------------------------------------------------------
+class MULTICAM_OT_select_all(bpy.types.Operator):
+    bl_idname = "multicam.select_all"
+    bl_label = "Selectionner / Deselectionner tout"
+    bl_description = "Coche ou decoche toutes les cameras de la liste"
+
+    state: bpy.props.BoolProperty(default=True)
+
+    def execute(self, context):
+        for item in context.scene.multicam_items:
+            item.enabled = self.state
+        return {'FINISHED'}
+
+
+# ---------------------------------------------------------------------------
+# Operateur : preview d'une camera (active + resolution + vue camera)
+# ---------------------------------------------------------------------------
+class MULTICAM_OT_preview(bpy.types.Operator):
+    bl_idname = "multicam.preview"
+    bl_label = "Preview"
+    bl_description = "Active cette camera, applique sa resolution et bascule en vue camera (passe-partout ajuste)"
+
+    camera_name: bpy.props.StringProperty()
+
+    def execute(self, context):
+        cam = bpy.data.objects.get(self.camera_name)
+
+        if cam is None or cam.type != 'CAMERA':
+            self.report({'ERROR'}, "Camera '{}' introuvable".format(self.camera_name))
+            return {'CANCELLED'}
+
+        scene = context.scene
+        scene.camera = cam
+
+        # Se placer sur la frame de cette camera (si definie)
+        if "frame" in cam:
+            scene.frame_set(int(cam["frame"]))
+
+        if "res_x" in cam and "res_y" in cam:
+            scene.render.resolution_x = cam["res_x"]
+            scene.render.resolution_y = cam["res_y"]
+        else:
+            self.report({'WARNING'}, "Cette camera n'a pas de res_x / res_y")
+
+        # Basculer le viewport 3D en vue camera (Numpad 0)
+        # -> il faut un override sur la region 'WINDOW' du viewport 3D
+        # -> on ne bascule QUE si on n'est pas deja en vue camera, sinon
+        #    view3d.view_camera() est un toggle et nous ferait sortir de la vue camera
+        for window in context.window_manager.windows:
+            for area in window.screen.areas:
+                if area.type == 'VIEW_3D':
+                    space = area.spaces.active
+                    already_camera_view = (
+                        space.region_3d is not None
+                        and space.region_3d.view_perspective == 'CAMERA'
+                    )
+                    if not already_camera_view:
+                        for region in area.regions:
+                            if region.type == 'WINDOW':
+                                with context.temp_override(window=window, area=area, region=region):
+                                    bpy.ops.view3d.view_camera()
+                                break
+                    break
+
+        return {'FINISHED'}
+
+
+# ---------------------------------------------------------------------------
+# Rendu batch via bpy.app.timers (plus fiable qu'un operateur modal + timer)
+# ---------------------------------------------------------------------------
+_batch_state = {
+    "cameras": [],
+    "index": 0,
+    "active": False,
+    "current_filepath": None,
+}
+
+_FORMAT_EXTENSIONS = {
+    'PNG': '.png',
+    'JPEG': '.jpg',
+    'OPEN_EXR': '.exr',
+    'OPEN_EXR_MULTILAYER': '.exr',
+    'TIFF': '.tif',
+    'BMP': '.bmp',
+    'TARGA': '.tga',
+    'TARGA_RAW': '.tga',
+    'WEBP': '.webp',
+}
+
+
+def _multicam_redraw_areas():
+    for window in bpy.context.window_manager.windows:
+        for area in window.screen.areas:
+            if area.type == 'VIEW_3D':
+                area.tag_redraw()
+
+
+def _multicam_output_dir_raw(scene):
+    """Chemin de sortie brut correspondant au moteur de rendu actif."""
+    if scene.render.engine == 'CYCLES':
+        return scene.multicam_output_cycles
+    return scene.multicam_output_eevee
+
+
+def _multicam_check_output_dir(scene):
+    """Verifie le dossier de sortie du moteur actif.
+    Renvoie None si tout va bien, sinon un message d'erreur.
+
+    Le dossier de rendu lui-meme peut ne pas exister (il sera cree), mais son
+    parent doit exister : cela evite de creer silencieusement une arborescence
+    entiere a cause d'une faute de frappe (ex: strip-02 pas encore cree)."""
+    raw = _multicam_output_dir_raw(scene)
+
+    if not raw:
+        return "Dossier de sortie non defini pour le moteur '{}'".format(scene.render.engine)
+
+    path = os.path.normpath(bpy.path.abspath(raw))
+
+    if os.path.isdir(path):
+        return None
+
+    parent = os.path.dirname(path)
+    if not os.path.isdir(parent):
+        return "Chemin introuvable : {} (le dossier parent n'existe pas)".format(path)
+
+    return None
+
+
+def _multicam_setup_camera(scene, cam):
+    # Dossier de sortie selon le moteur actif
+    if scene.render.engine == 'CYCLES':
+        out_dir = scene.multicam_output_cycles
+    else:
+        out_dir = scene.multicam_output_eevee
+
+    if not out_dir:
+        raise RuntimeError("Dossier de sortie non defini pour le moteur '{}'".format(scene.render.engine))
+
+    out_dir_abs = bpy.path.abspath(out_dir)
+    os.makedirs(out_dir_abs, exist_ok=True)
+
+    scene.camera = cam
+
+    # Frame de la timeline propre a cette camera (animation en cours)
+    if "frame" in cam:
+        scene.frame_set(int(cam["frame"]))
+
+    scene.render.resolution_x = cam["res_x"]
+    scene.render.resolution_y = cam["res_y"]
+
+    ext = _FORMAT_EXTENSIONS.get(scene.render.image_settings.file_format, '.png')
+    filepath = os.path.join(out_dir_abs, cam.name + ext)
+
+    # On gere la sauvegarde nous-memes (voir _multicam_on_render_complete),
+    # donc on desactive l'auto-save de l'operateur de rendu.
+    scene.render.use_file_extension = False
+    scene.render.filepath = filepath
+
+    return filepath
+
+
+def _multicam_finish(scene):
+    scene.multicam_running = False
+    scene.multicam_current_name = ""
+    _batch_state["current_filepath"] = None
+    _multicam_redraw_areas()
+    _multicam_remove_handlers()
+
+
+def _multicam_start_current():
+    scene = bpy.context.scene
+    state = _batch_state
+
+    # Annulation ou fin de la liste
+    if scene.multicam_cancel or state["index"] >= len(state["cameras"]):
+        _multicam_finish(scene)
+        return
+
+    cam = state["cameras"][state["index"]]
+
+    try:
+        filepath = _multicam_setup_camera(scene, cam)
+    except Exception as e:
+        scene.multicam_last_error = "Erreur sur '{}' : {}".format(cam.name, str(e))
+        _multicam_finish(scene)
+        return
+
+    state["current_filepath"] = filepath
+    scene.multicam_current_name = cam.name
+    scene.multicam_last_error = ""
+    _multicam_redraw_areas()
+
+    # Rendu silencieux (sans fenetre) : plus fiable en batch.
+    # write_still=False : on sauvegarde nous-memes dans render_complete.
+    bpy.ops.render.render(write_still=False)
+
+
+def _multicam_on_render_complete(scene, depsgraph=None):
+    state = _batch_state
+    if not state["active"]:
+        return
+
+    # Sauvegarde manuelle du resultat AVANT de toucher quoi que ce soit
+    # pour la camera suivante (evite le decalage de timing observe avec write_still).
+    filepath = state.get("current_filepath")
+    if filepath:
+        try:
+            result = bpy.data.images.get("Render Result")
+            if result is not None:
+                result.save_render(filepath=filepath, scene=scene)
+            else:
+                scene.multicam_last_error = "Render Result introuvable pour la sauvegarde"
+        except Exception as e:
+            scene.multicam_last_error = "Erreur sauvegarde '{}' : {}".format(filepath, str(e))
+
+    state["index"] += 1
+    scene.multicam_progress_current = state["index"]
+    _multicam_redraw_areas()
+
+    bpy.app.timers.register(_multicam_start_current, first_interval=0.3)
+
+
+def _multicam_on_render_cancel(scene, depsgraph=None):
+    state = _batch_state
+    if not state["active"]:
+        return
+
+    scene.multicam_last_error = "Rendu annule"
+    _multicam_finish(scene)
+
+
+def _multicam_add_handlers():
+    if _multicam_on_render_complete not in bpy.app.handlers.render_complete:
+        bpy.app.handlers.render_complete.append(_multicam_on_render_complete)
+    if _multicam_on_render_cancel not in bpy.app.handlers.render_cancel:
+        bpy.app.handlers.render_cancel.append(_multicam_on_render_cancel)
+
+
+def _multicam_remove_handlers():
+    _batch_state["active"] = False
+    if _multicam_on_render_complete in bpy.app.handlers.render_complete:
+        bpy.app.handlers.render_complete.remove(_multicam_on_render_complete)
+    if _multicam_on_render_cancel in bpy.app.handlers.render_cancel:
+        bpy.app.handlers.render_cancel.remove(_multicam_on_render_cancel)
+
+
+# ---------------------------------------------------------------------------
+# Operateur : annuler le rendu batch en cours
+# ---------------------------------------------------------------------------
+class MULTICAM_OT_cancel_render(bpy.types.Operator):
+    bl_idname = "multicam.cancel_render"
+    bl_label = "Annuler"
+    bl_description = "Arrete le rendu batch apres la camera en cours"
+
+    def execute(self, context):
+        scene = context.scene
+        scene.multicam_cancel = True
+        # Force l'arret immediat de l'UI au cas ou les handlers seraient bloques
+        scene.multicam_running = False
+        scene.multicam_current_name = ""
+        _multicam_remove_handlers()
+        return {'FINISHED'}
+
+
+# ---------------------------------------------------------------------------
+# Operateur : declenche le rendu batch des cameras cochees
+# ---------------------------------------------------------------------------
+class MULTICAM_OT_render_selected(bpy.types.Operator):
+    bl_idname = "multicam.render_selected"
+    bl_label = "Render Selected"
+    bl_description = "Rend toutes les cameras cochees dans la liste (dossier selon le moteur de rendu actif)"
+
+    def execute(self, context):
+        scene = context.scene
+
+        # Verification du dossier de sortie AVANT tout rendu
+        path_error = _multicam_check_output_dir(scene)
+        if path_error:
+            scene.multicam_last_error = path_error
+            self.report({'ERROR'}, path_error)
+            return {'CANCELLED'}
+
+        enabled_items = [item for item in scene.multicam_items if item.enabled]
+
+        if not enabled_items:
+            self.report({'WARNING'}, "Aucune camera selectionnee")
+            return {'CANCELLED'}
+
+        # Bloque si une camera cochee n'a pas (encore) de res_x/res_y
+        missing = []
+        for item in enabled_items:
+            cam = bpy.data.objects.get(item.name)
+            if cam is None or "res_x" not in cam or "res_y" not in cam:
+                missing.append(item.name)
+
+        if missing:
+            msg = "Resolution manquante (res_x/res_y) pour : {}".format(", ".join(missing))
+            scene.multicam_last_error = msg
+            self.report({'ERROR'}, msg)
+            return {'CANCELLED'}
+
+        cameras = [bpy.data.objects[item.name] for item in enabled_items]
+
+        _batch_state["cameras"] = cameras
+        _batch_state["index"] = 0
+        _batch_state["active"] = True
+
+        scene.multicam_progress_total = len(cameras)
+        scene.multicam_progress_current = 0
+        scene.multicam_current_name = ""
+        scene.multicam_last_error = ""
+        scene.multicam_cancel = False
+        scene.multicam_running = True
+
+        _multicam_add_handlers()
+        _multicam_start_current()
+
+        return {'FINISHED'}
+
+
+# ---------------------------------------------------------------------------
+# Panel : Sidebar 3D View (N) > Multi-Cam BD
+# ---------------------------------------------------------------------------
+class MULTICAM_PT_panel(bpy.types.Panel):
+    bl_label = "Multi-Cam BD"
+    bl_idname = "MULTICAM_PT_panel"
+    bl_space_type = 'VIEW_3D'
+    bl_region_type = 'UI'
+    bl_category = "Multi-Cam BD"
+
+    def draw(self, context):
+        layout = self.layout
+        scene = context.scene
+
+        # --- Dossiers de sortie ---
+        box = layout.box()
+        box.prop(scene, "multicam_output_eevee", text="EEVEE")
+        box.prop(scene, "multicam_output_cycles", text="Cycles")
+        box.prop(scene, "multicam_follow_page")
+
+        # Etat du dossier du moteur actif (verifie avant chaque rendu)
+        path_error = _multicam_check_output_dir(scene)
+        state = box.row()
+        if path_error:
+            state.alert = True
+            state.label(text=path_error, icon='ERROR')
+        else:
+            state.label(text="Dossier {} OK".format(scene.render.engine), icon='CHECKMARK')
+
+        layout.separator()
+
+        # --- Erreur du dernier rendu ---
+        if scene.multicam_last_error:
+            err_box = layout.box()
+            err_box.alert = True
+            err_box.label(text="Erreur :", icon='ERROR')
+            err_box.label(text=scene.multicam_last_error)
+            layout.separator()
+
+        # --- Liste des cameras ---
+        row = layout.row()
+        row.operator("multicam.refresh", icon='FILE_REFRESH')
+
+        row = layout.row(align=True)
+        op = row.operator("multicam.select_all", text="Tout cocher")
+        op.state = True
+        op = row.operator("multicam.select_all", text="Tout decocher")
+        op.state = False
+
+        # Selection par planche : un bouton par numero detecte dans les noms
+        pages = _multicam_pages(scene)
+        if pages:
+            grid = layout.grid_flow(row_major=True, columns=6, align=True)
+            for page in pages:
+                op = grid.operator("multicam.select_page", text=page)
+                op.page = page
+
+        layout.operator("multicam.auto_frames", icon='TIME')
+
+        # En-tete de colonnes, aligne sur les proportions de la UIList
+        header = layout.row(align=True)
+        header.label(text="", icon='BLANK1')          # colonne de la case a cocher
+        hsplit = header.split(factor=MULTICAM_UL_cameras.NAME_FACTOR, align=True)
+        hsplit.label(text="Camera")
+        hcols = hsplit.row(align=True)
+        hcols.label(text="Largeur")
+        hcols.label(text="Hauteur")
+        hcols.label(text="Frame")
+        hcols.label(text="", icon='BLANK1')           # colonne du bouton preview
+
+        layout.template_list(
+            "MULTICAM_UL_cameras", "",
+            scene, "multicam_items",
+            scene, "multicam_active_index",
+            rows=6,
+        )
+
+        layout.separator()
+
+        # --- Rendu batch ---
+        if scene.multicam_running:
+            box = layout.box()
+            box.label(text="En cours : {}".format(scene.multicam_current_name), icon='RENDER_STILL')
+
+            total = max(scene.multicam_progress_total, 1)
+            factor = scene.multicam_progress_current / total
+            text = "{} / {}".format(scene.multicam_progress_current, scene.multicam_progress_total)
+
+            row = box.row()
+            try:
+                row.progress(factor=factor, type='BAR', text=text)
+            except AttributeError:
+                # Fallback si UILayout.progress() n'existe pas (Blender < 4.0)
+                row.label(text=text)
+
+            box.operator("multicam.cancel_render", icon='CANCEL')
+        else:
+            layout.operator("multicam.render_selected", icon='RENDER_STILL')
+
+
+# ---------------------------------------------------------------------------
+# Enregistrement
+# ---------------------------------------------------------------------------
+classes = (
+    MULTICAM_CameraItem,
+    MULTICAM_UL_cameras,
+    MULTICAM_OT_set_resolution,
+    MULTICAM_OT_set_frame,
+    MULTICAM_OT_auto_frames,
+    MULTICAM_OT_refresh,
+    MULTICAM_OT_select_all,
+    MULTICAM_OT_select_page,
+    MULTICAM_OT_preview,
+    MULTICAM_OT_cancel_render,
+    MULTICAM_OT_render_selected,
+    MULTICAM_PT_panel,
+)
+
+
+def register():
+    for cls in classes:
+        bpy.utils.register_class(cls)
+
+    bpy.types.Scene.multicam_items = bpy.props.CollectionProperty(type=MULTICAM_CameraItem)
+    bpy.types.Scene.multicam_active_index = bpy.props.IntProperty(default=0)
+
+    bpy.types.Scene.multicam_output_eevee = bpy.props.StringProperty(
+        name="Dossier sortie EEVEE", subtype='DIR_PATH', default=""
+    )
+    bpy.types.Scene.multicam_output_cycles = bpy.props.StringProperty(
+        name="Dossier sortie Cycles", subtype='DIR_PATH', default=""
+    )
+    bpy.types.Scene.multicam_follow_page = bpy.props.BoolProperty(
+        name="Adapter les chemins a la planche",
+        description=("En cliquant sur un numero de planche, remplace le numero de dossier "
+                     "dans les chemins de sortie (convention .../planches/<NN>/...)"),
+        default=True,
+    )
+
+    bpy.types.Scene.multicam_progress_current = bpy.props.IntProperty(default=0)
+    bpy.types.Scene.multicam_progress_total = bpy.props.IntProperty(default=0)
+    bpy.types.Scene.multicam_current_name = bpy.props.StringProperty(default="")
+    bpy.types.Scene.multicam_last_error = bpy.props.StringProperty(default="")
+    bpy.types.Scene.multicam_running = bpy.props.BoolProperty(default=False)
+    bpy.types.Scene.multicam_cancel = bpy.props.BoolProperty(default=False)
+
+
+def unregister():
+    _multicam_remove_handlers()
+
+    del bpy.types.Scene.multicam_cancel
+    del bpy.types.Scene.multicam_running
+    del bpy.types.Scene.multicam_last_error
+    del bpy.types.Scene.multicam_current_name
+    del bpy.types.Scene.multicam_progress_total
+    del bpy.types.Scene.multicam_progress_current
+    del bpy.types.Scene.multicam_follow_page
+    del bpy.types.Scene.multicam_output_cycles
+    del bpy.types.Scene.multicam_output_eevee
+    del bpy.types.Scene.multicam_active_index
+    del bpy.types.Scene.multicam_items
+
+    for cls in reversed(classes):
+        bpy.utils.unregister_class(cls)
+
+
+if __name__ == "__main__":
+    register()
