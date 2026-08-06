@@ -14,6 +14,7 @@ import bpy.utils.previews
 import json
 import os
 import re
+import subprocess
 
 from mathutils import Matrix, Vector
 
@@ -407,6 +408,117 @@ class RBM_OT_scan(bpy.types.Operator):
         self.report({'INFO'}, "{} robot(s)".format(count))
         return {'FINISHED'}
 
+# Sous-dossiers crees pour chaque nouveau personnage
+CHARACTER_DIRS = ["prototype", D_RIGGED, D_ANIM, D_POSE, "expressions"]
+
+
+class RBM_OT_new_character(bpy.types.Operator):
+    bl_idname = "rbm.new_character"
+    bl_label = "Creer un personnage"
+    bl_description = ("Cree l'arborescence du personnage et son fichier .blend, "
+                      "ouvert dans une seconde instance de Blender")
+
+    name: bpy.props.StringProperty(name="Nom", default="robot_01")
+    open_blender: bpy.props.BoolProperty(
+        name="Ouvrir le fichier", default=True,
+        description="Ouvre le nouveau .blend dans une seconde instance, "
+                    "sans fermer le fichier courant")
+
+    def invoke(self, context, event):
+        return context.window_manager.invoke_props_dialog(self, width=340)
+
+    def execute(self, context):
+        root = root_path()
+        if not root:
+            self.report({'ERROR'}, "Racine non definie (preferences de l'addon)")
+            return {'CANCELLED'}
+
+        name = safe_name(self.name)
+        if not name:
+            self.report({'ERROR'}, "Nom invalide")
+            return {'CANCELLED'}
+
+        folder = os.path.join(root, CREATIONS, name)
+        blend_path = os.path.join(folder, name + ".blend")
+
+        if os.path.isfile(blend_path):
+            self.report({'ERROR'}, "{}.blend existe deja".format(name))
+            return {'CANCELLED'}
+
+        try:
+            for sub in CHARACTER_DIRS:
+                os.makedirs(os.path.join(folder, sub), exist_ok=True)
+        except Exception as e:
+            self.report({'ERROR'}, "Creation impossible : {}".format(e))
+            return {'CANCELLED'}
+
+        # La seconde instance part d'un fichier vide, l'enregistre au bon
+        # endroit et reste ouverte dessus : la session courante n'est pas touchee
+        code = "\n".join([
+            "import bpy",
+            "bpy.ops.wm.read_homefile(use_empty=True)",
+            "bpy.ops.wm.save_as_mainfile(filepath={})".format(repr(blend_path)),
+            "try:",
+            "    import addon_utils",
+            "    addon_utils.enable('robot_maker', default_set=True)",
+            "except Exception:",
+            "    pass",
+            SIDEBAR_CODE,
+        ])
+
+        args = [bpy.app.binary_path]
+        if not self.open_blender:
+            args.append("--background")
+        args += ["--python-expr", code]
+
+        try:
+            subprocess.Popen(args, cwd=folder)
+        except Exception as e:
+            self.report({'ERROR'}, "Lancement de Blender impossible : {}".format(e))
+            return {'CANCELLED'}
+
+        scan_all(context)
+        context.scene.rbm_robot = name
+
+        self.report({'INFO'}, "Personnage '{}' cree dans {}".format(name, folder))
+        return {'FINISHED'}
+
+SIDEBAR_CODE = "\n".join([
+    "import bpy",
+    "for area in bpy.context.screen.areas:",
+    "    if area.type == 'VIEW_3D':",
+    "        area.spaces.active.show_region_ui = True",
+])
+
+
+class RBM_OT_edit_character(bpy.types.Operator):
+    bl_idname = "rbm.edit_character"
+    bl_label = "Modifier le personnage"
+    bl_description = ("Ouvre le .blend du personnage dans une seconde instance de "
+                      "Blender, sans fermer le fichier courant")
+
+    name: bpy.props.StringProperty()
+
+    def execute(self, context):
+        folder = robot_dir(self.name)
+        blend_path = os.path.join(folder, self.name + ".blend") if folder else ""
+
+        if not blend_path or not os.path.isfile(blend_path):
+            # Un dossier cree a la main peut ne pas avoir son fichier
+            self.report({'ERROR'},
+                        "{}.blend introuvable a la racine du dossier".format(self.name))
+            return {'CANCELLED'}
+
+        try:
+            subprocess.Popen([bpy.app.binary_path, blend_path,
+                              "--python-expr", SIDEBAR_CODE], cwd=folder)
+        except Exception as e:
+            self.report({'ERROR'}, "Lancement de Blender impossible : {}".format(e))
+            return {'CANCELLED'}
+
+        context.scene.rbm_robot = self.name
+        self.report({'INFO'}, "Ouverture de {}.blend".format(self.name))
+        return {'FINISHED'}
 
 class RBM_OT_select_robot(bpy.types.Operator):
     bl_idname = "rbm.select_robot"
@@ -784,6 +896,7 @@ class RBM_PT_panel(bpy.types.Panel):
         box = layout.box()
         row = box.row(align=True)
         row.label(text="Robots", icon='OUTLINER_OB_ARMATURE')
+        row.operator("rbm.new_character", text="", icon='ADD')
         row.operator("rbm.scan", text="", icon='FILE_REFRESH')
 
         if not root_path():
@@ -800,8 +913,11 @@ class RBM_PT_panel(bpy.types.Panel):
                 icon = icon_of("robot/" + name)
                 if icon:
                     cell.template_icon(icon_value=icon, scale=scene.rbm_scale)
-                cell.operator("rbm.select_robot", text=name,
+                line = cell.row(align=True)
+                line.operator("rbm.select_robot", text=name,
                               depress=(name == robot)).name = name
+                line.operator("rbm.edit_character", text="",
+                              icon='GREASEPENCIL').name = name
 
             r = box.row(align=True)
             r.prop(scene, "rbm_columns", text="Colonnes")
@@ -899,6 +1015,8 @@ classes = (
     RBM_OT_load_animation,
     RBM_OT_clear_source,
     RBM_PT_panel,
+    RBM_OT_new_character,
+    RBM_OT_edit_character,
 )
 
 

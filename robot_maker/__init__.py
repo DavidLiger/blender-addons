@@ -98,6 +98,21 @@ def selected_sockets(context):
 def socket_world(socket):
     return socket.matrix_world.translation.copy()
 
+def deselect_all(context):
+    """Deselectionne sans passer par bpy.ops.object.select_all, dont le poll
+    echoue quand l'appel vient du panneau et qu'on n'est pas en mode Objet."""
+    if context.mode != 'OBJECT':
+        try:
+            bpy.ops.object.mode_set(mode='OBJECT')
+        except Exception:
+            pass
+
+    for obj in context.view_layer.objects:
+        try:
+            obj.select_set(False)
+        except Exception:
+            pass
+
 
 # ---------------------------------------------------------------------------
 # Arborescence de travail
@@ -582,7 +597,7 @@ class RM_OT_place_asset(bpy.types.Operator):
             _attach_to_empty(context, obj, empty)
             _mirror_after_attach(context, obj, empty)
 
-        bpy.ops.object.select_all(action='DESELECT')
+        deselect_all(context)
         for obj in imported:
             obj.select_set(True)
         context.view_layer.objects.active = imported[0]
@@ -947,7 +962,7 @@ class RM_OT_add_socket(bpy.types.Operator):
         empty.parent = obj
         empty.matrix_parent_inverse = obj.matrix_world.inverted()
 
-        bpy.ops.object.select_all(action='DESELECT')
+        deselect_all(context)
         empty.select_set(True)
         context.view_layer.objects.active = empty
 
@@ -969,7 +984,7 @@ class RM_OT_select_socket(bpy.types.Operator):
             return {'CANCELLED'}
 
         if not self.extend:
-            bpy.ops.object.select_all(action='DESELECT')
+            deselect_all(context)
         obj.select_set(True)
         context.view_layer.objects.active = obj
 
@@ -1032,6 +1047,59 @@ class RM_OT_rename_socket(bpy.types.Operator):
 
         obj.name = SOCKET_PREFIX + label
         self.report({'INFO'}, "Renomme en {}".format(obj.name))
+        return {'FINISHED'}
+
+class RM_OT_delete_socket(bpy.types.Operator):
+    bl_idname = "rm.delete_socket"
+    bl_label = "Supprimer le repere"
+    bl_description = ("Supprime ce repere ainsi que les tubes qui s'y accrochent. "
+                      "Les pieces qui en dependaient sont rattachees a son parent")
+    bl_options = {'REGISTER', 'UNDO'}
+
+    name: bpy.props.StringProperty()
+
+    def invoke(self, context, event):
+        return context.window_manager.invoke_confirm(self, event)
+
+    def execute(self, context):
+        coll = active_robot_collection(context)
+        sock = bpy.data.objects.get(self.name) or context.active_object
+
+        if sock is None or not sock.get(K_SOCKET):
+            self.report({'ERROR'}, "Selectionner un repere")
+            return {'CANCELLED'}
+
+        label = sock.name
+        context.view_layer.update()
+
+        # Les tubes accroches a ce repere n'ont plus de sens
+        tubes = 0
+        if coll is not None:
+            for obj in list(coll.objects):
+                if obj.get(K_TUBE) and label in (obj.get("socket_a"), obj.get("socket_b")):
+                    bpy.data.objects.remove(obj)
+                    tubes += 1
+
+        # Les pieces posees dessus remontent au parent, sans bouger
+        host = sock.parent
+        moved = 0
+        for child in list(sock.children):
+            world = child.matrix_world.copy()
+            child.parent = host
+            if host is not None:
+                child.matrix_parent_inverse = host.matrix_world.inverted()
+            child.matrix_world = world
+            moved += 1
+
+        bpy.data.objects.remove(sock)
+        context.view_layer.update()
+
+        msg = "{} supprime".format(label[len(SOCKET_PREFIX):])
+        if tubes:
+            msg += " - {} tube(s) retire(s)".format(tubes)
+        if moved:
+            msg += " - {} piece(s) rattachee(s)".format(moved)
+        self.report({'INFO'}, msg)
         return {'FINISHED'}
 
 class RM_OT_reparent_socket(bpy.types.Operator):
@@ -1755,7 +1823,7 @@ class RM_OT_convert_tubes(bpy.types.Operator):
             self.report({'WARNING'}, "Aucun tube a convertir")
             return {'CANCELLED'}
 
-        bpy.ops.object.select_all(action='DESELECT')
+        deselect_all(context)
         for t in tubes:
             t.select_set(True)
         context.view_layer.objects.active = tubes[0]
@@ -1903,7 +1971,7 @@ class RM_OT_prepare_mixamo(bpy.types.Operator):
             self.report({'ERROR'}, "Aucune geometrie exploitable")
             return {'CANCELLED'}
 
-        bpy.ops.object.select_all(action='DESELECT')
+        deselect_all(context)
         for dup in temp:
             dup.select_set(True)
         context.view_layer.objects.active = temp[0]
@@ -2271,6 +2339,7 @@ class RM_PT_panel(bpy.types.Panel):
                 op = r.operator("rm.select_socket", text="", icon='SELECT_EXTEND')
                 op.name = s.name
                 op.extend = True
+                r.operator("rm.delete_socket", text="", icon='TRASH').name = s.name
 
         # Ajout d'un repere au curseur 3D
         box.separator()
@@ -2285,6 +2354,10 @@ class RM_PT_panel(bpy.types.Panel):
         obj = context.active_object
         if obj is not None and obj.get(K_SOCKET):
             col.separator()
+            r = col.row(align=True)
+            r.prop(obj, "name", text="")
+            r.operator("rm.delete_socket", text="", icon='TRASH').name = obj.name
+
             col.operator("rm.rename_socket", icon='GREASEPENCIL')
 
             parent_name = obj.parent.name if obj.parent else "aucun"
@@ -2369,6 +2442,7 @@ classes = (
     RM_OT_attach_part,
     RM_OT_attach_auto,
     RM_OT_rename_socket,
+    RM_OT_delete_socket,
     RM_OT_reparent_socket,
     RM_OT_show_names,
     RM_OT_make_tube,
