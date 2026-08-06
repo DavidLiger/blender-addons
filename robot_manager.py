@@ -507,6 +507,14 @@ class RBM_OT_new_character(bpy.types.Operator):
         code = "\n".join([
             "import bpy",
             "bpy.ops.wm.read_homefile(use_empty=True)",
+            # Un fichier vide n'a pas de World : le rendu serait noir
+            "world = bpy.data.worlds.new('World')",
+            "world.use_nodes = True",
+            "bg = world.node_tree.nodes.get('Background')",
+            "if bg is not None:",
+            "    bg.inputs[0].default_value = (0.35, 0.35, 0.38, 1.0)",
+            "    bg.inputs[1].default_value = 1.0",
+            "bpy.context.scene.world = world",
             "bpy.ops.wm.save_as_mainfile(filepath={})".format(repr(blend_path)),
             "try:",
             "    import addon_utils",
@@ -651,6 +659,11 @@ class RBM_OT_instantiate(bpy.types.Operator):
             previous_source = getattr(scene, "mix_source_armature", None)
             scene.mix_source_armature = None
 
+            # Les rigs deja en scene ne doivent pas bouger : make_rig agit
+            # parfois au-dela de l'armature ciblee
+            snapshots = [(o, pose_to_dict(o)) for o in context.scene.objects
+                         if is_control_rig(o) and o is not armature]
+
             known = set(context.scene.objects)
             rig_error = ""
 
@@ -663,6 +676,12 @@ class RBM_OT_instantiate(bpy.types.Operator):
 
             if previous_source is not None:
                 scene.mix_source_armature = previous_source
+
+            for other, snapshot in snapshots:
+                try:
+                    dict_to_pose(other, snapshot)
+                except Exception:
+                    pass
 
             # Le plugin transforme l'armature importee en control rig au lieu
             # d'en creer une nouvelle : on la teste en premier
