@@ -268,6 +268,56 @@ def render_thumbnail(context, objects, path, size=256, front=True):
         return False, error
     return os.path.isfile(path), "" if os.path.isfile(path) else "fichier non ecrit"
 
+# ---------------------------------------------------------------------------
+# Suivi de la selection : cliquer un robot dans la scene le designe dans la liste
+# ---------------------------------------------------------------------------
+_last_active = None
+
+
+def robot_of(obj):
+    """Nom du personnage auquel appartient cet objet, par sa cle ou sa collection."""
+    if obj is None:
+        return ""
+
+    name = obj.get(K_ROBOT)
+    if name:
+        return name
+
+    # Repli : collection ROBOT_<nom>_NN posee a l'instanciation
+    for coll in obj.users_collection:
+        if coll.name.startswith(COLL_PREFIX):
+            return re.sub(r"_\d+$", "", coll.name[len(COLL_PREFIX):])
+
+    parent = obj.parent
+    return robot_of(parent) if parent is not None else ""
+
+
+def _follow_selection():
+    global _last_active
+
+    try:
+        scene = bpy.context.scene
+        obj = bpy.context.view_layer.objects.active
+    except Exception:
+        return 0.3
+
+    key = obj.name if obj else None
+    if key == _last_active:
+        return 0.3
+    _last_active = key
+
+    if scene is None or not scene.rbm_follow:
+        return 0.3
+
+    name = robot_of(obj)
+    if name and name != scene.rbm_robot and any(n == name for n, _ in _robots):
+        scene.rbm_robot = name
+        for window in bpy.context.window_manager.windows:
+            for area in window.screen.areas:
+                if area.type == 'VIEW_3D':
+                    area.tag_redraw()
+
+    return 0.3
 
 # ---------------------------------------------------------------------------
 # Control rig
@@ -922,6 +972,7 @@ class RBM_PT_panel(bpy.types.Panel):
             r = box.row(align=True)
             r.prop(scene, "rbm_columns", text="Colonnes")
             r.prop(scene, "rbm_scale", text="Taille")
+            box.prop(scene, "rbm_follow")
 
         if not robot:
             return
@@ -1050,6 +1101,10 @@ def register():
     S.rbm_posture_name = bpy.props.StringProperty(name="Nom", default="posture_01")
     S.rbm_overwrite = bpy.props.BoolProperty(name="Ecraser", default=False)
     S.rbm_edit = bpy.props.BoolProperty(name="Mode gestion", default=False)
+    S.rbm_follow = bpy.props.BoolProperty(
+        name="Suivre la selection", default=True,
+        description="Cliquer un robot ou son control rig dans la scene le designe "
+                    "dans la liste")
     S.rbm_auto_rig = bpy.props.BoolProperty(
         name="Control rig automatique", default=True,
         description="Cree le control rig IK/FK juste apres l'import du robot")
@@ -1066,6 +1121,8 @@ def register():
         bpy.app.handlers.load_post.append(_on_load)
     if not bpy.app.timers.is_registered(_deferred_scan):
         bpy.app.timers.register(_deferred_scan, first_interval=0.5)
+    if not bpy.app.timers.is_registered(_follow_selection):
+        bpy.app.timers.register(_follow_selection, first_interval=1.0, persistent=True)
 
 
 def unregister():
@@ -1073,15 +1130,19 @@ def unregister():
 
     if _on_load in bpy.app.handlers.load_post:
         bpy.app.handlers.load_post.remove(_on_load)
+        
     if bpy.app.timers.is_registered(_deferred_scan):
         bpy.app.timers.unregister(_deferred_scan)
+        
+    if bpy.app.timers.is_registered(_follow_selection):
+        bpy.app.timers.unregister(_follow_selection)
 
     if _previews is not None:
         bpy.utils.previews.remove(_previews)
         _previews = None
 
     S = bpy.types.Scene
-    for prop in ("rbm_thumb_size", "rbm_scale", "rbm_columns", "rbm_edit",
+    for prop in ("rbm_thumb_size", "rbm_scale", "rbm_columns", "rbm_edit", "rbm_follow",
                  "rbm_overwrite", "rbm_auto_rig", "rbm_auto_rest", "rbm_posture_name", "rbm_anim", "rbm_robot"):
         if hasattr(S, prop):
             delattr(S, prop)
