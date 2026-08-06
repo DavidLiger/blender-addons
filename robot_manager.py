@@ -512,7 +512,7 @@ class RBM_OT_new_character(bpy.types.Operator):
             "world.use_nodes = True",
             "bg = world.node_tree.nodes.get('Background')",
             "if bg is not None:",
-            "    bg.inputs[0].default_value = (0.35, 0.35, 0.38, 1.0)",
+            "    bg.inputs[0].default_value = (0.0513, 0.0513, 0.0545, 1.0)",
             "    bg.inputs[1].default_value = 1.0",
             "bpy.context.scene.world = world",
             "bpy.ops.wm.save_as_mainfile(filepath={})".format(repr(blend_path)),

@@ -868,7 +868,7 @@ class RM_OT_setup_scene(bpy.types.Operator):
             world.use_nodes = True
             bg = world.node_tree.nodes.get("Background")
             if bg is not None:
-                bg.inputs[0].default_value = (0.35, 0.35, 0.38, 1.0)
+                bg.inputs[0].default_value = (0.0513, 0.0513, 0.0545, 1.0)
                 bg.inputs[1].default_value = 1.0
             scene.world = world
             steps.append("World ajoute")
