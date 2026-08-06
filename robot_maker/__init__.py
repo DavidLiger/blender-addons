@@ -853,6 +853,37 @@ def _asset_changed(self, context):
     except Exception:
         pass
 
+class RM_OT_setup_scene(bpy.types.Operator):
+    bl_idname = "rm.setup_scene"
+    bl_label = "Preparer l'eclairage"
+    bl_description = ("Ajoute un World gris et une lampe Sun : sans eux, l'apercu "
+                      "rendu est noir dans un fichier vide")
+
+    def execute(self, context):
+        scene = context.scene
+        steps = []
+
+        if scene.world is None:
+            world = bpy.data.worlds.new("World")
+            world.use_nodes = True
+            bg = world.node_tree.nodes.get("Background")
+            if bg is not None:
+                bg.inputs[0].default_value = (0.35, 0.35, 0.38, 1.0)
+                bg.inputs[1].default_value = 1.0
+            scene.world = world
+            steps.append("World ajoute")
+
+        if not any(o.type == 'LIGHT' for o in scene.objects):
+            data = bpy.data.lights.new("Sun", type='SUN')
+            data.energy = 3.0
+            sun = bpy.data.objects.new("Sun", data)
+            scene.collection.objects.link(sun)
+            sun.location = (4.0, -6.0, 8.0)
+            sun.rotation_euler = (math.radians(50.0), 0.0, math.radians(35.0))
+            steps.append("Sun ajoutee")
+
+        self.report({'INFO'}, " - ".join(steps) or "Scene deja prete")
+        return {'FINISHED'}
 
 # ---------------------------------------------------------------------------
 # Robot : creation / selection
@@ -2107,6 +2138,11 @@ class RM_PT_panel(bpy.types.Panel):
             op = row.operator("rm.open_folder", text="", icon='FILEBROWSER')
             op.which = 'ROOT'
 
+        if context.scene.world is None:
+            warn = box.row()
+            warn.alert = True
+            warn.operator("rm.setup_scene", icon='LIGHT_SUN')
+
         if not root:
             box.label(text="Racine non definie (preferences)", icon='ERROR')
         else:
@@ -2514,6 +2550,7 @@ classes = (
     RM_OT_prepare_mixamo,
     RM_OT_mixamo_info,
     RM_PT_panel,
+    RM_OT_setup_scene,
 )
 
 
