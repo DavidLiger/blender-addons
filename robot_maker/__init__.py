@@ -211,6 +211,9 @@ class RM_OT_open_folder(bpy.types.Operator):
             path = os.path.join(root, LIBRARY)
         elif self.which == 'ROOT':
             path = root
+        elif self.which == 'PROTOTYPE':
+            base = robot_dir(context, context.scene.rm_robot)
+            path = os.path.join(base, "prototype") if base else ""
         else:
             path = robot_dir(context, context.scene.rm_robot)
 
@@ -2463,8 +2466,10 @@ class RM_PT_panel(bpy.types.Panel):
         row.operator("rm.mixamo_info", text="", icon='INFO')
 
         box.operator("rm.prepare_mixamo", icon='EXPORT')
-        box.operator("wm.url_open", text="Ouvrir Mixamo",
-                     icon='URL').url = MIXAMO_URL
+        r = box.row(align=True)
+        r.operator("wm.url_open", text="Ouvrir Mixamo", icon='URL').url = MIXAMO_URL
+        op = r.operator("rm.open_folder", text="Dossier prototype", icon='FILEBROWSER')
+        op.which = 'PROTOTYPE'
 
         if scene.rm_arm_angle > 0.0:
             sub = box.row()
