@@ -1884,6 +1884,28 @@ class RM_OT_mixamo_info(bpy.types.Operator):
             for line in lines:
                 col.label(text=line)
 
+def missing_materials(coll):
+    """Objets du robot sans materiau. Retourne (tubes, pieces)."""
+    tubes, parts = [], []
+
+    if coll is None:
+        return tubes, parts
+
+    for obj in coll.objects:
+        if obj.type not in {'MESH', 'CURVE'}:
+            continue
+
+        data = obj.data
+        slots = [m for m in getattr(data, "materials", []) if m is not None]
+        if slots:
+            continue
+
+        if obj.get(K_TUBE):
+            tubes.append(obj.name)
+        else:
+            parts.append(obj.name)
+
+    return tubes, parts
 
 class RM_OT_prepare_mixamo(bpy.types.Operator):
     bl_idname = "rm.prepare_mixamo"
@@ -1898,6 +1920,10 @@ class RM_OT_prepare_mixamo(bpy.types.Operator):
                                     "le bras du torse et a trouver l'epaule"),
                ('KEEP', "Ne pas changer", "Exporter dans la pose actuelle")])
     do_export: bpy.props.BoolProperty(name="Exporter le FBX", default=True)
+    
+    ignore_materials: bpy.props.BoolProperty(
+        name="Ignorer les materiaux manquants", default=False,
+        description="Exporte meme si des pieces ou des tubes n'ont pas de materiau")
 
     def invoke(self, context, event):
         return context.window_manager.invoke_props_dialog(self, width=380)
@@ -1925,6 +1951,15 @@ class RM_OT_prepare_mixamo(bpy.types.Operator):
         sources = [o for o in coll.objects if o.type in {'MESH', 'CURVE'}]
         if not sources:
             self.report({'ERROR'}, "Aucune geometrie a exporter")
+            return {'CANCELLED'}
+        no_tube_mat, no_part_mat = missing_materials(coll)
+        if (no_tube_mat or no_part_mat) and not self.ignore_materials:
+            names = (no_tube_mat + no_part_mat)[:4]
+            total = len(no_tube_mat) + len(no_part_mat)
+            self.report({'ERROR'},
+                        "{} objet(s) sans materiau : {}{} - ils reviendront de Mixamo "
+                        "sans aspect. Cocher 'Ignorer' pour exporter quand meme".format(
+                            total, ", ".join(names), " ..." if total > 4 else ""))
             return {'CANCELLED'}
 
         # Le FBX destine a l'auto-rigger vit dans le sous-dossier prototype
@@ -2395,6 +2430,26 @@ class RM_PT_panel(bpy.types.Panel):
         # --- Finalisation ---
         box = layout.box()
         box.label(text="Finalisation", icon='CHECKMARK')
+        no_tube_mat, no_part_mat = missing_materials(coll)
+        if no_tube_mat or no_part_mat:
+            warn = box.column(align=True)
+            warn.alert = True
+            warn.label(text="Sans materiau :", icon='ERROR')
+
+            sub = warn.column(align=True)
+            sub.scale_y = 0.7
+            if no_tube_mat:
+                sub.label(text="{} tube(s) : {}".format(
+                    len(no_tube_mat), ", ".join(no_tube_mat[:3])
+                    + (" ..." if len(no_tube_mat) > 3 else "")))
+            for name in no_part_mat[:6]:
+                sub.label(text=name)
+            if len(no_part_mat) > 6:
+                sub.label(text="... et {} autre(s)".format(len(no_part_mat) - 6))
+
+            if no_tube_mat:
+                warn.operator("rm.tube_material", icon='MATERIAL')
+
         box.operator("rm.rebuild_tubes", icon='FILE_REFRESH')
         sub = box.row()
         sub.scale_y = 0.7
