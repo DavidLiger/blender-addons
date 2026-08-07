@@ -31,6 +31,7 @@ CREATIONS = "creations"
 D_RIGGED = "mixamo-rigged"
 D_ANIM = "animations"
 D_POSE = "postures"
+READY_FILE = "ready.blend"
 
 COLL_PREFIX = "ROBOT_"
 K_ROBOT = "robot"
@@ -727,6 +728,36 @@ class RBM_OT_instantiate(bpy.types.Operator):
             self.report({'ERROR'}, "Aucun robot selectionne")
             return {'CANCELLED'}
 
+        # Fichier prepare : visage, materiaux et control rig inclus
+        ready = os.path.join(robot_dir(robot), READY_FILE)
+        if os.path.isfile(ready):
+            try:
+                with bpy.data.libraries.load(ready, link=False) as (src, dst):
+                    dst.collections = [c for c in src.collections
+                                       if c.startswith(COLL_PREFIX)]
+            except Exception as e:
+                self.report({'ERROR'}, "Import impossible : {}".format(e))
+                return {'CANCELLED'}
+
+            source = next((c for c in dst.collections if c is not None), None)
+            if source is not None:
+                index = 1
+                while bpy.data.collections.get(
+                        "{}{}_{:02d}".format(COLL_PREFIX, robot, index)):
+                    index += 1
+                source.name = "{}{}_{:02d}".format(COLL_PREFIX, robot, index)
+                scene.collection.children.link(source)
+
+                rig = next((o for o in source.objects if is_control_rig(o)), None)
+                if rig is not None:
+                    for o in list(context.selected_objects):
+                        o.select_set(False)
+                    rig.select_set(True)
+                    context.view_layer.objects.active = rig
+
+                self.report({'INFO'}, "{} instancie depuis {}".format(robot, READY_FILE))
+                return {'FINISHED'}
+
         folder = sub_dir(robot, D_RIGGED)
         if not folder or not os.path.isdir(folder):
             self.report({'ERROR'}, "Dossier {} introuvable".format(D_RIGGED))
@@ -1198,7 +1229,10 @@ class RBM_PT_panel(bpy.types.Panel):
         row.enabled = scene.rbm_auto_rig
         row.prop(scene, "rbm_auto_rest")
         box.operator("rbm.instantiate", icon='IMPORT')
-        box.operator("rbm.robot_thumb", icon='RESTRICT_RENDER_OFF')
+        if os.path.isfile(os.path.join(robot_dir(robot), READY_FILE)):
+            sub = box.row()
+            sub.scale_y = 0.7
+            sub.label(text="Instanciation depuis ready.blend", icon='CHECKMARK')
 
         # --- Control rig ---
         rig = find_control_rig(context)

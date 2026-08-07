@@ -203,16 +203,17 @@ def _store_on_object(scene, obj):
         "frames": [{"id": i.ident, "name": i.label, "col": i.col, "row": i.row}
                    for i in scene.expr_items],
     }
-    obj["expr_data"] = json.dumps(data)
+    obj[data_key(scene)] = json.dumps(data)
 
 
 def _stored_sheet_name(obj):
     """Nom du sprite sheet memorise sur l'objet, lu directement (sans passer
     par l'etat de la scene) : sert de verite de reference dans le panneau."""
-    if obj is None or "expr_data" not in obj:
+    key = data_key()
+    if obj is None or key not in obj:
         return ""
     try:
-        return json.loads(obj["expr_data"]).get("name", "")
+        return json.loads(obj[key]).get("name", "")
     except Exception:
         return ""
 
@@ -220,11 +221,12 @@ def _stored_sheet_name(obj):
 def _restore_from_object(scene, obj):
     """Recharge le panneau depuis les reglages memorises sur l'objet."""
     global _restoring
-    if "expr_data" not in obj:
+    key = data_key(scene)
+    if key not in obj:
         return False
 
     try:
-        data = json.loads(obj["expr_data"])
+        data = json.loads(obj[key])
     except Exception:
         return False
 
@@ -286,7 +288,7 @@ def _sync_active_object():
     finally:
         _restoring = False
 
-    if "expr_data" in obj:
+    if data_key(scene) in obj:
         _restore_from_object(scene, obj)
 
 
@@ -347,16 +349,42 @@ def _on_depsgraph(scene, depsgraph=None):
     # Filet de securite si msgbus rate un evenement
     _sync_active_object()
 
+FACE_ZONES = [('eyes', "Yeux", "Zone des yeux"),
+              ('mouth', "Bouche", "Zone de la bouche")]
+
+
+def current_zone(scene=None):
+    scene = scene or bpy.context.scene
+    return getattr(scene, "expr_zone", 'eyes')
+
+
+def zone_material(obj, zone):
+    """Materiau FACE_<zone>_* du maillage, sinon le materiau actif."""
+    if obj is None or obj.data is None:
+        return getattr(obj, "active_material", None)
+
+    prefix = "FACE_" + zone
+    for mat in getattr(obj.data, "materials", []):
+        if mat is not None and mat.name.startswith(prefix):
+            return mat
+
+    return getattr(obj, "active_material", None)
+
+
+def data_key(scene=None):
+    return "expr_data_" + current_zone(scene)
 
 # ===========================================================================
 # Materiau
 # ===========================================================================
 def _find_nodes(obj):
     """Retourne (node_tree, mapping, image_texture) du materiau actif."""
-    if obj is None or not getattr(obj, "active_material", None):
+    if obj is None:
         return None, None, None
 
-    mat = obj.active_material
+    mat = zone_material(obj, current_zone())
+    if mat is None:
+        return None, None, None
     if not mat.use_nodes or mat.node_tree is None:
         return None, None, None
 
@@ -597,9 +625,10 @@ class EXPR_OT_setup(bpy.types.Operator):
             return {'CANCELLED'}
 
         # --- Materiau ---
-        mat = obj.active_material
+        zone = current_zone(scene)
+        mat = zone_material(obj, zone)
         if mat is None:
-            mat = bpy.data.materials.new("EXPR_" + obj.name)
+            mat = bpy.data.materials.new("FACE_{}_{}".format(zone, obj.name))
             obj.data.materials.append(mat)
         mat.use_nodes = True
         tree = mat.node_tree
@@ -744,7 +773,7 @@ class EXPR_OT_reload(bpy.types.Operator):
 
         scene.expr_target = obj
 
-        if "expr_data" not in obj:
+        if data_key(scene) not in obj:
             self.report({'WARNING'}, "{} n'a pas de reglages memorises".format(obj.name))
             return {'CANCELLED'}
 
@@ -763,8 +792,9 @@ class EXPR_OT_forget(bpy.types.Operator):
 
     def execute(self, context):
         obj = context.scene.expr_target or context.active_object
-        if obj is not None and "expr_data" in obj:
-            del obj["expr_data"]
+        key = data_key(context.scene)
+        if obj is not None and key in obj:
+            del obj[key]
             self.report({'INFO'}, "Reglages oublies pour {}".format(obj.name))
         return {'FINISHED'}
 
@@ -786,11 +816,21 @@ class EXPR_PT_panel(bpy.types.Panel):
 
         # --- Cible ---
         box = layout.box()
+        box.prop(scene, "expr_zone", expand=True)
         box.prop(scene, "expr_follow_selection")
-        box.prop(scene, "expr_target", text="Plan")
+        box.prop(scene, "expr_target", text="Maillage")
+
+        mat = zone_material(obj, current_zone(scene))
+        sub = box.row()
+        sub.scale_y = 0.7
+        if mat is not None:
+            sub.label(text=mat.name, icon='MATERIAL')
+        else:
+            sub.alert = True
+            sub.label(text="Aucun materiau de zone", icon='ERROR')
 
         stored = _stored_sheet_name(obj)
-        if obj is not None and "expr_data" in obj:
+        if obj is not None and data_key(scene) in obj:
             row = box.row()
             row.scale_y = 0.7
             row.label(text="Memorise sur ce plan : " + (stored or "?"), icon='CHECKMARK')
@@ -919,6 +959,10 @@ def register():
 
     S = bpy.types.Scene
     S.expr_items = bpy.props.CollectionProperty(type=EXPR_Item)
+    S.expr_zone = bpy.props.EnumProperty(
+        name="Zone", items=FACE_ZONES, default='eyes',
+        description="Zone du visage pilotee : chacune a son materiau, sa couche UV "
+                    "et son sprite sheet")
     S.expr_json = bpy.props.StringProperty(
         name="Sprite sheet JSON", subtype='FILE_PATH', default="")
     S.expr_name = bpy.props.StringProperty(default="")
@@ -985,7 +1029,7 @@ def unregister():
     S = bpy.types.Scene
     for prop in ("expr_follow_frame", "expr_thumbs_scale", "expr_thumbs_view", "expr_auto_preview", "expr_follow_selection", "expr_pixel", "expr_emit", "expr_target",
                  "expr_image", "expr_source", "expr_current", "expr_rows",
-                 "expr_cols", "expr_name", "expr_json", "expr_items"):
+                 "expr_cols", "expr_name", "expr_json", "expr_zone", "expr_items"):
         if hasattr(S, prop):
             delattr(S, prop)
 
