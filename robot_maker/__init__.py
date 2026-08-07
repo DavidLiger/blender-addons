@@ -32,6 +32,7 @@ TUBE_PREFIX = "TUBE_"
 K_ROBOT = "robot"          # nom du robot auquel l'objet appartient
 K_SOCKET = "robot_socket"  # marque un empty de connexion
 K_TUBE = "robot_tube"      # marque un tube de liaison
+FACE_SLOTS = [('eyes', "Yeux"), ('mouth', "Bouche")]
 
 # Categories de pieces (l'ordre est celui du menu)
 FAMILIES = [
@@ -1987,6 +1988,206 @@ def missing_materials(coll):
 
     return tubes, parts
 
+def _slot_color(obj, fallback=(0.6, 0.6, 0.62, 1.0)):
+    """Base Color du materiau porte par les faces selectionnees."""
+    mats = obj.data.materials
+    poly = next((p for p in obj.data.polygons if p.select), None)
+
+    if poly is not None and poly.material_index < len(mats):
+        mat = mats[poly.material_index]
+        if mat is not None and mat.use_nodes:
+            node = next((n for n in mat.node_tree.nodes
+                         if n.type == 'BSDF_PRINCIPLED'), None)
+            if node is not None:
+                return tuple(node.inputs["Base Color"].default_value)
+
+    return tuple(fallback)
+
+
+def _face_material(name, uv_layer, sprite, color):
+    """Sprite sheet sur une couche UV dediee, emission sur le trait,
+    couleur unie ailleurs. Le noeud EXPR_Mapping est pilote par Expressions."""
+    mat = bpy.data.materials.get(name) or bpy.data.materials.new(name)
+    mat.use_nodes = True
+    tree = mat.node_tree
+    tree.nodes.clear()
+
+    out = tree.nodes.new('ShaderNodeOutputMaterial')
+    out.location = (400, 0)
+
+    base = tree.nodes.new('ShaderNodeBsdfPrincipled')
+    base.location = (100, -200)
+    base.inputs["Base Color"].default_value = color
+
+    emit = tree.nodes.new('ShaderNodeEmission')
+    emit.location = (100, 160)
+
+    mix = tree.nodes.new('ShaderNodeMixShader')
+    mix.location = (260, 0)
+
+    tex = tree.nodes.new('ShaderNodeTexImage')
+    tex.location = (-160, 120)
+    tex.extension = 'CLIP'
+    if sprite is not None:
+        tex.image = sprite
+
+    cell = tree.nodes.new('ShaderNodeMapping')
+    cell.name = "EXPR_Mapping"
+    cell.label = "Cellule"
+    cell.location = (-380, 120)
+
+    uv = tree.nodes.new('ShaderNodeUVMap')
+    uv.location = (-580, 120)
+    uv.uv_map = uv_layer
+
+    tree.links.new(uv.outputs['UV'], cell.inputs['Vector'])
+    tree.links.new(cell.outputs['Vector'], tex.inputs['Vector'])
+    tree.links.new(tex.outputs['Color'], emit.inputs['Color'])
+    tree.links.new(tex.outputs['Alpha'], mix.inputs['Fac'])
+    tree.links.new(base.outputs['BSDF'], mix.inputs[1])
+    tree.links.new(emit.outputs['Emission'], mix.inputs[2])
+    tree.links.new(mix.outputs['Shader'], out.inputs['Surface'])
+
+    return mat
+
+
+class RM_OT_prepare_face(bpy.types.Operator):
+    bl_idname = "rm.prepare_face"
+    bl_label = "Preparer"
+    bl_description = ("Cree le materiau et la couche UV de cette zone, et l'assigne "
+                      "aux faces selectionnees. Se placer en vue de face avant")
+    bl_options = {'REGISTER', 'UNDO'}
+
+    slot: bpy.props.StringProperty(default='eyes')
+
+    def execute(self, context):
+        scene = context.scene
+        obj = context.active_object
+
+        if obj is None or obj.type != 'MESH':
+            self.report({'ERROR'}, "Selectionner le maillage")
+            return {'CANCELLED'}
+        if not any(p.select for p in obj.data.polygons):
+            self.report({'ERROR'}, "Aucune face selectionnee : les choisir en Edit Mode")
+            return {'CANCELLED'}
+
+        robot = scene.rm_robot or obj.name
+        mat_name = "FACE_{}_{}".format(self.slot, robot)
+        uv_name = "UV_" + self.slot
+
+        # Sprite sheet du personnage : fichier contenant le nom de la zone
+        sprite, sheet_json = None, ""
+        folder = os.path.join(robot_dir(context, robot), "expressions")
+        if os.path.isdir(folder):
+            for fname in sorted(os.listdir(folder)):
+                low = fname.lower()
+                if self.slot not in low:
+                    continue
+                path = os.path.join(folder, fname)
+                if low.endswith(".json"):
+                    sheet_json = path
+                elif low.endswith(".png"):
+                    try:
+                        sprite = bpy.data.images.load(path, check_existing=True)
+                    except Exception:
+                        pass
+
+        mat = _face_material(mat_name, uv_name, sprite, _slot_color(obj))
+
+        if uv_name not in obj.data.uv_layers:
+            obj.data.uv_layers.new(name=uv_name)
+        obj.data.uv_layers.active = obj.data.uv_layers[uv_name]
+
+        index = obj.data.materials.find(mat_name)
+        if index < 0:
+            obj.data.materials.append(mat)
+            index = len(obj.data.materials) - 1
+        obj.active_material_index = index
+
+        mode = obj.mode
+        try:
+            bpy.ops.object.mode_set(mode='EDIT')
+            bpy.ops.object.material_slot_assign()
+
+            for window in context.window_manager.windows:
+                for area in window.screen.areas:
+                    if area.type != 'VIEW_3D':
+                        continue
+                    region = next((r for r in area.regions if r.type == 'WINDOW'), None)
+                    if region is None:
+                        continue
+                    with context.temp_override(window=window, area=area, region=region):
+                        bpy.ops.uv.project_from_view(orthographic=True,
+                                                     scale_to_bounds=True)
+                    break
+        except Exception as e:
+            self.report({'WARNING'}, "Assignation ou depliage a refaire ({})".format(e))
+        finally:
+            try:
+                bpy.ops.object.mode_set(mode=mode)
+            except Exception:
+                pass
+
+        # Passe le relais a l'addon Expressions
+        if sheet_json and hasattr(scene, "expr_json"):
+            scene.expr_json = sheet_json
+            scene.expr_target = obj
+            try:
+                bpy.ops.expr.load_json()
+                bpy.ops.expr.setup()
+            except Exception:
+                pass
+
+        msg = "{} : materiau et UV prets".format(self.slot)
+        if sprite is None:
+            msg += " - aucun sprite sheet '{}' dans expressions/".format(self.slot)
+        self.report({'INFO'}, msg)
+        return {'FINISHED'}
+
+
+class RM_OT_face_info(bpy.types.Operator):
+    bl_idname = "rm.face_info"
+    bl_label = "Mise en place du visage"
+    bl_description = "Rappelle les etapes"
+
+    def invoke(self, context, event):
+        return context.window_manager.invoke_popup(self, width=540)
+
+    def execute(self, context):
+        return {'FINISHED'}
+
+    def draw(self, context):
+        steps = [
+            ("1. Sprite sheets", [
+                "Exporter depuis expressions.html en mode Yeux seuls puis Bouches seules,",
+                "vers creations/<perso>/expressions/. Le nom doit contenir eyes ou mouth.",
+            ]),
+            ("2. Selection", [
+                "Selectionner le maillage, Edit Mode (Tab), mode Face (3),",
+                "choisir les faces de la zone. Se placer en vue de face (numpad 1).",
+            ]),
+            ("3. Preparer", [
+                "Cliquer Yeux ou Bouche : materiau, couche UV dediee et depliage",
+                "frontal sont crees, le sprite sheet est charge.",
+            ]),
+            ("4. Ajuster", [
+                "Ouvrir un UV Editor : l'ilot apparait sur le sprite sheet.",
+                "Le deplacer et le redimensionner pour caler la zone au pixel pres.",
+                "Chaque zone a sa propre couche UV, donc reglage independant.",
+            ]),
+            ("5. Expressions", [
+                "Onglet Expressions : mettre le slot materiau voulu en actif,",
+                "puis poser les keyframes.",
+            ]),
+        ]
+        for title, lines in steps:
+            box = self.layout.box()
+            box.label(text=title, icon='DOT')
+            col = box.column(align=True)
+            col.scale_y = 0.8
+            for line in lines:
+                col.label(text=line)
+
 class RM_OT_prepare_mixamo(bpy.types.Operator):
     bl_idname = "rm.prepare_mixamo"
     bl_label = "Preparer pour Mixamo"
@@ -2543,6 +2744,21 @@ class RM_PT_panel(bpy.types.Panel):
         sub.scale_y = 0.7
         sub.label(text="L'export Mixamo n'a plus besoin de conversion", icon='INFO')
         box.operator("rm.convert_tubes", icon='MESH_DATA')
+        
+        # --- Visage ---
+        box = layout.box()
+        row = box.row(align=True)
+        row.label(text="Visage", icon='USER')
+        row.operator("rm.face_info", text="", icon='INFO')
+
+        r = box.row(align=True)
+        for slot, label in FACE_SLOTS:
+            r.operator("rm.prepare_face", text=label).slot = slot
+
+        sub = box.column(align=True)
+        sub.scale_y = 0.7
+        sub.label(text="Faces selectionnees + vue de face", icon='INFO')
+        sub.label(text="Ajuster ensuite dans l'UV Editor")
 
         # --- Mixamo ---
         box = layout.box()
@@ -2603,6 +2819,8 @@ classes = (
     RM_OT_mixamo_info,
     RM_PT_panel,
     RM_OT_setup_scene,
+    RM_OT_prepare_face,
+    RM_OT_face_info,
 )
 
 @bpy.app.handlers.persistent
