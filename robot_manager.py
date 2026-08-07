@@ -1219,6 +1219,7 @@ classes = (
     RBM_OT_new_character,
     RBM_OT_edit_character,
     RBM_OT_delete_character,
+    RBM_OT_open_shared_anims,
 )
 
 
