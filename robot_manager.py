@@ -102,6 +102,28 @@ def sub_dir(robot, sub, create=False):
         os.makedirs(path, exist_ok=True)
     return path
 
+def scan_animations(robot, folder):
+    """Animations du personnage, completees par la bibliotheque commune.
+    Une animation propre au personnage masque celle de meme nom.
+    Retourne [(identifiant, libelle, chemin)]."""
+    found = {}
+    root = root_path()
+
+    sources = []
+    if root:
+        sources.append((os.path.join(root, D_ANIM), "  (commune)"))
+    sources.append((os.path.join(folder, D_ANIM), ""))
+
+    for base, tag in sources:
+        if not os.path.isdir(base):
+            continue
+        for fname in sorted(os.listdir(base)):
+            if not fname.lower().endswith(".fbx"):
+                continue
+            name = fname[:-4]
+            found[name] = (name, name + tag, os.path.join(base, fname))
+
+    return sorted(found.values(), key=lambda e: e[1])
 
 # ---------------------------------------------------------------------------
 # Lecture des dossiers
@@ -144,14 +166,7 @@ def scan_all(context=None):
                     _previews.load("pose/" + name + "/" + base, png, 'IMAGE')
         _postures[name] = poses
 
-        # Animations
-        anims = []
-        adir = os.path.join(folder, D_ANIM)
-        if os.path.isdir(adir):
-            for fname in sorted(os.listdir(adir)):
-                if fname.lower().endswith(".fbx"):
-                    anims.append((fname[:-4], os.path.join(adir, fname)))
-        _anims[name] = anims
+        _anims[name] = scan_animations(name, folder)
 
     return len(_robots)
 
@@ -171,7 +186,7 @@ def robot_enum(self, context):
 def anim_enum(self, context):
     scene = context.scene if context else None
     robot = scene.rbm_robot if scene else ""
-    items = [(n, n, p) for n, p in _anims.get(robot, [])]
+    items = [(ident, label, path) for ident, label, path in _anims.get(robot, [])]
     return items or [('', "(aucune animation)", "")]
 
 
@@ -948,7 +963,8 @@ class RBM_OT_load_animation(bpy.types.Operator):
             self.report({'ERROR'}, "Aucun control rig trouve")
             return {'CANCELLED'}
 
-        path = next((p for n, p in _anims.get(robot, []) if n == scene.rbm_anim), None)
+        path = next((p for ident, label, p in _anims.get(robot, [])
+                     if ident == scene.rbm_anim), None)
         if path is None or not os.path.isfile(path):
             self.report({'ERROR'}, "Animation introuvable")
             return {'CANCELLED'}
@@ -1010,6 +1026,27 @@ class RBM_OT_load_animation(bpy.types.Operator):
             self.report({'WARNING'}, "Source chargee, aucune action sur le rig")
         return {'FINISHED'}
 
+class RBM_OT_open_shared_anims(bpy.types.Operator):
+    bl_idname = "rbm.open_shared_anims"
+    bl_label = "Dossier des animations communes"
+    bl_description = ("Ouvre la bibliotheque d'animations partagee par tous les robots. "
+                      "Telecharger depuis Mixamo en 'Without Skin'")
+
+    def execute(self, context):
+        root = root_path()
+        if not root:
+            self.report({'ERROR'}, "Racine non definie")
+            return {'CANCELLED'}
+
+        path = os.path.join(root, D_ANIM)
+        try:
+            os.makedirs(path, exist_ok=True)
+        except Exception as e:
+            self.report({'ERROR'}, "Creation impossible : {}".format(e))
+            return {'CANCELLED'}
+
+        bpy.ops.wm.path_open(filepath=path)
+        return {'FINISHED'}
 
 class RBM_OT_clear_source(bpy.types.Operator):
     bl_idname = "rbm.clear_source"
@@ -1143,7 +1180,9 @@ class RBM_PT_panel(bpy.types.Panel):
 
         # --- Animations ---
         box = layout.box()
-        box.label(text="Animations", icon='ANIM')
+        row = box.row(align=True)
+        row.label(text="Animations", icon='ANIM')
+        row.operator("rbm.open_shared_anims", text="", icon='FILE_FOLDER')
 
         anims = _anims.get(robot, [])
         if anims:
