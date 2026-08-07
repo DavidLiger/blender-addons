@@ -1048,6 +1048,30 @@ class RBM_OT_open_shared_anims(bpy.types.Operator):
         bpy.ops.wm.path_open(filepath=path)
         return {'FINISHED'}
 
+class RBM_OT_preview_gif(bpy.types.Operator):
+    bl_idname = "rbm.preview_gif"
+    bl_label = "Voir l'animation"
+    bl_description = ("Ouvre le GIF de l'animation dans la visionneuse du systeme. "
+                      "Le fichier doit porter le meme nom que le FBX")
+
+    def execute(self, context):
+        scene = context.scene
+        path = next((p for ident, label, p in _anims.get(scene.rbm_robot, [])
+                     if ident == scene.rbm_anim), None)
+
+        if path is None:
+            self.report({'ERROR'}, "Aucune animation selectionnee")
+            return {'CANCELLED'}
+
+        gif = os.path.splitext(path)[0] + ".gif"
+        if not os.path.isfile(gif):
+            self.report({'WARNING'}, "Pas de GIF a cote de {}".format(
+                os.path.basename(path)))
+            return {'CANCELLED'}
+
+        bpy.ops.wm.path_open(filepath=gif)
+        return {'FINISHED'}
+
 class RBM_OT_clear_source(bpy.types.Operator):
     bl_idname = "rbm.clear_source"
     bl_label = "Retirer l'armature source"
@@ -1188,7 +1212,9 @@ class RBM_PT_panel(bpy.types.Panel):
         if anims:
             col = box.column(align=True)
             col.enabled = rig is not None
-            col.prop(scene, "rbm_anim", text="")
+            r = col.row(align=True)
+            r.prop(scene, "rbm_anim", text="")
+            r.operator("rbm.preview_gif", text="", icon='HIDE_OFF')
             col.operator("rbm.load_animation", icon='IMPORT')
 
             sub = box.row()
@@ -1220,6 +1246,7 @@ classes = (
     RBM_OT_edit_character,
     RBM_OT_delete_character,
     RBM_OT_open_shared_anims,
+    RBM_OT_preview_gif,
 )
 
 
