@@ -33,6 +33,7 @@ K_ROBOT = "robot"          # nom du robot auquel l'objet appartient
 K_SOCKET = "robot_socket"  # marque un empty de connexion
 K_TUBE = "robot_tube"      # marque un tube de liaison
 FACE_SLOTS = [('eyes', "Yeux"), ('mouth', "Bouche")]
+READY_FILE = "ready.blend"
 
 # Categories de pieces (l'ordre est celui du menu)
 FAMILIES = [
@@ -2187,6 +2188,44 @@ class RM_OT_face_info(bpy.types.Operator):
             col.scale_y = 0.8
             for line in lines:
                 col.label(text=line)
+                
+class RM_OT_save_ready(bpy.types.Operator):
+    bl_idname = "rm.save_ready"
+    bl_label = "Enregistrer le personnage pret"
+    bl_description = ("Enregistre le personnage rigge avec son visage prepare. "
+                      "Robot Manager instanciera ce fichier au lieu du FBX brut")
+
+    def execute(self, context):
+        scene = context.scene
+        obj = context.active_object
+
+        if obj is None:
+            self.report({'ERROR'}, "Selectionner le personnage")
+            return {'CANCELLED'}
+
+        coll = next((c for c in obj.users_collection
+                     if c.name.startswith(COLL_PREFIX)), None)
+        if coll is None:
+            self.report({'ERROR'}, "Le personnage n'est pas dans une collection ROBOT_")
+            return {'CANCELLED'}
+
+        robot = (scene.rm_robot or getattr(scene, "rbm_robot", "")
+                 or re.sub(r"_\d+$", "", coll.name[len(COLL_PREFIX):]))
+
+        folder = robot_dir(context, robot)
+        if not folder or not os.path.isdir(folder):
+            self.report({'ERROR'}, "Dossier de '{}' introuvable".format(robot))
+            return {'CANCELLED'}
+
+        try:
+            bpy.data.libraries.write(os.path.join(folder, READY_FILE),
+                                     {coll}, fake_user=True)
+        except Exception as e:
+            self.report({'ERROR'}, "Ecriture impossible : {}".format(e))
+            return {'CANCELLED'}
+
+        self.report({'INFO'}, "'{}' pret ({})".format(robot, coll.name))
+        return {'FINISHED'}
 
 class RM_OT_prepare_mixamo(bpy.types.Operator):
     bl_idname = "rm.prepare_mixamo"
@@ -2759,6 +2798,7 @@ class RM_PT_panel(bpy.types.Panel):
         sub.scale_y = 0.7
         sub.label(text="Faces selectionnees + vue de face", icon='INFO')
         sub.label(text="Ajuster ensuite dans l'UV Editor")
+        box.operator("rm.save_ready", icon='FILE_TICK')
 
         # --- Mixamo ---
         box = layout.box()
@@ -2821,6 +2861,7 @@ classes = (
     RM_OT_setup_scene,
     RM_OT_prepare_face,
     RM_OT_face_info,
+    RM_OT_save_ready,
 )
 
 @bpy.app.handlers.persistent
