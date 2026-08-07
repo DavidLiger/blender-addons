@@ -1128,8 +1128,9 @@ FACE_STEPS = [
     ]),
     ("3. Calibrer", [
         "Deplacer, tourner et redimensionner l'empty pour caler le visage.",
-        "L'origine de l'empty est le coin bas-gauche de l'image,",
-        "ses axes X et Z sa largeur et sa hauteur.",
+        "Le cube de l'empty delimite la zone couverte : le cadrer",
+        "sur le visage en vue de face (numpad 1). La profondeur",
+        "n'a aucun effet, seuls la largeur et la hauteur comptent.",
         "Puis Enregistrer le calibrage : la position est memorisee",
         "par rapport a l'os de la tete, valable pour toutes les instances.",
     ]),
@@ -1192,14 +1193,27 @@ def _build_face_material(name, sprite, color):
     if sprite is not None:
         tex.image = sprite
 
-    mapping = tree.nodes.new('ShaderNodeMapping')
-    mapping.location = (-360, 120)
+    # Mapping des cellules : pilote par l'addon Expressions. Cree en premier
+    # pour etre celui que son detecteur trouve.
+    cell = tree.nodes.new('ShaderNodeMapping')
+    cell.label = "Cellule"
+    cell.location = (-160, -60)
+
+    proj = tree.nodes.new('ShaderNodeMapping')
+    proj.label = "Projection"
+    proj.location = (-360, 120)
+    # Le cube visible de l'empty couvre exactement l'image, et la hauteur
+    # se lit sur Z au lieu de Y
+    proj.inputs['Rotation'].default_value = (-1.5707963, 0.0, 0.0)
+    proj.inputs['Scale'].default_value = (0.5, 0.5, 0.5)
+    proj.inputs['Location'].default_value = (0.5, 0.5, 0.0)
 
     coord = tree.nodes.new('ShaderNodeTexCoord')
     coord.location = (-560, 120)
 
-    tree.links.new(coord.outputs['Object'], mapping.inputs['Vector'])
-    tree.links.new(mapping.outputs['Vector'], tex.inputs['Vector'])
+    tree.links.new(coord.outputs['Object'], proj.inputs['Vector'])
+    tree.links.new(proj.outputs['Vector'], cell.inputs['Vector'])
+    tree.links.new(cell.outputs['Vector'], tex.inputs['Vector'])
     tree.links.new(tex.outputs['Color'], emit.inputs['Color'])
     tree.links.new(tex.outputs['Alpha'], mix.inputs['Fac'])
     tree.links.new(base.outputs['BSDF'], mix.inputs[1])
@@ -1264,9 +1278,8 @@ class RBM_OT_prepare_face(bpy.types.Operator):
             bone = rig.pose.bones[FACE_BONE]
             head_world = rig.matrix_world @ bone.head
             size = scene.rbm_face_size
-            proj.matrix_world = Matrix.Translation(
-                head_world + Vector((-size / 2.0, -size, -size / 2.0)))
-            proj.scale = (size, size, size)
+            proj.matrix_world = Matrix.Translation(head_world)
+            proj.scale = (size / 2.0, size / 2.0, size / 2.0)
 
         proj.parent = rig
         proj.parent_type = 'BONE'
