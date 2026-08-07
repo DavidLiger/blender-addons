@@ -1,7 +1,7 @@
 bl_info = {
     "name": "Face Expressions",
     "author": "David",
-    "version": (1, 0, 0),
+    "version": (1, 0, 1),
     "blender": (4, 0, 0),
     "location": "View3D > Sidebar (N) > Expressions",
     "description": ("Pilote un plan texture par sprite sheet (yeux / bouches) : keyframes "
@@ -18,8 +18,6 @@ import re
 
 # ===========================================================================
 # Vignettes
-# Blender ne sait construire une icone qu'a partir d'un fichier : le sprite
-# sheet est donc decoupe une fois, et les cellules mises en cache sur disque.
 # ===========================================================================
 _previews = None            # bpy.utils.previews collection
 _thumb_key = ""             # sheet courant charge dans la collection
@@ -40,11 +38,12 @@ def _thumb_dir(sheet_name, create=False):
 
 
 def _preview_key(sheet_name, ident):
-    return _safe_name(sheet_name) + "/" + ident
+    return _safe_name(sheet_name) + "/" + _safe_name(ident)
 
 
 def _icon_for(sheet_name, ident):
     """icon_value de la vignette, ou 0 si elle n'existe pas."""
+    global _previews
     if _previews is None:
         return 0
     prev = _previews.get(_preview_key(sheet_name, ident))
@@ -53,16 +52,24 @@ def _icon_for(sheet_name, ident):
 
 def _load_cached_previews(scene):
     """Charge dans la collection les vignettes deja presentes sur disque."""
-    global _thumb_key
+    global _previews, _thumb_key
 
     if _previews is None:
         return 0
 
     sheet = scene.expr_name
-    folder = _thumb_dir(sheet)
-    if not os.path.isdir(folder):
+    if not sheet:
+        return 0
+
+    folder = _thumb_dir(sheet, create=False)
+    if not folder or not os.path.isdir(folder):
         _thumb_key = ""
         return 0
+
+    on_disk = {}
+    for fname in os.listdir(folder):
+        if fname.lower().endswith(".png"):
+            on_disk[os.path.splitext(fname)[0]] = os.path.join(folder, fname)
 
     count = 0
     for item in scene.expr_items:
@@ -70,24 +77,27 @@ def _load_cached_previews(scene):
         if key in _previews:
             count += 1
             continue
-        path = os.path.join(folder, _safe_name(item.ident) + ".png")
-        if os.path.isfile(path):
-            _previews.load(key, path, 'IMAGE')
-            count += 1
+
+        path = on_disk.get(_safe_name(item.ident)) or on_disk.get(item.ident)
+        if path and os.path.isfile(path):
+            try:
+                _previews.load(key, path, 'IMAGE')
+                count += 1
+            except Exception:
+                pass
 
     _thumb_key = sheet if count else ""
     return count
 
 
 def _srgb_encode(a):
-    """Les pixels de Blender sont lineaires ; les vignettes sont ecrites en
-    Non-Color, donc l'encodage sRGB doit etre fait ici."""
     import numpy as np
     return np.where(a <= 0.0031308, a * 12.92, 1.055 * np.power(np.clip(a, 0, None), 1/2.4) - 0.055)
 
 
 def _slice_sheet(scene, report=None):
     """Decoupe le sprite sheet en une image par expression."""
+    global _previews
     import numpy as np
 
     img = scene.expr_image
@@ -105,7 +115,7 @@ def _slice_sheet(scene, report=None):
 
     buf = np.empty(w * h * 4, dtype=np.float32)
     img.pixels.foreach_get(buf)
-    buf = buf.reshape(h, w, 4)          # ligne 0 = bas de l'image
+    buf = buf.reshape(h, w, 4)
 
     step = max(1, int(max(cw, ch) / THUMB_MAX))
     folder = _thumb_dir(scene.expr_name, create=True)
@@ -113,7 +123,7 @@ def _slice_sheet(scene, report=None):
 
     for item in scene.expr_items:
         x0 = item.col * cw
-        y0 = h - (item.row + 1) * ch    # passage du repere haut-gauche au bas-gauche
+        y0 = h - (item.row + 1) * ch
         cell = buf[y0:y0 + ch, x0:x0 + cw, :][::step, ::step, :]
         if cell.size == 0:
             continue
@@ -156,35 +166,75 @@ class EXPR_Item(bpy.types.PropertyGroup):
     row: bpy.props.IntProperty()
 
 
-# Cache des items d'enumeration : Blender exige que les chaines restent
-# referencees en Python, sinon l'interface affiche des caracteres parasites.
 _enum_cache = []
+_enum_sig = None
+_enum_strings = []      # garde une reference sur les chaines remises a Blender
 
 
 def _enum_items(self, context):
-    global _enum_cache
+    """Blender ne copie pas les chaines des enums dynamiques : la liste doit
+    rester identique entre deux redessins, sinon l'affichage se corrompt."""
+    global _enum_cache, _enum_sig, _thumb_key
+
     scene = context.scene if context else None
-    _enum_cache = []
+    if scene is None:
+        return [('NONE', "(aucun sprite sheet charge)", "", 0, 0)]
 
-    if scene:
-        sheet = scene.expr_name
-        for i, item in enumerate(scene.expr_items):
-            icon = _icon_for(sheet, item.ident)
-            _enum_cache.append((item.ident, item.label, item.label, icon, i))
+    sheet = scene.expr_name
+    if sheet and _thumb_key != sheet:
+        _load_cached_previews(scene)
 
-    if not _enum_cache:
-        _enum_cache = [('NONE', "(aucun sprite sheet charge)", "", 0, 0)]
+    icons = tuple(_icon_for(sheet, i.ident) for i in scene.expr_items)
+    sig = (sheet, tuple(i.ident for i in scene.expr_items), icons)
 
+    if sig == _enum_sig and _enum_cache:
+        return _enum_cache
+
+    items = []
+    for index, item in enumerate(scene.expr_items):
+        ident = str(item.ident)
+        label = str(item.label)
+        _enum_strings.append((ident, label))
+        items.append((ident, label, label, icons[index], index))
+
+    if not items:
+        items = [('NONE', "(aucun sprite sheet charge)", "", 0, 0)]
+
+    # Evite une croissance sans fin au fil des changements de sheet
+    if len(_enum_strings) > 4000:
+        del _enum_strings[:2000]
+
+    _enum_cache = items
+    _enum_sig = sig
     return _enum_cache
 
 
 # ===========================================================================
 # Memorisation par plan
-# Les reglages vivent sur l'objet lui-meme : en re-selectionnant un plan deja
-# configure, le panneau se recharge tout seul, sans repasser par le JSON.
 # ===========================================================================
-_restoring = False          # evite que la restauration se declenche elle-meme
+_restoring = False
 _last_active = None
+
+
+def current_zone(scene=None):
+    scene = scene or bpy.context.scene
+    return getattr(scene, "expr_zone", 'eyes')
+
+
+def data_key(scene=None):
+    return "expr_data_" + current_zone(scene)
+
+
+def zone_material(obj, zone):
+    if obj is None or obj.data is None:
+        return getattr(obj, "active_material", None)
+
+    prefix = "FACE_" + zone
+    for mat in getattr(obj.data, "materials", []):
+        if mat is not None and mat.name.startswith(prefix):
+            return mat
+
+    return getattr(obj, "active_material", None)
 
 
 def _store_on_object(scene, obj):
@@ -207,8 +257,6 @@ def _store_on_object(scene, obj):
 
 
 def _stored_sheet_name(obj):
-    """Nom du sprite sheet memorise sur l'objet, lu directement (sans passer
-    par l'etat de la scene) : sert de verite de reference dans le panneau."""
     key = data_key()
     if obj is None or key not in obj:
         return ""
@@ -219,7 +267,6 @@ def _stored_sheet_name(obj):
 
 
 def _restore_from_object(scene, obj):
-    """Recharge le panneau depuis les reglages memorises sur l'objet."""
     global _restoring
     key = data_key(scene)
     if key not in obj:
@@ -258,9 +305,62 @@ def _restore_from_object(scene, obj):
     _load_cached_previews(scene)
     return True
 
+def _zone_json_folder(obj):
+    """Dossier des sprite sheets, deduit d'une zone deja configuree."""
+    for zone, _label, _desc in FACE_ZONES:
+        raw = obj.get("expr_data_" + zone)
+        if not raw:
+            continue
+        try:
+            path = bpy.path.abspath(json.loads(raw).get("json", ""))
+        except Exception:
+            continue
+        if path and os.path.isdir(os.path.dirname(path)):
+            return os.path.dirname(path)
+    return ""
+
+
+def _auto_load_zone(scene, obj):
+    """Met le panneau a jour pour la zone courante, sans intervention."""
+    if obj is None:
+        return False
+
+    key = data_key(scene)
+    if key in obj:
+        if _stored_sheet_name(obj) == scene.expr_name:
+            return True                      # deja en place
+        return _restore_from_object(scene, obj)
+
+    # Zone jamais configuree : on cherche son JSON a cote de celui de l'autre zone
+    folder = _zone_json_folder(obj)
+    if not folder:
+        return False
+
+    zone = current_zone(scene)
+    match = next((f for f in sorted(os.listdir(folder))
+                  if f.lower().endswith(".json") and zone in f.lower()), None)
+    if match is None:
+        return False
+
+    scene.expr_json = os.path.join(folder, match)
+    scene.expr_target = obj
+    try:
+        bpy.ops.expr.load_json()
+    except Exception:
+        return False
+    return True
+
+
+def _on_zone_change(self, context):
+    if _restoring or context is None:
+        return
+    scene = context.scene
+    try:
+        _auto_load_zone(scene, scene.expr_target or context.active_object)
+    except Exception:
+        pass
 
 def _sync_active_object():
-    """Aligne le panneau sur l'objet actif : cible + reglages memorises."""
     global _last_active, _restoring
 
     if _restoring:
@@ -288,12 +388,9 @@ def _sync_active_object():
     finally:
         _restoring = False
 
-    if data_key(scene) in obj:
-        _restore_from_object(scene, obj)
+    _auto_load_zone(scene, obj)
 
 
-# msgbus : seul mecanisme fiable pour reagir au changement d'objet actif
-# (depsgraph_update_post ne se declenche pas sur une simple selection).
 _msgbus_owner = object()
 
 
@@ -308,11 +405,7 @@ def _subscribe_msgbus():
     )
 
 
-# Verification periodique : mecanisme principal, insensible aux evenements
-# que msgbus ou le depsgraph peuvent rater selon les versions de Blender.
 _POLL_INTERVAL = 0.25
-
-
 _last_frame = None
 
 
@@ -320,7 +413,6 @@ def _poll_active():
     global _last_frame
     try:
         _sync_active_object()
-
         scene = bpy.context.scene
         if scene is not None and scene.frame_current != _last_frame:
             _last_frame = scene.frame_current
@@ -332,11 +424,14 @@ def _poll_active():
 
 @bpy.app.handlers.persistent
 def _on_load(dummy=None):
-    # Les abonnements msgbus sont perdus a chaque ouverture de fichier
-    global _last_active
+    global _last_active, _previews, _thumb_key
     _last_active = None
-    global _previews
-    _previews = bpy.utils.previews.new()
+    _thumb_key = ""
+
+    if _previews is not None:
+        _previews.clear()
+    else:
+        _previews = bpy.utils.previews.new()
 
     _subscribe_msgbus()
 
@@ -346,39 +441,17 @@ def _on_load(dummy=None):
 
 @bpy.app.handlers.persistent
 def _on_depsgraph(scene, depsgraph=None):
-    # Filet de securite si msgbus rate un evenement
     _sync_active_object()
+
 
 FACE_ZONES = [('eyes', "Yeux", "Zone des yeux"),
               ('mouth', "Bouche", "Zone de la bouche")]
 
 
-def current_zone(scene=None):
-    scene = scene or bpy.context.scene
-    return getattr(scene, "expr_zone", 'eyes')
-
-
-def zone_material(obj, zone):
-    """Materiau FACE_<zone>_* du maillage, sinon le materiau actif."""
-    if obj is None or obj.data is None:
-        return getattr(obj, "active_material", None)
-
-    prefix = "FACE_" + zone
-    for mat in getattr(obj.data, "materials", []):
-        if mat is not None and mat.name.startswith(prefix):
-            return mat
-
-    return getattr(obj, "active_material", None)
-
-
-def data_key(scene=None):
-    return "expr_data_" + current_zone(scene)
-
 # ===========================================================================
 # Materiau
 # ===========================================================================
 def _find_nodes(obj):
-    """Retourne (node_tree, mapping, image_texture) du materiau actif."""
     if obj is None:
         return None, None, None
 
@@ -397,8 +470,6 @@ def _find_nodes(obj):
 
 
 def _set_constant(tree, mapping, frame):
-    """Force l'interpolation Constant sur les keyframes de Location.
-    Sans cela, Blender fait glisser la texture d'une expression a l'autre."""
     ad = tree.animation_data
     if not ad or not ad.action:
         return
@@ -414,8 +485,6 @@ def _set_constant(tree, mapping, frame):
 
 
 def _current_item(scene, obj):
-    """Expression reellement en place sur le materiau a la frame courante.
-    Deduite de la valeur du noeud Mapping, animee ou non."""
     tree, mapping, tex = _find_nodes(obj)
     if mapping is None or not scene.expr_items:
         return None
@@ -434,7 +503,6 @@ def _current_item(scene, obj):
 
 
 def _sync_current_from_material(scene):
-    """Aligne la liste sur ce qui est affiche, au changement de frame."""
     global _restoring
 
     if _restoring or not scene.expr_follow_frame:
@@ -445,7 +513,6 @@ def _sync_current_from_material(scene):
     if item is None or item.ident == scene.expr_current:
         return
 
-    # Le drapeau evite que l'apercu auto ne reecrive la valeur animee
     _restoring = True
     try:
         scene.expr_current = item.ident
@@ -456,8 +523,6 @@ def _sync_current_from_material(scene):
 
 
 def _apply_expression(scene, obj, ident, keyframe=False):
-    """Place la texture sur l'expression demandee.
-    Retourne (True, message) ou (False, message d'erreur)."""
     tree, mapping, tex = _find_nodes(obj)
     if tree is None or mapping is None:
         return False, "Materiau non prepare : utiliser 'Preparer le materiau'"
@@ -469,7 +534,6 @@ def _apply_expression(scene, obj, ident, keyframe=False):
     cols = max(1, scene.expr_cols)
     rows = max(1, scene.expr_rows)
 
-    # L'origine UV est en bas a gauche, la grille du sprite sheet en haut a gauche
     mapping.inputs[3].default_value = (1.0 / cols, 1.0 / rows, 1.0)
     mapping.inputs[1].default_value = (item.col / cols, (rows - 1 - item.row) / rows, 0.0)
 
@@ -483,7 +547,6 @@ def _apply_expression(scene, obj, ident, keyframe=False):
 
 
 def _on_current_change(self, context):
-    """Apercu immediat au changement d'expression dans la liste."""
     if _restoring:
         return
 
@@ -504,8 +567,6 @@ def _on_current_change(self, context):
 class EXPR_OT_load_json(bpy.types.Operator):
     bl_idname = "expr.load_json"
     bl_label = "Charger le JSON"
-    bl_description = ("Charge la grille, les noms d'expressions et le sprite sheet "
-                      "depuis le fichier JSON du generateur d'expressions")
 
     def execute(self, context):
         scene = context.scene
@@ -540,7 +601,6 @@ class EXPR_OT_load_json(bpy.types.Operator):
             item.col = int(fr.get("col", 0))
             item.row = int(fr.get("row", 0))
 
-        # Le JSON reference son sprite sheet : on le charge s'il est a cote
         img_msg = ""
         img_name = data.get("image", "")
         if img_name:
@@ -555,7 +615,6 @@ class EXPR_OT_load_json(bpy.types.Operator):
                 img_msg = " - image absente du dossier ({})".format(img_name)
 
         _load_cached_previews(scene)
-
         self.report({'INFO'}, "{} expression(s) - grille {}x{}{}".format(
             len(frames), scene.expr_cols, scene.expr_rows, img_msg))
         return {'FINISHED'}
@@ -564,8 +623,6 @@ class EXPR_OT_load_json(bpy.types.Operator):
 class EXPR_OT_from_image(bpy.types.Operator):
     bl_idname = "expr.from_image"
     bl_label = "Construire depuis l'image"
-    bl_description = ("Construit la liste a partir de la grille saisie. Si un JSON du meme "
-                      "nom se trouve a cote de l'image, les noms en sont repris")
 
     def execute(self, context):
         scene = context.scene
@@ -613,8 +670,6 @@ class EXPR_OT_from_image(bpy.types.Operator):
 class EXPR_OT_setup(bpy.types.Operator):
     bl_idname = "expr.setup"
     bl_label = "Preparer le materiau"
-    bl_description = ("Construit le materiau du plan : Image Texture + Mapping cale sur la "
-                      "grille, transparence de l'alpha, emission optionnelle")
 
     def execute(self, context):
         scene = context.scene
@@ -624,7 +679,6 @@ class EXPR_OT_setup(bpy.types.Operator):
             self.report({'ERROR'}, "Selectionner un plan (mesh) comme cible")
             return {'CANCELLED'}
 
-        # --- Materiau ---
         zone = current_zone(scene)
         mat = zone_material(obj, zone)
         if mat is None:
@@ -633,7 +687,6 @@ class EXPR_OT_setup(bpy.types.Operator):
         mat.use_nodes = True
         tree = mat.node_tree
 
-        # --- Image Texture ---
         tex = next((n for n in tree.nodes if n.type == 'TEX_IMAGE'), None)
         created_chain = False
         if tex is None:
@@ -644,7 +697,6 @@ class EXPR_OT_setup(bpy.types.Operator):
         if scene.expr_image and tex.image is None:
             tex.image = scene.expr_image
 
-        # --- Mapping + Texture Coordinate ---
         mapping = next((n for n in tree.nodes if n.type == 'MAPPING'), None)
         if mapping is None:
             mapping = tree.nodes.new('ShaderNodeMapping')
@@ -660,8 +712,6 @@ class EXPR_OT_setup(bpy.types.Operator):
         if not tex.inputs['Vector'].is_linked:
             tree.links.new(mapping.outputs['Vector'], tex.inputs['Vector'])
 
-        # --- Chaine de shading, reconstruite seulement si la texture
-        # n'alimente encore rien (ne casse pas un materiau fait a la main) ---
         if created_chain or not tex.outputs['Color'].is_linked:
             out = next((n for n in tree.nodes if n.type == 'OUTPUT_MATERIAL'), None)
             if out is None:
@@ -689,14 +739,12 @@ class EXPR_OT_setup(bpy.types.Operator):
             tree.links.new(shader.outputs[0], mix.inputs[2])
             tree.links.new(mix.outputs['Shader'], out.inputs['Surface'])
 
-        # --- Transparence (noms variables selon la version de Blender) ---
         for attr, value in (("blend_method", 'BLEND'), ("surface_render_method", 'BLENDED')):
             try:
                 setattr(mat, attr, value)
             except Exception:
                 pass
 
-        # --- Grille du sprite sheet ---
         cols = max(1, scene.expr_cols)
         rows = max(1, scene.expr_rows)
         mapping.inputs[3].default_value = (1.0 / cols, 1.0 / rows, 1.0)
@@ -704,7 +752,6 @@ class EXPR_OT_setup(bpy.types.Operator):
         tex.extension = 'CLIP'
         tex.interpolation = 'Closest' if scene.expr_pixel else 'Linear'
 
-        # Memorise les reglages sur le plan pour les retrouver au prochain clic
         _store_on_object(scene, obj)
 
         if tex.image is None:
@@ -717,8 +764,6 @@ class EXPR_OT_setup(bpy.types.Operator):
 class EXPR_OT_apply(bpy.types.Operator):
     bl_idname = "expr.apply"
     bl_label = "Appliquer"
-    bl_description = "Place la texture sur l'expression choisie"
-
     keyframe: bpy.props.BoolProperty(default=True)
 
     def execute(self, context):
@@ -738,8 +783,6 @@ class EXPR_OT_apply(bpy.types.Operator):
 class EXPR_OT_thumbs(bpy.types.Operator):
     bl_idname = "expr.thumbs"
     bl_label = "Generer les vignettes"
-    bl_description = ("Decoupe le sprite sheet en une vignette par expression et les met "
-                      "en cache, pour les afficher a la place des noms")
 
     def execute(self, context):
         scene = context.scene
@@ -754,14 +797,17 @@ class EXPR_OT_thumbs(bpy.types.Operator):
             return {'CANCELLED'}
 
         scene.expr_thumbs_view = True
-        self.report({'INFO'}, "{} vignette(s) generee(s)".format(done))
+        folder = _thumb_dir(scene.expr_name)
+        on_disk = len([f for f in os.listdir(folder)
+                       if f.lower().endswith(".png")]) if os.path.isdir(folder) else -1
+        loaded = sum(1 for i in scene.expr_items if _icon_for(scene.expr_name, i.ident))
+        self.report({'INFO'}, "{} generee(s) - {} chargee(s)".format(done, loaded))
         return {'FINISHED'}
 
 
 class EXPR_OT_reload(bpy.types.Operator):
     bl_idname = "expr.reload"
     bl_label = "Recharger depuis le plan"
-    bl_description = "Recharge les reglages memorises sur le plan selectionne"
 
     def execute(self, context):
         scene = context.scene
@@ -788,7 +834,6 @@ class EXPR_OT_reload(bpy.types.Operator):
 class EXPR_OT_forget(bpy.types.Operator):
     bl_idname = "expr.forget"
     bl_label = "Oublier ce plan"
-    bl_description = "Retire les reglages memorises sur ce plan (le materiau reste intact)"
 
     def execute(self, context):
         obj = context.scene.expr_target or context.active_object
@@ -829,19 +874,11 @@ class EXPR_PT_panel(bpy.types.Panel):
             sub.alert = True
             sub.label(text="Aucun materiau de zone", icon='ERROR')
 
-        stored = _stored_sheet_name(obj)
         if obj is not None and data_key(scene) in obj:
-            row = box.row()
-            row.scale_y = 0.7
-            row.label(text="Memorise sur ce plan : " + (stored or "?"), icon='CHECKMARK')
             row = box.row(align=True)
-            row.operator("expr.reload", text="Recharger", icon='FILE_REFRESH')
-            row.operator("expr.forget", text="Oublier", icon='X')
-
-        if stored and stored != scene.expr_name:
-            warn = box.row()
-            warn.alert = True
-            warn.label(text="Panneau desynchronise : cliquer Recharger", icon='ERROR')
+            row.scale_y = 0.7
+            row.label(text=_stored_sheet_name(obj) or "?", icon='CHECKMARK')
+            row.operator("expr.forget", text="", icon='X')
 
         layout.separator()
 
@@ -891,7 +928,6 @@ class EXPR_PT_panel(bpy.types.Panel):
         col = layout.column()
         col.enabled = bool(scene.expr_items)
 
-        # Ce qui est reellement affiche a la frame courante
         current = _current_item(scene, obj)
         state = col.box().row()
         if current:
@@ -910,19 +946,34 @@ class EXPR_PT_panel(bpy.types.Panel):
         row.prop(scene, "expr_thumbs_view")
         col.prop(scene, "expr_follow_frame")
 
-        has_thumbs = bool(scene.expr_items) and _icon_for(scene.expr_name,
-                                                          scene.expr_items[0].ident)
+        loaded = sum(1 for i in scene.expr_items if _icon_for(scene.expr_name, i.ident))
+        has_thumbs = loaded > 0
 
-        if scene.expr_thumbs_view and has_thumbs:
-            col.template_icon_view(scene, "expr_current", show_labels=True,
-                                   scale=scene.expr_thumbs_scale,
-                                   scale_popup=scene.expr_thumbs_scale)
-            col.prop(scene, "expr_thumbs_scale")
+        if scene.expr_items:
+            diag = col.row()
+            diag.scale_y = 0.7
+            diag.label(text="Vignettes : {} / {}  ({})".format(
+                loaded, len(scene.expr_items), scene.expr_name or "?"))
+
+        if scene.expr_thumbs_view:
+            if has_thumbs:
+                col.template_icon_view(scene, "expr_current", show_labels=True,
+                                       scale=scene.expr_thumbs_scale,
+                                       scale_popup=scene.expr_thumbs_scale)
+                col.prop(scene, "expr_thumbs_scale")
+            else:
+                warn = col.box()
+                warn.alert = True
+                warn.label(text="Vignettes non générées pour cette texture", icon='INFO')
+                col.prop(scene, "expr_current", text="")
         else:
             col.prop(scene, "expr_current", text="")
 
-        if scene.expr_items and not has_thumbs:
-            col.operator("expr.thumbs", icon='IMAGE_DATA')
+        if scene.expr_items:
+            col.operator("expr.thumbs",
+                         text="Regenerer les vignettes" if has_thumbs
+                         else "Generer les vignettes",
+                         icon='IMAGE_DATA')
 
         row = col.row(align=True)
         op = row.operator("expr.apply", text="Keyframe", icon='KEYTYPE_KEYFRAME_VEC')
@@ -954,6 +1005,10 @@ classes = (
 
 
 def register():
+    global _previews
+    if _previews is None:
+        _previews = bpy.utils.previews.new()
+
     for cls in classes:
         bpy.utils.register_class(cls)
 
@@ -961,8 +1016,8 @@ def register():
     S.expr_items = bpy.props.CollectionProperty(type=EXPR_Item)
     S.expr_zone = bpy.props.EnumProperty(
         name="Zone", items=FACE_ZONES, default='eyes',
-        description="Zone du visage pilotee : chacune a son materiau, sa couche UV "
-                    "et son sprite sheet")
+        update=_on_zone_change,
+        description="Zone du visage pilotee")
     S.expr_json = bpy.props.StringProperty(
         name="Sprite sheet JSON", subtype='FILE_PATH', default="")
     S.expr_name = bpy.props.StringProperty(default="")
@@ -971,18 +1026,14 @@ def register():
     S.expr_current = bpy.props.EnumProperty(
         name="Expression", items=_enum_items, update=_on_current_change)
     S.expr_follow_frame = bpy.props.BoolProperty(
-        name="Suivre la timeline", default=True,
-        description=("Au changement de frame, replace la liste sur l'expression "
-                     "reellement affichee"))
+        name="Suivre la timeline", default=True)
     S.expr_thumbs_view = bpy.props.BoolProperty(
         name="Vignettes", default=True,
         description="Affiche les images des expressions a la place de leurs noms")
     S.expr_thumbs_scale = bpy.props.FloatProperty(
-        name="Taille", default=6.0, min=2.0, max=14.0,
-        description="Taille des vignettes")
+        name="Taille", default=6.0, min=2.0, max=14.0)
     S.expr_auto_preview = bpy.props.BoolProperty(
-        name="Apercu auto", default=True,
-        description="Applique l'expression des sa selection dans la liste, sans keyframe")
+        name="Apercu auto", default=True)
     S.expr_source = bpy.props.EnumProperty(
         name="Source", default='JSON',
         items=[('JSON', "JSON", "Grille, noms et image lus depuis le fichier JSON"),
@@ -991,16 +1042,10 @@ def register():
     S.expr_target = bpy.props.PointerProperty(
         name="Plan", type=bpy.types.Object,
         poll=lambda self, obj: obj.type == 'MESH')
-    S.expr_emit = bpy.props.BoolProperty(
-        name="Emission", default=True,
-        description="Le visage garde sa couleur d'origine, sans etre assombri par l'eclairage")
-    S.expr_pixel = bpy.props.BoolProperty(
-        name="Pixel (Closest)", default=False,
-        description="Interpolation Closest : bords nets")
+    S.expr_emit = bpy.props.BoolProperty(name="Emission", default=True)
+    S.expr_pixel = bpy.props.BoolProperty(name="Pixel (Closest)", default=False)
     S.expr_follow_selection = bpy.props.BoolProperty(
-        name="Suivre la selection", default=True,
-        description=("En selectionnant un plan deja configure, recharge automatiquement "
-                     "son sprite sheet et ses expressions"))
+        name="Suivre la selection", default=True)
 
     if _on_depsgraph not in bpy.app.handlers.depsgraph_update_post:
         bpy.app.handlers.depsgraph_update_post.append(_on_depsgraph)
@@ -1008,6 +1053,9 @@ def register():
         bpy.app.handlers.load_post.append(_on_load)
 
     _subscribe_msgbus()
+
+    if not bpy.app.timers.is_registered(_poll_active):
+        bpy.app.timers.register(_poll_active, first_interval=1.0, persistent=True)
 
 
 def unregister():
@@ -1027,7 +1075,8 @@ def unregister():
         bpy.app.handlers.depsgraph_update_post.remove(_on_depsgraph)
 
     S = bpy.types.Scene
-    for prop in ("expr_follow_frame", "expr_thumbs_scale", "expr_thumbs_view", "expr_auto_preview", "expr_follow_selection", "expr_pixel", "expr_emit", "expr_target",
+    for prop in ("expr_follow_frame", "expr_thumbs_scale", "expr_thumbs_view", "expr_auto_preview",
+                 "expr_follow_selection", "expr_pixel", "expr_emit", "expr_target",
                  "expr_image", "expr_source", "expr_current", "expr_rows",
                  "expr_cols", "expr_name", "expr_json", "expr_zone", "expr_items"):
         if hasattr(S, prop):
