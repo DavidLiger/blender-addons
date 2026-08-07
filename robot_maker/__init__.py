@@ -34,6 +34,7 @@ K_SOCKET = "robot_socket"  # marque un empty de connexion
 K_TUBE = "robot_tube"      # marque un tube de liaison
 FACE_SLOTS = [('eyes', "Yeux"), ('mouth', "Bouche")]
 READY_FILE = "ready.blend"
+D_RIGGED = "mixamo-rigged"
 
 # Categories de pieces (l'ordre est celui du menu)
 FAMILIES = [
@@ -2093,42 +2094,68 @@ class RM_OT_prepare_face(bpy.types.Operator):
                     except Exception:
                         pass
 
-        mat = _face_material(mat_name, uv_name, sprite, _slot_color(obj))
+        # En Edit Mode la selection n'est pas encore repercutee sur le maillage
+        was_edit = (obj.mode == 'EDIT')
+        if was_edit:
+            bpy.ops.object.mode_set(mode='OBJECT')
 
-        if uv_name not in obj.data.uv_layers:
-            obj.data.uv_layers.new(name=uv_name)
-        obj.data.uv_layers.active = obj.data.uv_layers[uv_name]
+        mesh = obj.data
+        faces = [p for p in mesh.polygons if p.select]
+        if not faces:
+            self.report({'ERROR'}, "Aucune face selectionnee")
+            return {'CANCELLED'}
 
-        index = obj.data.materials.find(mat_name)
+        # Couleur du materiau que portent ces faces
+        color = (0.6, 0.6, 0.62, 1.0)
+        first = mesh.materials[faces[0].material_index] \
+            if faces[0].material_index < len(mesh.materials) else None
+        if first is not None and first.use_nodes:
+            node = next((n for n in first.node_tree.nodes
+                         if n.type == 'BSDF_PRINCIPLED'), None)
+            if node is not None:
+                color = tuple(node.inputs["Base Color"].default_value)
+
+        mat = _face_material(mat_name, uv_name, sprite, color)
+
+        index = mesh.materials.find(mat_name)
         if index < 0:
-            obj.data.materials.append(mat)
-            index = len(obj.data.materials) - 1
+            mesh.materials.append(mat)
+            index = len(mesh.materials) - 1
         obj.active_material_index = index
 
-        mode = obj.mode
-        try:
-            bpy.ops.object.mode_set(mode='EDIT')
-            bpy.ops.object.material_slot_assign()
+        for poly in faces:
+            poly.material_index = index
 
-            for window in context.window_manager.windows:
-                for area in window.screen.areas:
-                    if area.type != 'VIEW_3D':
-                        continue
-                    region = next((r for r in area.regions if r.type == 'WINDOW'), None)
-                    if region is None:
-                        continue
-                    with context.temp_override(window=window, area=area, region=region):
-                        bpy.ops.uv.project_from_view(orthographic=True,
-                                                     scale_to_bounds=True)
-                    break
-        except Exception as e:
-            self.report({'WARNING'}, "Assignation ou depliage a refaire ({})".format(e))
-        finally:
+        # Depliage frontal calcule directement : projection sur X/Z, normalisee
+        if uv_name not in mesh.uv_layers:
+            mesh.uv_layers.new(name=uv_name)
+        layer = mesh.uv_layers[uv_name]
+        mesh.uv_layers.active = layer
+
+        mw = obj.matrix_world
+        pts = [mw @ mesh.vertices[mesh.loops[li].vertex_index].co
+               for poly in faces for li in poly.loop_indices]
+
+        min_x, max_x = min(p.x for p in pts), max(p.x for p in pts)
+        min_z, max_z = min(p.z for p in pts), max(p.z for p in pts)
+        # Meme echelle sur les deux axes : pas de deformation du visage
+        span = max(max_x - min_x, max_z - min_z) or 1.0
+        span_x = span_z = span
+        min_x -= ((span - (max_x - min_x)) / 2.0)
+        min_z -= ((span - (max_z - min_z)) / 2.0)
+
+        for poly in faces:
+            for li in poly.loop_indices:
+                co = mw @ mesh.vertices[mesh.loops[li].vertex_index].co
+                layer.data[li].uv = ((co.x - min_x) / span_x,
+                                     (co.z - min_z) / span_z)
+
+        mesh.update()
+        if was_edit:
             try:
-                bpy.ops.object.mode_set(mode=mode)
+                bpy.ops.object.mode_set(mode='EDIT')
             except Exception:
                 pass
-
         # Passe le relais a l'addon Expressions
         if sheet_json and hasattr(scene, "expr_json"):
             scene.expr_json = sheet_json
@@ -2188,6 +2215,96 @@ class RM_OT_face_info(bpy.types.Operator):
             col.scale_y = 0.8
             for line in lines:
                 col.label(text=line)
+                
+class RM_OT_import_rigged(bpy.types.Operator):
+    bl_idname = "rm.import_rigged"
+    bl_label = "Instancier le perso rigge"
+    bl_description = ("Importe le FBX revenu de Mixamo pour y preparer le visage, "
+                      "puis enregistrer le personnage pret")
+    bl_options = {'REGISTER', 'UNDO'}
+
+    def execute(self, context):
+        scene = context.scene
+        robot = scene.rm_robot or getattr(scene, "rbm_robot", "")
+
+        if not robot:
+            self.report({'ERROR'}, "Aucun personnage actif")
+            return {'CANCELLED'}
+
+        folder = os.path.join(robot_dir(context, robot), D_RIGGED)
+        if not os.path.isdir(folder):
+            self.report({'ERROR'}, "Dossier {} introuvable".format(D_RIGGED))
+            return {'CANCELLED'}
+
+        files = sorted(f for f in os.listdir(folder) if f.lower().endswith(".fbx"))
+        if not files:
+            self.report({'ERROR'}, "Aucun FBX dans {}".format(D_RIGGED))
+            return {'CANCELLED'}
+
+        before = set(bpy.data.objects)
+        try:
+            bpy.ops.import_scene.fbx(filepath=os.path.join(folder, files[0]),
+                                     automatic_bone_orientation=False)
+        except Exception as e:
+            self.report({'ERROR'}, "Import impossible : {}".format(e))
+            return {'CANCELLED'}
+
+        imported = [o for o in bpy.data.objects if o not in before]
+        if not imported:
+            self.report({'ERROR'}, "Rien n'a ete importe")
+            return {'CANCELLED'}
+
+        index = 1
+        while bpy.data.collections.get("{}{}_{:02d}".format(COLL_PREFIX, robot, index)):
+            index += 1
+        coll = bpy.data.collections.new("{}{}_{:02d}".format(COLL_PREFIX, robot, index))
+        context.scene.collection.children.link(coll)
+
+        for obj in imported:
+            for c in list(obj.users_collection):
+                c.objects.unlink(obj)
+            coll.objects.link(obj)
+            obj[K_ROBOT] = robot
+
+        armature = next((o for o in imported if o.type == 'ARMATURE'), None)
+        mesh = next((o for o in imported if o.type == 'MESH'), None)
+
+        deselect_all(context)
+        target = mesh or armature
+        if target is not None:
+            target.select_set(True)
+            context.view_layer.objects.active = target
+
+        msg = "{} importe dans {}".format(files[0], coll.name)
+
+        if scene.rm_make_rig and armature is not None:
+            source = getattr(scene, "mix_source_armature", None)
+            if source is not None:
+                scene.mix_source_armature = None
+
+            deselect_all(context)
+            armature.select_set(True)
+            context.view_layer.objects.active = armature
+            try:
+                bpy.ops.mr.make_rig()
+            except Exception:
+                pass
+
+            if source is not None:
+                scene.mix_source_armature = source
+
+            if "mr_control_rig" in armature.data.keys():
+                msg += " - control rig cree"
+            else:
+                msg += " - control rig non cree"
+
+            if target is not None:
+                deselect_all(context)
+                target.select_set(True)
+                context.view_layer.objects.active = target
+
+        self.report({'INFO'}, msg)
+        return {'FINISHED'}
                 
 class RM_OT_save_ready(bpy.types.Operator):
     bl_idname = "rm.save_ready"
@@ -2790,6 +2907,10 @@ class RM_PT_panel(bpy.types.Panel):
         row.label(text="Visage", icon='USER')
         row.operator("rm.face_info", text="", icon='INFO')
 
+        box.prop(scene, "rm_make_rig")
+        box.operator("rm.import_rigged", icon='IMPORT')
+        box.separator()
+
         r = box.row(align=True)
         for slot, label in FACE_SLOTS:
             r.operator("rm.prepare_face", text=label).slot = slot
@@ -2862,6 +2983,7 @@ classes = (
     RM_OT_prepare_face,
     RM_OT_face_info,
     RM_OT_save_ready,
+    RM_OT_import_rigged,
 )
 
 @bpy.app.handlers.persistent
@@ -3002,6 +3124,9 @@ def register():
     S.rm_tube_material = bpy.props.PointerProperty(
         name="Materiau", type=bpy.types.Material,
         description="Materiau applique aux tubes de liaison")
+    S.rm_make_rig = bpy.props.BoolProperty(
+        name="Creer le control rig", default=True,
+        description="Ajoute les controleurs IK/FK via l'addon Mixamo Control Rig")
 
 
 def unregister():
@@ -3031,7 +3156,7 @@ def unregister():
                  "rm_shoulder_w", "rm_shoulder_drop", "rm_hip_w", "rm_arm_upper",
                  "rm_arm_fore", "rm_arm_angle", "rm_leg_thigh", "rm_leg_shin", "rm_tube_res", "rm_tube_radius", "rm_tube_material",
                  "rm_socket_size", "rm_socket_custom", "rm_socket_name", "rm_category", "rm_robot",
-                 "rm_new_name", "rm_family",):
+                 "rm_new_name", "rm_family", "rm_make_rig",):
         if hasattr(S, prop):
             delattr(S, prop)
 
