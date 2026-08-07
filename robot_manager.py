@@ -876,6 +876,10 @@ class RBM_OT_save_posture(bpy.types.Operator):
     bl_label = "Enregistrer la posture"
     bl_description = ("Enregistre la pose actuelle du control rig comme posture "
                       "reutilisable, avec sa vignette")
+    clear_anim: bpy.props.BoolProperty(
+        name="Supprimer l'animation", default=False,
+        description="Retire l'action du control rig et l'armature source : la pose "
+                    "reste figee sur celle qu'on vient d'enregistrer")
 
     def execute(self, context):
         scene = context.scene
@@ -891,8 +895,25 @@ class RBM_OT_save_posture(bpy.types.Operator):
                                    "(le creer avec l'addon Mixamo Control Rig)")
             return {'CANCELLED'}
 
-        ok, msg = save_posture(context, robot, rig,
+        ok, msg = save_posture(context, scene.rbm_robot, rig,
                                scene.rbm_posture_name, scene.rbm_overwrite)
+
+        if ok and self.clear_anim:
+            # L'action retiree, la pose actuelle devient la pose statique du rig
+            if rig.animation_data is not None:
+                rig.animation_data.action = None
+                rig.animation_data_clear()
+
+            source = getattr(scene, "mix_source_armature", None)
+            if source is not None:
+                for child in list(source.children):
+                    bpy.data.objects.remove(child)
+                bpy.data.objects.remove(source)
+                scene.mix_source_armature = None
+                msg += " - animation retiree"
+            else:
+                msg += " - action retiree"
+
         self.report({'INFO'} if ok else {'ERROR'}, msg)
         return {'FINISHED'} if ok else {'CANCELLED'}
 
@@ -1222,8 +1243,9 @@ class RBM_PT_panel(bpy.types.Panel):
         r = col.row(align=True)
         r.prop(scene, "rbm_posture_name", text="")
         r.prop(scene, "rbm_overwrite")
+        col.prop(scene, "rbm_clear_anim")
         col.prop(scene, "rbm_thumb_size")
-        col.operator("rbm.save_posture", icon='ADD')
+        col.operator("rbm.save_posture", icon='ADD').clear_anim = scene.rbm_clear_anim
 
         # --- Animations ---
         box = layout.box()
@@ -1302,6 +1324,9 @@ def register():
     S.rbm_anim = bpy.props.EnumProperty(name="Animation", items=anim_enum)
     S.rbm_posture_name = bpy.props.StringProperty(name="Nom", default="posture_01")
     S.rbm_overwrite = bpy.props.BoolProperty(name="Ecraser", default=False)
+    S.rbm_clear_anim = bpy.props.BoolProperty(
+        name="Supprimer l'animation apres enregistrement", default=False,
+        description="Fige le rig sur la posture et retire l'armature source importee")
     S.rbm_edit = bpy.props.BoolProperty(name="Mode gestion", default=False)
     S.rbm_follow = bpy.props.BoolProperty(
         name="Suivre la selection", default=True,
