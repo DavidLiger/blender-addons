@@ -33,14 +33,50 @@ K_SOCKET = "robot_socket"  # marque un empty de connexion
 K_TUBE = "robot_tube"      # marque un tube de liaison
 
 # Categories de pieces (l'ordre est celui du menu)
-PART_CATEGORIES = [
-    ('BODY', "Corps", "Electromenager ou objet servant de torse"),
-    ('HEAD', "Tete", "Cylindre, cube, ecran..."),
-    ('HAND', "Main", "Gant facon cartoon"),
-    ('FOOT', "Chaussure", "Chaussure ou pied"),
-    ('HINGE', "Charniere", "Articulation : epaule, coude, hanche, genou, cheville"),
-    ('OTHER', "Autre", "Accessoire"),
+FAMILIES = [
+    ('ROBOT', "Robot", "Corps mecanique, membres tubulaires"),
+    ('HUMAN', "Humanoide", "Corps habille, pas de tubes de liaison"),
 ]
+
+FAMILY_DIR = {'ROBOT': "robot", 'HUMAN': "human"}
+
+CATEGORIES = {
+    'ROBOT': [
+        ('BODY', "Corps", "Electromenager ou objet servant de torse"),
+        ('HEAD', "Tete", "Cylindre, cube, ecran..."),
+        ('HAND', "Main", "Gant facon cartoon"),
+        ('FOOT', "Chaussure", "Chaussure ou pied"),
+        ('HINGE', "Charniere", "Articulation : epaule, coude, hanche, genou, cheville"),
+        ('OTHER', "Autre", "Accessoire"),
+    ],
+    'HUMAN': [
+        ('TORSO', "Torse", "Buste, veste, chemise"),
+        ('ARMS', "Bras", "Manches, avant-bras"),
+        ('LEGS', "Jambes", "Pantalon, jupe"),
+        ('HAND', "Main", "Main ou gant"),
+        ('FOOT', "Chaussure", "Chaussure ou pied"),
+        ('HEAD', "Tete", "Visage, crane"),
+        ('HAIR', "Cheveux", "Coiffure, couvre-chef"),
+        ('OTHER', "Autre", "Accessoire"),
+    ],
+}
+
+CAT_DIRS = {
+    'ROBOT': {'BODY': "body", 'HEAD': "head", 'HAND': "hands",
+              'FOOT': "feet", 'HINGE': "joints", 'OTHER': "other"},
+    'HUMAN': {'TORSO': "torso", 'ARMS': "arms", 'LEGS': "legs",
+              'HAND': "hands", 'FOOT': "feet", 'HEAD': "head",
+              'HAIR': "hair", 'OTHER': "other"},
+}
+
+
+def family_categories(scene):
+    return CATEGORIES.get(scene.rm_family, CATEGORIES['ROBOT'])
+
+
+def category_items(self, context):
+    scene = context.scene if context else None
+    return family_categories(scene) if scene else CATEGORIES['ROBOT']
 
 # Noms proposes pour les points de connexion
 SOCKET_PRESETS = [
@@ -256,15 +292,6 @@ class RM_OT_open_expression_maker(bpy.types.Operator):
         return {'FINISHED'}
 
 
-# ---------------------------------------------------------------------------
-# Bibliotheque d'assets
-# Chaque piece est un .blend a un objet, accompagne d'une vignette .png.
-# ---------------------------------------------------------------------------
-CAT_DIR = {
-    'BODY': "body", 'HEAD': "head", 'HAND': "hands",
-    'FOOT': "feet", 'HINGE': "joints", 'OTHER': "other",
-}
-
 _asset_previews = None
 _assets = {}            # categorie -> [(nom, chemin .blend)]
 
@@ -273,7 +300,9 @@ def library_dir(context, category, create=False):
     root = root_path(context)
     if not root:
         return ""
-    path = os.path.join(root, LIBRARY, CAT_DIR.get(category, "other"))
+    family = context.scene.rm_family
+    path = os.path.join(root, LIBRARY, FAMILY_DIR.get(family, "robot"),
+                        CAT_DIRS.get(family, {}).get(category, "other"))
     if create:
         os.makedirs(path, exist_ok=True)
     return path
@@ -292,7 +321,7 @@ def scan_library(context):
         return 0
 
     total = 0
-    for cat in CAT_DIR:
+    for cat, _label, _desc in family_categories(context.scene):
         folder = library_dir(context, cat)
         items = []
         if os.path.isdir(folder):
@@ -538,7 +567,9 @@ class RM_OT_add_to_library(bpy.types.Operator):
             return {'CANCELLED'}
 
         scan_library(context)
-        msg = "'{}' ajoute a {}".format(name, CAT_DIR.get(scene.rm_category))
+        msg = "'{}' ajoute a {}/{}".format(
+            name, FAMILY_DIR.get(scene.rm_family),
+            CAT_DIRS.get(scene.rm_family, {}).get(scene.rm_category, "other"))
         if not thumb_ok:
             msg += " (vignette : {})".format(thumb_err or "echec")
         self.report({'INFO'}, msg)
@@ -780,6 +811,12 @@ class RM_OT_asset_page(bpy.types.Operator):
         scene.rm_asset_page = max(0, min(last, scene.rm_asset_page + self.delta))
         return {'FINISHED'}
 
+def _family_changed(self, context):
+    try:
+        context.scene.rm_asset_page = 0
+        scan_library(context)
+    except Exception:
+        pass
 
 def _reset_page(self, context):
     try:
@@ -815,7 +852,7 @@ def _fill_asset_fields():
     scene.rm_asset_name = obj.name
 
     part = obj.get("robot_part")
-    if part in {c[0] for c in PART_CATEGORIES}:
+    if part in {c[0] for c in family_categories(scene)}:
         scene.rm_category = part
 
     for window in bpy.context.window_manager.windows:
@@ -1254,14 +1291,10 @@ SCHEMA_LINKS = {
 }
 
 
-# Ou poser chaque categorie de piece par defaut
 CATEGORY_SLOT = {
-    'BODY': 'chest',
-    'HEAD': 'head',
-    'HAND': 'wrist_L',
-    'FOOT': 'ankle_L',
-    'HINGE': 'elbow_L',
-    'OTHER': 'chest',
+    'BODY': 'chest', 'TORSO': 'chest', 'HEAD': 'head', 'HAIR': 'head',
+    'ARMS': 'elbow_L', 'HINGE': 'elbow_L', 'HAND': 'wrist_L',
+    'LEGS': 'knee_L', 'FOOT': 'ankle_L', 'OTHER': 'chest',
 }
 
 # Angle auquel les pieces sont montees : les reperes de bras n'ont aucune
@@ -1410,12 +1443,15 @@ class RM_OT_build_skeleton(bpy.types.Operator):
 
             created[slot] = empty
 
-        for a, b in BONES:
-            make_tube(context, created[a], created[b],
-                      scene.rm_tube_radius, scene.rm_tube_res, scene.rm_tube_caps)
+        tubes = 0
+        if scene.rm_family == 'ROBOT':
+            for a, b in BONES:
+                make_tube(context, created[a], created[b],
+                          scene.rm_tube_radius, scene.rm_tube_res, scene.rm_tube_caps)
+            tubes = len(BONES)
 
-        self.report({'INFO'}, "Squelette cree : {} reperes, {} tubes".format(
-            len(created), len(BONES)))
+        self.report({'INFO'}, "Squelette cree : {} reperes, {} tube(s)".format(
+            len(created), tubes))
         return {'FINISHED'}
 
 
@@ -2231,6 +2267,7 @@ class RM_PT_panel(bpy.types.Panel):
         row.prop(scene, "rm_asset_edit", text="", icon='TRASH', toggle=True)
         row.operator("rm.scan_library", text="", icon='FILE_REFRESH')
 
+        box.prop(scene, "rm_family", expand=True)
         box.prop(scene, "rm_category", text="")
 
         if not root:
@@ -2451,7 +2488,9 @@ class RM_PT_panel(bpy.types.Panel):
 
         # --- Tubes ---
         box = layout.box()
-        box.label(text="Tubes de liaison", icon='CURVE_PATH')
+        box.enabled = (scene.rm_family == 'ROBOT')
+        box.label(text="Tubes de liaison" if scene.rm_family == 'ROBOT'
+                  else "Tubes (robots uniquement)", icon='CURVE_PATH')
         row = box.row(align=True)
         row.prop(scene, "rm_tube_radius", text="Rayon")
         row.prop(scene, "rm_tube_res", text="Lisse")
@@ -2586,8 +2625,11 @@ def register():
     S = bpy.types.Scene
     S.rm_new_name = bpy.props.StringProperty(name="Nom", default="robot_01")
     S.rm_robot = bpy.props.EnumProperty(name="Robot actif", items=robot_enum)
-    S.rm_category = bpy.props.EnumProperty(name="Categorie", items=PART_CATEGORIES,
-                                           default='BODY', update=_reset_page)
+    S.rm_family = bpy.props.EnumProperty(
+        name="Famille", items=FAMILIES, default='ROBOT', update=_family_changed,
+        description="Robot : membres tubulaires. Humanoide : pieces habillees, sans tubes")
+    S.rm_category = bpy.props.EnumProperty(name="Categorie", items=category_items,
+                                           update=_reset_page)
     S.rm_socket_name = bpy.props.EnumProperty(
         name="Point", default="shoulder_L",
         items=[(n, n.replace("_", " "), "") for n in SOCKET_PRESETS])
@@ -2698,7 +2740,7 @@ def unregister():
                  "rm_shoulder_w", "rm_shoulder_drop", "rm_hip_w", "rm_arm_upper",
                  "rm_arm_fore", "rm_arm_angle", "rm_leg_thigh", "rm_leg_shin", "rm_tube_res", "rm_tube_radius", "rm_tube_material",
                  "rm_socket_size", "rm_socket_custom", "rm_socket_name", "rm_category", "rm_robot",
-                 "rm_new_name"):
+                 "rm_new_name", "rm_family",):
         if hasattr(S, prop):
             delattr(S, prop)
 
