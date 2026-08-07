@@ -12,6 +12,7 @@ bl_info = {
 import bpy
 import bpy.utils.previews
 import hashlib
+import json
 import math
 import os
 import re
@@ -963,6 +964,9 @@ class RM_OT_new_robot(bpy.types.Operator):
             try:
                 path = robot_dir(context, name, create=True)
                 coll["robot_dir"] = path
+                with open(os.path.join(path, "character.json"), "w",
+                          encoding="utf-8") as f:
+                    json.dump({"name": name, "family": scene.rm_family}, f, indent=1)
                 msg += " - dossier : {}".format(path)
             except Exception as e:
                 msg += " (dossier non cree : {})".format(e)
@@ -2601,6 +2605,29 @@ classes = (
     RM_OT_setup_scene,
 )
 
+@bpy.app.handlers.persistent
+def _on_load_character(dummy=None):
+    """Le .blend vit dans creations/<perso>/ : la fiche voisine donne la famille."""
+    try:
+        blend = bpy.data.filepath
+        if not blend:
+            return
+
+        folder = os.path.dirname(blend)
+        cfg = os.path.join(folder, "character.json")
+        if not os.path.isfile(cfg):
+            return
+
+        with open(cfg, "r", encoding="utf-8") as f:
+            data = json.load(f)
+
+        family = data.get("family")
+        if family in {'ROBOT', 'HUMAN'}:
+            bpy.context.scene.rm_family = family
+
+        scan_library(bpy.context)
+    except Exception:
+        pass
 
 def register():
     global _asset_previews
@@ -2612,6 +2639,9 @@ def register():
 
     if _on_load_scan not in bpy.app.handlers.load_post:
         bpy.app.handlers.load_post.append(_on_load_scan)
+        
+    if _on_load_character not in bpy.app.handlers.load_post:
+        bpy.app.handlers.load_post.append(_on_load_character)
 
     # Differe : pendant register(), les preferences de l'addon ne sont pas lues
     if not bpy.app.timers.is_registered(_deferred_scan):
@@ -2720,6 +2750,8 @@ def unregister():
 
     if _on_load_scan in bpy.app.handlers.load_post:
         bpy.app.handlers.load_post.remove(_on_load_scan)
+    if _on_load_character in bpy.app.handlers.load_post:
+        bpy.app.handlers.load_post.remove(_on_load_character)
     if bpy.app.timers.is_registered(_deferred_scan):
         bpy.app.timers.unregister(_deferred_scan)
     bpy.msgbus.clear_by_owner(_sync_owner)

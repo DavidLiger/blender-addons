@@ -129,9 +129,9 @@ def scan_animations(robot, folder):
 # Lecture des dossiers
 # ---------------------------------------------------------------------------
 def scan_all(context=None):
-    global _robots, _postures, _anims
+    global _robots, _postures, _anims, _families
 
-    _robots, _postures, _anims = [], {}, {}
+    _robots, _postures, _anims, _families = [], {}, {}, {}
     if _previews is not None:
         _previews.clear()
 
@@ -146,6 +146,12 @@ def scan_all(context=None):
             continue
 
         _robots.append((name, folder))
+        
+        try:
+            with open(os.path.join(folder, CHARACTER_FILE), "r", encoding="utf-8") as f:
+                _families[name] = json.load(f).get("family", 'ROBOT')
+        except Exception:
+            _families[name] = 'ROBOT'
 
         thumb = os.path.join(folder, "preview.png")
         if _previews is not None and os.path.isfile(thumb):
@@ -475,7 +481,11 @@ class RBM_OT_scan(bpy.types.Operator):
 
 # Sous-dossiers crees pour chaque nouveau personnage
 CHARACTER_DIRS = ["prototype", D_RIGGED, D_ANIM, D_POSE, "expressions"]
-
+FAMILIES = [
+    ('ROBOT', "Robot", "Corps mecanique, membres tubulaires"),
+    ('HUMAN', "Humanoide", "Corps habille, pas de tubes de liaison"),
+]
+CHARACTER_FILE = "character.json"
 
 class RBM_OT_new_character(bpy.types.Operator):
     bl_idname = "rbm.new_character"
@@ -484,6 +494,7 @@ class RBM_OT_new_character(bpy.types.Operator):
                       "ouvert dans une seconde instance de Blender")
 
     name: bpy.props.StringProperty(name="Nom", default="robot_01")
+    family: bpy.props.EnumProperty(name="Famille", items=FAMILIES, default='ROBOT')
     open_blender: bpy.props.BoolProperty(
         name="Ouvrir le fichier", default=True,
         description="Ouvre le nouveau .blend dans une seconde instance, "
@@ -516,6 +527,13 @@ class RBM_OT_new_character(bpy.types.Operator):
         except Exception as e:
             self.report({'ERROR'}, "Creation impossible : {}".format(e))
             return {'CANCELLED'}
+        
+        # Fiche du personnage : relue par Robot Maker a l'ouverture du .blend
+        try:
+            with open(os.path.join(folder, CHARACTER_FILE), "w", encoding="utf-8") as f:
+                json.dump({"name": name, "family": self.family}, f, indent=1)
+        except Exception as e:
+            self.report({'WARNING'}, "Fiche non ecrite : {}".format(e))
 
         # La seconde instance part d'un fichier vide, l'enregistre au bon
         # endroit et reste ouverte dessus : la session courante n'est pas touchee
@@ -545,6 +563,7 @@ class RBM_OT_new_character(bpy.types.Operator):
             "try:",
             "    import addon_utils",
             "    addon_utils.enable('robot_maker', default_set=True)",
+            "    bpy.context.scene.rm_family = {}".format(repr(self.family)),
             "except Exception:",
             "    pass",
             SIDEBAR_CODE,
@@ -1140,6 +1159,10 @@ class RBM_PT_panel(bpy.types.Panel):
                 if scene.rbm_edit:
                     line.operator("rbm.delete_character", text="",
                                   icon='TRASH').name = name
+                if _families.get(name) == 'HUMAN':
+                    tag = cell.row()
+                    tag.scale_y = 0.6
+                    tag.label(text="humanoide")
 
             r = box.row(align=True)
             r.prop(scene, "rbm_columns", text="Colonnes")
