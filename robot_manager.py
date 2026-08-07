@@ -486,9 +486,6 @@ FAMILIES = [
     ('HUMAN', "Humanoide", "Corps habille, pas de tubes de liaison"),
 ]
 CHARACTER_FILE = "character.json"
-FACE_FILE = "face.json"
-FACE_BONE = "mixamorig:Head"
-K_FACE_PROJ = "face_projector"
 
 class RBM_OT_new_character(bpy.types.Operator):
     bl_idname = "rbm.new_character"
@@ -1115,268 +1112,6 @@ class RBM_OT_preview_gif(bpy.types.Operator):
         bpy.ops.wm.path_open(filepath=gif)
         return {'FINISHED'}
 
-FACE_STEPS = [
-    ("1. Selectionner la zone du visage", [
-        "Selectionner le maillage du robot, passer en Edit Mode (Tab),",
-        "mode Face (3), et selectionner les faces qui porteront le visage.",
-    ]),
-    ("2. Preparer le visage", [
-        "Revenir en Object Mode et cliquer Preparer le visage.",
-        "Un empty projecteur apparait devant la tete : son cube local",
-        "delimite la zone couverte par le sprite sheet.",
-        "Un materiau FACE_<perso> est assigne aux faces selectionnees.",
-    ]),
-    ("3. Calibrer", [
-        "Deplacer, tourner et redimensionner l'empty pour caler le visage.",
-        "Le cube de l'empty delimite la zone couverte : le cadrer",
-        "sur le visage en vue de face (numpad 1). La profondeur",
-        "n'a aucun effet, seuls la largeur et la hauteur comptent.",
-        "Puis Enregistrer le calibrage : la position est memorisee",
-        "par rapport a l'os de la tete, valable pour toutes les instances.",
-    ]),
-    ("4. Animer les expressions", [
-        "Onglet Expressions : selectionner le maillage, mettre le slot",
-        "materiau FACE_<perso> en actif, charger le JSON du sprite sheet,",
-        "puis poser les keyframes d'expression.",
-    ]),
-]
-
-class RBM_OT_face_info(bpy.types.Operator):
-    bl_idname = "rbm.face_info"
-    bl_label = "Mise en place du visage"
-    bl_description = "Rappelle les etapes de mise en place du visage"
-
-    def invoke(self, context, event):
-        return context.window_manager.invoke_popup(self, width=540)
-
-    def execute(self, context):
-        return {'FINISHED'}
-
-    def draw(self, context):
-        layout = self.layout
-        for title, lines in FACE_STEPS:
-            box = layout.box()
-            box.label(text=title, icon='DOT')
-            col = box.column(align=True)
-            col.scale_y = 0.8
-            for line in lines:
-                col.label(text=line)
-    
-def face_projector(rig_or_mesh, robot):
-    name = "FACE_PROJ_" + robot
-    return bpy.data.objects.get(name)
-
-
-def _build_face_material(name, sprite, color):
-    """Sprite projete sur la tete : opaque autour, emission sur le trait."""
-    mat = bpy.data.materials.get(name) or bpy.data.materials.new(name)
-    mat.use_nodes = True
-    tree = mat.node_tree
-    tree.nodes.clear()
-
-    out = tree.nodes.new('ShaderNodeOutputMaterial')
-    out.location = (400, 0)
-
-    base = tree.nodes.new('ShaderNodeBsdfPrincipled')
-    base.location = (100, -180)
-    base.inputs["Base Color"].default_value = color
-
-    emit = tree.nodes.new('ShaderNodeEmission')
-    emit.location = (100, 160)
-
-    mix = tree.nodes.new('ShaderNodeMixShader')
-    mix.location = (260, 0)
-
-    tex = tree.nodes.new('ShaderNodeTexImage')
-    tex.location = (-160, 120)
-    tex.extension = 'CLIP'
-    if sprite is not None:
-        tex.image = sprite
-
-    # Mapping des cellules : pilote par l'addon Expressions. Cree en premier
-    # pour etre celui que son detecteur trouve.
-    cell = tree.nodes.new('ShaderNodeMapping')
-    cell.label = "Cellule"
-    cell.location = (-160, -60)
-
-    proj = tree.nodes.new('ShaderNodeMapping')
-    proj.label = "Projection"
-    proj.location = (-360, 120)
-    # Le cube visible de l'empty couvre exactement l'image, et la hauteur
-    # se lit sur Z au lieu de Y
-    proj.inputs['Rotation'].default_value = (-1.5707963, 0.0, 0.0)
-    proj.inputs['Scale'].default_value = (0.5, 0.5, 0.5)
-    proj.inputs['Location'].default_value = (0.5, 0.5, 0.0)
-
-    coord = tree.nodes.new('ShaderNodeTexCoord')
-    coord.location = (-560, 120)
-
-    tree.links.new(coord.outputs['Object'], proj.inputs['Vector'])
-    tree.links.new(proj.outputs['Vector'], cell.inputs['Vector'])
-    tree.links.new(cell.outputs['Vector'], tex.inputs['Vector'])
-    tree.links.new(tex.outputs['Color'], emit.inputs['Color'])
-    tree.links.new(tex.outputs['Alpha'], mix.inputs['Fac'])
-    tree.links.new(base.outputs['BSDF'], mix.inputs[1])
-    tree.links.new(emit.outputs['Emission'], mix.inputs[2])
-    tree.links.new(mix.outputs['Shader'], out.inputs['Surface'])
-
-    return mat, coord
-
-
-class RBM_OT_prepare_face(bpy.types.Operator):
-    bl_idname = "rbm.prepare_face"
-    bl_label = "Preparer le visage"
-    bl_description = ("Cree le projecteur et le materiau du visage, et l'assigne aux "
-                      "faces selectionnees. Selectionner les faces en Edit Mode avant")
-    bl_options = {'REGISTER', 'UNDO'}
-
-    def execute(self, context):
-        scene = context.scene
-        robot = scene.rbm_robot
-        obj = context.active_object
-
-        if not robot:
-            self.report({'ERROR'}, "Aucun robot selectionne")
-            return {'CANCELLED'}
-        if obj is None or obj.type != 'MESH':
-            self.report({'ERROR'}, "Selectionner le maillage du robot")
-            return {'CANCELLED'}
-
-        rig = obj.find_armature()
-        if rig is None or FACE_BONE not in rig.pose.bones:
-            self.report({'ERROR'}, "Os {} introuvable : le maillage doit etre "
-                                   "rigge par Mixamo".format(FACE_BONE))
-            return {'CANCELLED'}
-
-        # Sprite sheet du personnage, s'il y en a un
-        sprite = None
-        folder = sub_dir(robot, "expressions")
-        if folder and os.path.isdir(folder):
-            pngs = sorted(f for f in os.listdir(folder) if f.lower().endswith(".png"))
-            if pngs:
-                try:
-                    sprite = bpy.data.images.load(os.path.join(folder, pngs[0]),
-                                                  check_existing=True)
-                except Exception:
-                    sprite = None
-
-        mat_name = "FACE_" + robot
-        mat, coord = _build_face_material(mat_name, sprite, scene.rbm_face_color)
-
-        # Projecteur : son cube local delimite la zone couverte
-        name = "FACE_PROJ_" + robot
-        proj = bpy.data.objects.get(name)
-        if proj is None:
-            proj = bpy.data.objects.new(name, None)
-            proj.empty_display_type = 'CUBE'
-            proj.empty_display_size = 1.0
-            proj[K_FACE_PROJ] = robot
-            for c in obj.users_collection:
-                c.objects.link(proj)
-                break
-
-            bone = rig.pose.bones[FACE_BONE]
-            head_world = rig.matrix_world @ bone.head
-            size = scene.rbm_face_size
-            proj.matrix_world = Matrix.Translation(head_world)
-            proj.scale = (size / 2.0, size / 2.0, size / 2.0)
-
-        proj.parent = rig
-        proj.parent_type = 'BONE'
-        proj.parent_bone = FACE_BONE
-        coord.object = proj
-
-        _restore_projector(context, robot, proj, rig)
-
-        # Assignation du materiau aux faces selectionnees
-        slot = obj.data.materials.find(mat_name)
-        if slot < 0:
-            obj.data.materials.append(mat)
-            slot = len(obj.data.materials) - 1
-        obj.active_material_index = slot
-
-        mode = obj.mode
-        try:
-            bpy.ops.object.mode_set(mode='EDIT')
-            bpy.ops.object.material_slot_assign()
-        except Exception as e:
-            self.report({'WARNING'}, "Materiau cree, assignation manuelle requise "
-                                     "({})".format(e))
-        finally:
-            try:
-                bpy.ops.object.mode_set(mode=mode)
-            except Exception:
-                pass
-
-        msg = "Visage pret"
-        if sprite is None:
-            msg += " - aucun sprite sheet dans expressions/"
-        self.report({'INFO'}, msg)
-        return {'FINISHED'}
-
-
-def _restore_projector(context, robot, proj, rig):
-    """Replace le projecteur d'apres le calibrage enregistre."""
-    folder = robot_dir(robot)
-    path = os.path.join(folder, FACE_FILE) if folder else ""
-    if not path or not os.path.isfile(path):
-        return False
-
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            rows = json.load(f).get("matrix")
-    except Exception:
-        return False
-
-    if not rows:
-        return False
-
-    context.view_layer.update()
-    bone = rig.pose.bones.get(FACE_BONE)
-    if bone is None:
-        return False
-
-    local = Matrix([tuple(r) for r in rows])
-    proj.matrix_world = (rig.matrix_world @ bone.matrix) @ local
-    context.view_layer.update()
-    return True
-
-
-class RBM_OT_save_face(bpy.types.Operator):
-    bl_idname = "rbm.save_face"
-    bl_label = "Enregistrer le calibrage"
-    bl_description = ("Memorise la position du projecteur par rapport a l'os de la tete : "
-                      "les prochaines instances le retrouveront a l'identique")
-
-    def execute(self, context):
-        scene = context.scene
-        robot = scene.rbm_robot
-        proj = face_projector(None, robot)
-
-        if proj is None:
-            self.report({'ERROR'}, "Aucun projecteur : preparer le visage d'abord")
-            return {'CANCELLED'}
-
-        rig = proj.parent
-        if rig is None or FACE_BONE not in rig.pose.bones:
-            self.report({'ERROR'}, "Projecteur non parente a l'os de la tete")
-            return {'CANCELLED'}
-
-        context.view_layer.update()
-        bone = rig.pose.bones[FACE_BONE]
-        local = ((rig.matrix_world @ bone.matrix).inverted()) @ proj.matrix_world
-
-        folder = robot_dir(robot)
-        try:
-            with open(os.path.join(folder, FACE_FILE), "w", encoding="utf-8") as f:
-                json.dump({"matrix": [list(row) for row in local]}, f, indent=1)
-        except Exception as e:
-            self.report({'ERROR'}, "Ecriture impossible : {}".format(e))
-            return {'CANCELLED'}
-
-        self.report({'INFO'}, "Calibrage enregistre")
-        return {'FINISHED'}
-
 class RBM_OT_clear_source(bpy.types.Operator):
     bl_idname = "rbm.clear_source"
     bl_label = "Retirer l'armature source"
@@ -1511,24 +1246,6 @@ class RBM_PT_panel(bpy.types.Panel):
         col.prop(scene, "rbm_clear_anim")
         col.prop(scene, "rbm_thumb_size")
         col.operator("rbm.save_posture", icon='ADD').clear_anim = scene.rbm_clear_anim
-        
-        # --- Visage ---
-        box = layout.box()
-        row = box.row(align=True)
-        row.label(text="Visage", icon='USER')
-        row.operator("rbm.face_info", text="", icon='INFO')
-
-        proj = face_projector(None, robot)
-        col = box.column(align=True)
-        col.prop(scene, "rbm_face_color", text="")
-        col.prop(scene, "rbm_face_size")
-        col.operator("rbm.prepare_face", icon='MATERIAL')
-
-        if proj is not None:
-            sub = box.row()
-            sub.scale_y = 0.7
-            sub.label(text="Projecteur : " + proj.name, icon='CHECKMARK')
-            box.operator("rbm.save_face", icon='FILE_TICK')
 
         # --- Animations ---
         box = layout.box()
@@ -1575,9 +1292,6 @@ classes = (
     RBM_OT_delete_character,
     RBM_OT_open_shared_anims,
     RBM_OT_preview_gif,
-    RBM_OT_face_info,
-    RBM_OT_prepare_face,
-    RBM_OT_save_face,
 )
 
 
@@ -1629,12 +1343,6 @@ def register():
     S.rbm_scale = bpy.props.FloatProperty(name="Taille", default=4.0, min=1.0, max=10.0)
     S.rbm_thumb_size = bpy.props.IntProperty(name="Resolution vignette", default=256,
                                              min=64, max=512)
-    S.rbm_face_size = bpy.props.FloatProperty(
-        name="Taille du projecteur", default=0.25, min=0.01, max=5.0)
-    S.rbm_face_color = bpy.props.FloatVectorProperty(
-        name="Couleur de la tete", subtype='COLOR', size=4,
-        default=(0.6, 0.6, 0.62, 1.0), min=0.0, max=1.0,
-        description="Couleur visible autour du trait, la ou le sprite est transparent")
 
     if _on_load not in bpy.app.handlers.load_post:
         bpy.app.handlers.load_post.append(_on_load)
@@ -1662,8 +1370,7 @@ def unregister():
 
     S = bpy.types.Scene
     for prop in ("rbm_thumb_size", "rbm_scale", "rbm_columns", "rbm_edit", "rbm_follow",
-                 "rbm_overwrite", "rbm_auto_rig", "rbm_auto_rest", "rbm_posture_name", "rbm_anim", "rbm_robot",
-                 "rbm_face_size", "rbm_face_color",):
+                 "rbm_overwrite", "rbm_auto_rig", "rbm_auto_rest", "rbm_posture_name", "rbm_anim", "rbm_robot"):
         if hasattr(S, prop):
             delattr(S, prop)
 

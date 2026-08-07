@@ -361,7 +361,9 @@ def _find_nodes(obj):
         return None, None, None
 
     tree = mat.node_tree
-    mapping = next((n for n in tree.nodes if n.type == 'MAPPING'), None)
+    mapping = tree.nodes.get("EXPR_Mapping")
+    if mapping is None or mapping.type != 'MAPPING':
+        mapping = next((n for n in tree.nodes if n.type == 'MAPPING'), None)
     tex = next((n for n in tree.nodes if n.type == 'TEX_IMAGE'), None)
     return tree, mapping, tex
 
