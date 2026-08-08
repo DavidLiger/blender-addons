@@ -278,6 +278,11 @@
           attribut fill prend la couleur d'encre.
         </p>
 
+        <label style="display:flex;align-items:center;gap:6px;color:var(--text);
+                      font-size:.78rem;margin-bottom:8px">
+          <input type="checkbox" id="assetShared" checked style="width:auto">
+          Commun a toute la serie</label>
+
         <div class="field"><label>Pupille</label>
           <select id="assetPupil" onchange="renderAll()"><option value="">(procedurale)</option></select></div>
         <div class="row2">
@@ -631,25 +636,27 @@ async function loadAssets() {
 
   Object.keys(ASSETS).forEach(k => delete ASSETS[k]);
 
-  let names = [];
-  try {
-    const res = await fetch('/list/' + CTX.robot + '/expressions/assets?t=' + Date.now());
-    if (res.ok) names = (await res.json()).files.filter(f => /\.(svg|png)$/i.test(f));
-  } catch (err) { /* dossier absent */ }
+  // Communs d'abord, personnage ensuite : un asset local masque son homonyme
+  const sources = ['_assets', CTX.robot + '/expressions/assets'];
 
-  for (const name of names) {
+  for (const base of sources) {
+    let names = [];
     try {
-      const res = await fetch('/files/' + CTX.robot + '/expressions/assets/' + name);
-      if (!res.ok) continue;
+      const res = await fetch('/list/' + base + '?t=' + Date.now());
+      if (res.ok) names = (await res.json()).files.filter(f => /\.(svg|png)$/i.test(f));
+    } catch (err) { continue; }
 
-      if (/\.png$/i.test(name)) {
-        const parsed = await parseRaster(await res.blob());
+    for (const name of names) {
+      try {
+        const res = await fetch('/files/' + base + '/' + name);
+        if (!res.ok) continue;
+
+        const parsed = /\.png$/i.test(name)
+          ? await parseRaster(await res.blob())
+          : parseAsset(await res.text());
         if (parsed) ASSETS[name] = parsed;
-      } else {
-        const parsed = parseAsset(await res.text());
-        if (parsed) ASSETS[name] = parsed;
-      }
-    } catch (err) { /* fichier illisible */ }
+      } catch (err) { /* fichier illisible */ }
+    }
   }
 
   fillAssetSelects();
@@ -696,11 +703,15 @@ async function importAsset(ev, slot) {
     return;
   }
 
+  const dest = $('assetShared').checked
+    ? '_assets/' + name
+    : charPath('assets/' + name);
+
   try {
     if (isPng) {
-      await serverSave('assets/' + name, await blobToB64(file), true);
+      await serverSaveRaw(dest, await blobToB64(file), true);
     } else {
-      await serverSave('assets/' + name, await file.text(), false);
+      await serverSaveRaw(dest, await file.text(), false);
     }
     await loadAssets();
     $(slot === 'pupil' ? 'assetPupil' : 'assetBrow').value = name;
@@ -1283,7 +1294,7 @@ async function loadPreset() {
   if (!name) return;
 
   try {
-    const res = await fetch('/files/../_presets/' + name + '?t=' + Date.now());
+    const res = await fetch('/files/_presets/' + name + '?t=' + Date.now());
     if (!res.ok) throw new Error('introuvable');
     const data = await res.json();
 
@@ -1691,6 +1702,21 @@ async function serverSave(file, payload, binary) {
   return data.path;
 }
 
+// Chemin libre sous creations/, pour ce qui n'appartient pas a un personnage
+async function serverSaveRaw(path, payload, binary) {
+  const body = binary ? { path, b64: payload } : { path, text: payload };
+
+  const res = await fetch('/save', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+
+  const data = await res.json();
+  if (!data.ok) throw new Error(data.error || 'echec');
+  return data.path;
+}
+
 function blobToB64(blob) {
   return new Promise((res, rej) => {
     const r = new FileReader();
@@ -1719,7 +1745,7 @@ async function loadCharacterStyle() {
 
     // Personnage neuf : on part de la reference par defaut si elle existe
     if (!res.ok) {
-      const def = await fetch('/files/../_presets/_default.json?t=' + Date.now());
+      const def = await fetch('/files/_presets/_default.json?t=' + Date.now());
       if (!def.ok) return false;
       applyPresetData(await def.json());
       return true;
@@ -1761,6 +1787,7 @@ async function applyContext(c) {
   if (cut > 0) $('prefix').value = base.slice(0, cut);
 
   // Relu a chaque fois : le fichier a pu changer depuis une autre session
+  await loadAssets();
   await loadCharacterStyle();
   await loadOverrides();
 
@@ -1799,9 +1826,10 @@ async function initLinked() {
   const cut = base.lastIndexOf('_');
   if (cut > 0) $('prefix').value = base.slice(0, cut);
 
+  // Les assets d'abord : le style y fait reference par leur nom de fichier
+  await loadAssets();
   const found = await loadCharacterStyle();
   await loadOverrides();
-  await loadAssets();
   await listPresets();
   CTX.head = PARAMS.get('head') || '';
   if (CTX.head) $('lidColor').value = CTX.head;

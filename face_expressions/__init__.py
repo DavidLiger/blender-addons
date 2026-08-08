@@ -697,8 +697,13 @@ def _auto_load_zone(scene, obj):
     # Le personnage se deduit de l'objet, pas du JSON encore charge
     path = find_sheet(robot_of(obj), current_zone(scene))
 
+    # Plus de planche sur disque : on repart d'un panneau vierge
+    if not path and robot_of(obj):
+        clear_sheet(scene)
+        return False
+
     key = data_key(scene)
-    if key in obj and (not path or bpy.path.abspath(scene.expr_json) == path):
+    if key in obj and bpy.path.abspath(scene.expr_json) == path:
         _fit_read(scene, obj)
         if _stored_sheet_name(obj) == scene.expr_name:
             _sync_current_from_material(scene, force=True)

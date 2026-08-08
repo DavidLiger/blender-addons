@@ -143,7 +143,8 @@ def scan_all(context=None):
 
     for name in sorted(os.listdir(creations)):
         folder = os.path.join(creations, name)
-        if not os.path.isdir(folder):
+        # Les dossiers techniques commencent par _ : ce ne sont pas des persos
+        if not os.path.isdir(folder) or name.startswith("_"):
             continue
 
         _robots.append((name, folder))
