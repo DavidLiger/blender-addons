@@ -380,6 +380,11 @@ def _slice_sheet(scene, report=None):
     if cw < 1 or ch < 1:
         return 0, "Grille incompatible avec la taille de l'image"
 
+    try:
+        img.reload()
+    except Exception:
+        pass
+
     buf = np.empty(w * h * 4, dtype=np.float32)
     img.pixels.foreach_get(buf)
     buf = buf.reshape(h, w, 4)
@@ -875,7 +880,9 @@ class EXPR_OT_load_json(bpy.types.Operator):
             if os.path.isfile(img_path):
                 try:
                     scene.expr_image = bpy.data.images.load(img_path, check_existing=True)
-                    img_msg = " - image chargee"
+                    # Le datablock peut dater d'un export precedent
+                    scene.expr_image.reload()
+                    img_msg = " - image rechargee"
                 except Exception as e:
                     img_msg = " - image illisible ({})".format(e)
             else:

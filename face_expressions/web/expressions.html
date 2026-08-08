@@ -793,7 +793,8 @@ function openEditor(id) {
   editing = EXPR.find(x => x.id === id);
   if (!editing) return;
 
-  $('edit-title').textContent = editing.n;
+  $('edit-title').textContent = editing.n
+    + (overrides[editing.id] ? '  (retouchee)' : '');
   $('edit-msg').textContent = '';
   buildFields();
   refreshEditor();
@@ -1098,7 +1099,6 @@ async function loadCharacterStyle() {
 let ctxSerial = null;
 
 async function applyContext(c) {
-  const robotChanged = c.robot && c.robot !== CTX.robot;
   CTX.robot = c.robot || CTX.robot;
   CTX.zone = c.zone || CTX.zone;
   CTX.sheet = c.sheet || CTX.sheet;
@@ -1112,10 +1112,9 @@ async function applyContext(c) {
   const cut = base.lastIndexOf('_');
   if (cut > 0) $('prefix').value = base.slice(0, cut);
 
-  if (robotChanged) {
-    await loadCharacterStyle();
-    await loadOverrides();
-  }
+  // Relu a chaque fois : le fichier a pu changer depuis une autre session
+  await loadCharacterStyle();
+  await loadOverrides();
 
   onSrcChange();
 
@@ -1245,6 +1244,7 @@ async function exportSheet() {
     // Le style du personnage suit l'export
     if (LINKED && srcMode() !== 'draw') {
       await serverSave('style.json', JSON.stringify(styleJSON(), null, 2), false);
+      await serverSave('overrides.json', JSON.stringify(overrides, null, 1), false);
     }
   } catch (err) {
     console.error('[expr] save', err);
