@@ -90,13 +90,13 @@
     align-items:center;justify-content:center;padding:20px;z-index:100}
   .ov.open{display:flex}
   .box{background:var(--panel);border:1px solid var(--border);border-radius:10px;
-    padding:16px;width:100%;max-width:820px;max-height:88vh;overflow:hidden;
-    display:grid;grid-template-columns:1fr 320px;gap:16px}
+    padding:16px;width:100%;max-width:820px;max-height:88vh;
+    display:grid;grid-template-columns:1fr 320px;gap:16px;align-items:start}
   @media(max-width:760px){.box{grid-template-columns:1fr}}
   .box .preview{background:#fff;border-radius:8px;display:flex;
-    align-items:center;justify-content:center;padding:12px}
-  .box .preview svg{width:100%;height:auto}
-  .box .tools{overflow-y:auto;padding-right:4px}
+    align-items:center;justify-content:center;padding:12px;align-self:center}
+  .box .preview svg{width:100%;height:auto;max-height:56vh}
+  .box .tools{overflow-y:auto;max-height:82vh;padding-right:6px}
   .box h2{margin:0 0 10px;font-size:.9rem}
   .grp{border:1px solid var(--border);border-radius:6px;padding:8px;margin-bottom:10px}
   .grp .t{font-size:.7rem;text-transform:uppercase;letter-spacing:.08em;
@@ -879,9 +879,15 @@ function choice(group, key, label, values) {
   return wrap;
 }
 
+function editZone() {
+  const m = $('partMode').value;
+  return (m === 'eyes' || m === 'mouth') ? m : 'both';
+}
+
 function buildFields() {
   const host = $('edit-fields');
   host.innerHTML = '';
+  const zone = editZone();
 
   const mk = (title) => {
     const g = document.createElement('div');
@@ -891,22 +897,26 @@ function buildFields() {
     return g;
   };
 
-  const eyes = mk("Yeux");
-  eyes.appendChild(choice('e', 'glyph', "Forme speciale", GLYPHS));
-  if (!editing.e.glyph) {
-    F_EYES.forEach(f => eyes.appendChild(field('e', ...f)));
+  if (zone !== 'mouth') {
+    const eyes = mk("Yeux");
+    eyes.appendChild(choice('e', 'glyph', "Forme speciale", GLYPHS));
+    if (!editing.e.glyph) {
+      F_EYES.forEach(f => eyes.appendChild(field('e', ...f)));
+    }
+    ['wink', 'tears', 'shake', 'asym'].forEach(k =>
+      eyes.appendChild(toggle('e', k, k)));
+
+    const brow = mk("Sourcils");
+    F_BROW.forEach(f => brow.appendChild(field('b', ...f)));
+    brow.appendChild(toggle('b', 'asym', "asymetrique"));
   }
-  ['wink', 'tears', 'shake', 'asym'].forEach(k =>
-    eyes.appendChild(toggle('e', k, k)));
 
-  const brow = mk("Sourcils");
-  F_BROW.forEach(f => brow.appendChild(field('b', ...f)));
-  brow.appendChild(toggle('b', 'asym', "asymetrique"));
-
-  const mouth = mk("Bouche");
-  mouth.appendChild(choice('m', 't', "Type", MOUTHS));
-  F_MOUTH.forEach(f => mouth.appendChild(field('m', ...f)));
-  ['teeth', 'tongue'].forEach(k => mouth.appendChild(toggle('m', k, k)));
+  if (zone !== 'eyes') {
+    const mouth = mk("Bouche");
+    mouth.appendChild(choice('m', 't', "Type", MOUTHS));
+    F_MOUTH.forEach(f => mouth.appendChild(field('m', ...f)));
+    ['teeth', 'tongue'].forEach(k => mouth.appendChild(toggle('m', k, k)));
+  }
 }
 
 function refreshEditor() {
@@ -1085,6 +1095,46 @@ async function loadCharacterStyle() {
   }
 }
 
+let ctxSerial = null;
+
+async function applyContext(c) {
+  const robotChanged = c.robot && c.robot !== CTX.robot;
+  CTX.robot = c.robot || CTX.robot;
+  CTX.zone = c.zone || CTX.zone;
+  CTX.sheet = c.sheet || CTX.sheet;
+  CTX.expr = c.expr || '';
+
+  if (CTX.zone === 'eyes' || CTX.zone === 'mouth') {
+    $('partMode').value = CTX.zone;
+  }
+
+  const base = (CTX.sheet || '').replace(/\.json$/i, '');
+  const cut = base.lastIndexOf('_');
+  if (cut > 0) $('prefix').value = base.slice(0, cut);
+
+  if (robotChanged) {
+    await loadCharacterStyle();
+    await loadOverrides();
+  }
+
+  onSrcChange();
+
+  if (CTX.expr && EXPR.some(x => x.id === CTX.expr)) openEditor(CTX.expr);
+  else closeEditor();
+}
+
+async function pollContext() {
+  if (!LINKED) return;
+  try {
+    const res = await fetch('/context?t=' + Date.now());
+    if (!res.ok) return;
+    const c = await res.json();
+    if (c.serial === ctxSerial) return;
+    ctxSerial = c.serial;
+    await applyContext(c);
+  } catch (err) { /* serveur arrete */ }
+}
+
 async function initLinked() {
   if (!LINKED) return;
 
@@ -1111,9 +1161,10 @@ async function initLinked() {
 
   renderAll();
 
-  // Met en evidence l'expression demandee
-  // L'expression demandee s'ouvre directement dans l'editeur
   if (CTX.expr && EXPR.some(x => x.id === CTX.expr)) openEditor(CTX.expr);
+
+  // Les clics suivants sur le crayon mettent cet onglet a jour
+  setInterval(pollContext, 1200);
 }
 
 // ---------------------------------------------------------------------------

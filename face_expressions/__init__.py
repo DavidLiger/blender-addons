@@ -20,6 +20,7 @@ import threading
 import urllib.parse
 import webbrowser
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
+import time
 
 # ===========================================================================
 # Serveur local
@@ -28,6 +29,8 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 # ===========================================================================
 _server = None
 _server_thread = None
+_ctx = {"serial": 0}        # contexte demande par le crayon
+_last_poll = 0.0            # derniere interrogation de la page
 
 CREATIONS = "creations"
 # La page vit dans l'addon : une seule copie, versionnee avec le code
@@ -77,7 +80,15 @@ class _ExprHandler(SimpleHTTPRequestHandler):
         return os.path.join(WEB_DIR, clean.replace("/", os.sep))
 
     def do_GET(self):
+        global _last_poll
         parsed = urllib.parse.urlparse(self.path)
+
+        # La page ouverte interroge cette route : elle se met a jour sans
+        # qu'un nouvel onglet soit necessaire
+        if parsed.path == "/context":
+            _last_poll = time.time()
+            self._json(_ctx)
+            return
 
         # /files/<chemin sous creations/> : assets et sprite sheets
         if parsed.path.startswith("/files/"):
@@ -244,16 +255,24 @@ class EXPR_OT_open_editor(bpy.types.Operator):
             self.report({'ERROR'}, "expressions.html absent de {}".format(WEB_DIR))
             return {'CANCELLED'}
 
+        global _ctx
+
+        current = self.expression or scene.expr_current
         params = {
             "robot": robot_from_path(scene.expr_json),
             "zone": current_zone(scene),
             "sheet": os.path.basename(bpy.path.abspath(scene.expr_json or "")),
+            "expr": current if current and current != 'NONE' else "",
         }
-        # Lu au moment du clic : la propriete de l'operateur est memorisee
-        # d'un appel a l'autre et resterait sur l'expression precedente
-        current = self.expression or scene.expr_current
-        if current and current != 'NONE':
-            params["expr"] = current
+
+        _ctx = dict(params, serial=_ctx.get("serial", 0) + 1)
+
+        # Une page qui interroge encore le serveur est consideree ouverte :
+        # elle se mettra a jour d'elle-meme, pas besoin d'un nouvel onglet
+        if time.time() - _last_poll < 4.0:
+            self.report({'INFO'}, "Onglet mis a jour : {} / {}".format(
+                params["zone"], params["expr"] or "-"))
+            return {'FINISHED'}
 
         url = "http://127.0.0.1:{}/expressions.html?{}".format(
             _server_port(), urllib.parse.urlencode(
