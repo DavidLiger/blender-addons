@@ -187,6 +187,8 @@
           <input type="range" id="scleraShade" min="0" max="1" step="0.05" value="0" oninput="renderAll()"></div>
         <div class="field"><label>Cils <span class="val" id="v-lashes"></span></label>
           <input type="range" id="lashes" min="0" max="1" step="0.05" value="0" oninput="renderAll()"></div>
+        <div class="field"><label>Couleur des paupieres</label>
+          <input type="color" id="lidColor" value="#c9c9cc" oninput="renderAll()"></div>
         <div class="field"><label><input type="checkbox" id="brows" checked onchange="renderAll()" style="width:auto"> Sourcils</label></div>
         <div class="row2">
           <div class="field"><label>Taille sourcils <span class="val" id="v-browScale"></span></label>
@@ -654,6 +656,7 @@ function style() {
     pupil: num('pupil'), shine: num('shine'), brows: $('brows').checked,
     iris: num('iris'), irisCol: $('irisColor').value,
     browScale: num('browScale'), browGap: num('browGap'), browRise: num('browRise'),
+    lidCol: $('lidColor').value,
     scleraShade: num('scleraShade'), lashes: num('lashes'),
     wobble: num('wobble'), wobbleScale: num('wobbleScale'), inkVar: num('inkVar'),
     aPupil: $('assetPupil').value, aPupilK: num('assetPupilScale'),
@@ -768,7 +771,8 @@ function drawEyes(s, e, b, uid) {
       return;
     }
 
-    const oy = ry * open * asym;
+    const oy = ry;                       // forme constante
+    const op = open * asym;              // ce qui bouge, c'est la paupiere
     const clip = `clip-${uid}-${idx}`;
 
     const grad = `sc-${uid}-${idx}`;
@@ -804,19 +808,28 @@ function drawEyes(s, e, b, uid) {
     if (s.shine > 0)
       out += `<circle cx="${cx+pxo-pr*.35}" cy="${cy+pyo-pr*.4}" r="${pr*s.shine*.55}" fill="#fff" opacity=".9"/>`;
 
-    // paupieres
+    // Paupieres : elles recouvrent l'oeil sans le deformer. Bord courbe,
+    // remplissage a la couleur de la tete, trait d'encre sur l'arete.
     const tilt = (e.tilt || 0) * side * (e.asym && side > 0 ? -1 : 1);
-    const lidY = cy - oy - 1;
-    out += `<g transform="rotate(${tilt} ${cx} ${cy})">
-              <rect x="${cx-rx*1.6}" y="${lidY-ry*2}" width="${rx*3.2}" height="${ry*2}"
-                    fill="${s.sclera}" opacity="0"/>
-              <path d="M ${cx-rx*1.3} ${cy-oy*.55} L ${cx+rx*1.3} ${cy-oy*.55}
-                       L ${cx+rx*1.3} ${cy-ry*2.4} L ${cx-rx*1.3} ${cy-ry*2.4} Z"
-                    fill="${s.ink}" opacity="${e.tilt ? 1 : 0}"/>
-            </g>`;
+    const w = rx * 1.7;
+
+    const lid = (edgeY, up) => {
+      const bow = ry * .3 * (up ? 1 : -1);
+      const far = up ? cy - ry * 3 : cy + ry * 3;
+      return `<path d="M ${cx-w} ${edgeY} Q ${cx} ${edgeY-bow} ${cx+w} ${edgeY}
+                       L ${cx+w} ${far} L ${cx-w} ${far} Z" fill="${s.lidCol}"/>
+              <path d="M ${cx-w} ${edgeY} Q ${cx} ${edgeY-bow} ${cx+w} ${edgeY}"
+                    fill="none" stroke="${s.ink}" stroke-width="${s.stroke}"
+                    stroke-linecap="round"/>`;
+    };
+
+    const topY = cy - ry + (1 - op) * 2 * ry;
+    if (op < .995 || tilt)
+      out += `<g transform="rotate(${tilt} ${cx} ${cy})">${lid(topY, true)}</g>`;
+
     if (e.lidBot)
-      out += `<path d="M ${cx-rx*1.2} ${cy+oy*(1-e.lidBot)} L ${cx+rx*1.2} ${cy+oy*(1-e.lidBot)}
-                       L ${cx+rx*1.2} ${cy+ry*2} L ${cx-rx*1.2} ${cy+ry*2} Z" fill="${s.ink}"/>`;
+      out += lid(cy + ry - e.lidBot * 2 * ry, false);
+
     out += `</g>`;
 
     out += eyeOutline(cx, cy, rx, oy, s.shape)
@@ -1638,7 +1651,7 @@ async function exportSingles() {
 const STYLE_IDS = ['stroke','inkColor','scleraColor','pupilColor','mouthColor','eyeShape',
                    'iris','irisColor','scleraShade','lashes','wobble','wobbleScale','inkVar',
                    'assetPupil','assetPupilScale','assetBrow','assetBrowScale',
-                   'assetBrowRot','assetBrowFlip','browScale','browGap','browRise',
+                   'assetBrowRot','assetBrowFlip','browScale','browGap','browRise','lidColor',
                    'eyeW','eyeH','eyeGap','pupil','shine','mW','mH','cellW','cols','prefix'];
 
 function styleJSON() {
