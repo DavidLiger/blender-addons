@@ -142,6 +142,14 @@
         </div>
         <div class="field"><label>Bouche (interieur)</label>
           <input type="color" id="mouthColor" value="#8c2f39" oninput="renderAll()"></div>
+        <div class="row2">
+          <div class="field"><label>Trace manuel <span class="val" id="v-wobble"></span></label>
+            <input type="range" id="wobble" min="0" max="4" step="0.1" value="0" oninput="renderAll()"></div>
+          <div class="field"><label>Grain <span class="val" id="v-wobbleScale"></span></label>
+            <input type="range" id="wobbleScale" min="0.005" max="0.08" step="0.005" value="0.03" oninput="renderAll()"></div>
+        </div>
+        <div class="field"><label>Variation d'epaisseur <span class="val" id="v-inkVar"></span></label>
+          <input type="range" id="inkVar" min="0" max="1.5" step="0.05" value="0" oninput="renderAll()"></div>
       </div>
     </div>
 
@@ -169,6 +177,16 @@
         </div>
         <div class="field"><label>Reflet <span class="val" id="v-shine"></span></label>
           <input type="range" id="shine" min="0" max="1" step="0.05" value="0.35" oninput="renderAll()"></div>
+        <div class="row2">
+          <div class="field"><label>Iris <span class="val" id="v-iris"></span></label>
+            <input type="range" id="iris" min="0" max="2" step="0.05" value="0" oninput="renderAll()"></div>
+          <div class="field"><label>Couleur iris</label>
+            <input type="color" id="irisColor" value="#3a7ca5" oninput="renderAll()"></div>
+        </div>
+        <div class="field"><label>Ombre de la sclere <span class="val" id="v-scleraShade"></span></label>
+          <input type="range" id="scleraShade" min="0" max="1" step="0.05" value="0" oninput="renderAll()"></div>
+        <div class="field"><label>Cils <span class="val" id="v-lashes"></span></label>
+          <input type="range" id="lashes" min="0" max="1" step="0.05" value="0" oninput="renderAll()"></div>
         <div class="field"><label><input type="checkbox" id="brows" checked onchange="renderAll()" style="width:auto"> Sourcils</label></div>
       </div>
     </div>
@@ -432,13 +450,18 @@ function style() {
     shape: $('eyeShape').value,
     ew: num('eyeW'), eh: num('eyeH'), gap: num('eyeGap'),
     pupil: num('pupil'), shine: num('shine'), brows: $('brows').checked,
+    iris: num('iris'), irisCol: $('irisColor').value,
+    scleraShade: num('scleraShade'), lashes: num('lashes'),
+    wobble: num('wobble'), wobbleScale: num('wobbleScale'), inkVar: num('inkVar'),
     mw: num('mW'), mh: num('mH'), teeth: $('teeth').checked,
   };
 }
 
 function syncLabels() {
   [['stroke','v-stroke'],['eyeW','v-eyeW'],['eyeH','v-eyeH'],['eyeGap','v-eyeGap'],
-   ['pupil','v-pupil'],['shine','v-shine'],['mW','v-mW'],['mH','v-mH']]
+   ['pupil','v-pupil'],['shine','v-shine'],['mW','v-mW'],['mH','v-mH'],
+   ['iris','v-iris'],['scleraShade','v-scleraShade'],['lashes','v-lashes'],
+   ['wobble','v-wobble'],['wobbleScale','v-wobbleScale'],['inkVar','v-inkVar']]
    .forEach(([src,dst]) => { const el = $(dst); if (el) el.textContent = $(src).value; });
 }
 
@@ -538,14 +561,31 @@ function drawEyes(s, e, b, uid) {
     const oy = ry * open * asym;
     const clip = `clip-${uid}-${idx}`;
 
-    out += `<defs><clipPath id="${clip}">${eyeOutline(cx, cy, rx, oy, s.shape)}</clipPath></defs>`;
-    out += `<g clip-path="url(#${clip})">`;
-    out += eyeOutline(cx, cy, rx, oy, s.shape).replace('/>', ` fill="${s.sclera}"/>`);
+    const grad = `sc-${uid}-${idx}`;
+    out += `<defs><clipPath id="${clip}">${eyeOutline(cx, cy, rx, oy, s.shape)}</clipPath>`;
 
-    // pupille
+    // Sclere : ombre portee par la paupiere, du haut vers le bas
+    if (s.scleraShade > 0) {
+      out += `<radialGradient id="${grad}" cx="50%" cy="85%" r="85%">
+                <stop offset="55%" stop-color="${s.sclera}"/>
+                <stop offset="100%" stop-color="${s.ink}" stop-opacity="${s.scleraShade * .55}"/>
+              </radialGradient>`;
+    }
+    out += `</defs>`;
+
+    const scleraFill = s.scleraShade > 0 ? `url(#${grad})` : s.sclera;
+    out += `<g clip-path="url(#${clip})">`;
+    out += eyeOutline(cx, cy, rx, oy, s.shape).replace('/>', ` fill="${scleraFill}"/>`);
+
+    // iris puis pupille
     const pr = Math.min(rx, ry) * (e.pupil !== undefined ? e.pupil : s.pupil);
     const pxo = (e.px || 0) * side * rx * .5;
     const pyo = (e.py || 0) * ry * .6;
+
+    if (s.iris > 0)
+      out += `<circle cx="${cx+pxo}" cy="${cy+pyo}" r="${pr * (1 + s.iris)}"
+                fill="${s.irisCol}" stroke="${s.ink}" stroke-width="${s.stroke * .4}"/>`;
+
     out += `<circle cx="${cx+pxo}" cy="${cy+pyo}" r="${pr}" fill="${s.pupilCol}"/>`;
     if (s.shine > 0)
       out += `<circle cx="${cx+pxo-pr*.35}" cy="${cy+pyo-pr*.4}" r="${pr*s.shine*.55}" fill="#fff" opacity=".9"/>`;
@@ -567,6 +607,19 @@ function drawEyes(s, e, b, uid) {
 
     out += eyeOutline(cx, cy, rx, oy, s.shape)
              .replace('/>', ` fill="none" stroke="${s.ink}" stroke-width="${s.stroke}"/>`);
+
+    // Cils : trois traits sur le bord superieur externe
+    if (s.lashes > 0) {
+      const len = ry * .55 * s.lashes;
+      for (let k = 0; k < 3; k++) {
+        const a = -Math.PI * (0.62 + k * 0.13) * (side > 0 ? 1 : 1);
+        const bx = cx + Math.cos(a) * rx * side;
+        const by = cy + Math.sin(a) * oy;
+        out += `<line x1="${bx}" y1="${by}"
+                  x2="${bx + Math.cos(a) * len * side}" y2="${by + Math.sin(a) * len}"
+                  stroke="${s.ink}" stroke-width="${s.stroke * .8}" stroke-linecap="round"/>`;
+      }
+    }
 
     if (e.tears)
       out += `<path d="M ${cx+rx*.5} ${cy+oy*.7} q ${rx*.18} ${ry*.7} 0 ${ry*1.1}
@@ -690,10 +743,76 @@ function svgBody(x, s, uid) {
          `<g transform="translate(0,${VB_EYES.h})">${drawMouth(s, x.m)}</g>`;
 }
 
+// Epaisseur variable : le trait garde sa continuite, des passes pointillees
+// plus epaisses viennent le renfler par endroits. pathLength normalise la
+// longueur a 100, ce qui evite toute mesure geometrique.
+function seeded(seed) {
+  let t = seed >>> 0;
+  return () => {
+    t = (t + 0x6D2B79F5) >>> 0;
+    let r = Math.imul(t ^ (t >>> 15), 1 | t);
+    r = (r + Math.imul(r ^ (r >>> 7), 61 | r)) ^ r;
+    return ((r ^ (r >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+function inkVariation(markup, s, uid) {
+  if (!s.inkVar) return markup;
+
+  let seed = 0;
+  String(uid).split('').forEach(c => { seed = (seed * 31 + c.charCodeAt(0)) | 0; });
+  const rnd = seeded(seed || 1);
+
+  const doc = new DOMParser().parseFromString(markup, 'image/svg+xml');
+  const svg = doc.documentElement;
+  if (svg.querySelector('parsererror')) return markup;
+
+  svg.querySelectorAll('path,line,polyline,polygon,circle,ellipse,rect').forEach(el => {
+    const stroke = el.getAttribute('stroke');
+    const width = parseFloat(el.getAttribute('stroke-width')
+      || (el.style && el.style.strokeWidth) || 0);
+    if (!stroke || stroke === 'none' || !width) return;
+
+    el.setAttribute('pathLength', '100');
+
+    for (let i = 0; i < 2; i++) {
+      const pass = el.cloneNode(false);
+      pass.setAttribute('fill', 'none');
+      pass.setAttribute('stroke-linecap', 'round');
+      pass.setAttribute('pathLength', '100');
+      pass.setAttribute('stroke-width',
+        (width * (1 + s.inkVar * (0.2 + rnd() * 0.5))).toFixed(2));
+      pass.setAttribute('stroke-dasharray',
+        (6 + rnd() * 20).toFixed(1) + ' ' + (12 + rnd() * 26).toFixed(1));
+      pass.setAttribute('stroke-dashoffset', (rnd() * 100).toFixed(1));
+      el.parentNode.insertBefore(pass, el.nextSibling);
+    }
+  });
+
+  return new XMLSerializer().serializeToString(svg);
+}
+
 function svgFor(x, s, uid) {
   const vb = viewBox();
-  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${vb.w} ${vb.h}">`
-       + svgBody(x, s, uid) + `</svg>`;
+
+  // Le tremble est obtenu par un filtre SVG : aucune dependance externe,
+  // et le rendu reste vectoriel jusqu'a la rasterisation finale
+  let defs = '', open = '', close = '';
+  if (s.wobble > 0) {
+    const fid = 'wob-' + uid;
+    defs = `<defs><filter id="${fid}" x="-15%" y="-15%" width="130%" height="130%">
+      <feTurbulence type="fractalNoise" baseFrequency="${s.wobbleScale}"
+                    numOctaves="2" seed="${(String(uid).length * 7) % 100}" result="n"/>
+      <feDisplacementMap in="SourceGraphic" in2="n" scale="${s.wobble}"
+                         xChannelSelector="R" yChannelSelector="G"/>
+    </filter></defs>`;
+    open = `<g filter="url(#${fid})">`;
+    close = `</g>`;
+  }
+
+  return inkVariation(
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${vb.w} ${vb.h}">`
+    + defs + open + svgBody(x, s, uid) + close + `</svg>`, s, uid);
 }
 
 // Liste active selon la source choisie
@@ -1288,6 +1407,7 @@ async function exportSingles() {
 // Sauvegarde / chargement du style
 // ---------------------------------------------------------------------------
 const STYLE_IDS = ['stroke','inkColor','scleraColor','pupilColor','mouthColor','eyeShape',
+                   'iris','irisColor','scleraShade','lashes','wobble','wobbleScale','inkVar',
                    'eyeW','eyeH','eyeGap','pupil','shine','mW','mH','cellW','cols','prefix'];
 
 function styleJSON() {
