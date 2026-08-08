@@ -188,6 +188,14 @@
         <div class="field"><label>Cils <span class="val" id="v-lashes"></span></label>
           <input type="range" id="lashes" min="0" max="1" step="0.05" value="0" oninput="renderAll()"></div>
         <div class="field"><label><input type="checkbox" id="brows" checked onchange="renderAll()" style="width:auto"> Sourcils</label></div>
+        <div class="row2">
+          <div class="field"><label>Taille sourcils <span class="val" id="v-browScale"></span></label>
+            <input type="range" id="browScale" min="0.3" max="2.5" step="0.05" value="1" oninput="renderAll()"></div>
+          <div class="field"><label>Ecartement <span class="val" id="v-browGap"></span></label>
+            <input type="range" id="browGap" min="-25" max="35" step="1" value="0" oninput="renderAll()"></div>
+        </div>
+        <div class="field"><label>Hauteur sourcils <span class="val" id="v-browRise"></span></label>
+          <input type="range" id="browRise" min="-10" max="40" step="1" value="0" oninput="renderAll()"></div>
       </div>
     </div>
 
@@ -645,6 +653,7 @@ function style() {
     ew: num('eyeW'), eh: num('eyeH'), gap: num('eyeGap'),
     pupil: num('pupil'), shine: num('shine'), brows: $('brows').checked,
     iris: num('iris'), irisCol: $('irisColor').value,
+    browScale: num('browScale'), browGap: num('browGap'), browRise: num('browRise'),
     scleraShade: num('scleraShade'), lashes: num('lashes'),
     wobble: num('wobble'), wobbleScale: num('wobbleScale'), inkVar: num('inkVar'),
     aPupil: $('assetPupil').value, aPupilK: num('assetPupilScale'),
@@ -660,14 +669,15 @@ function syncLabels() {
    ['iris','v-iris'],['scleraShade','v-scleraShade'],['lashes','v-lashes'],
    ['wobble','v-wobble'],['wobbleScale','v-wobbleScale'],['inkVar','v-inkVar'],
    ['assetPupilScale','v-assetPupilScale'],['assetBrowScale','v-assetBrowScale'],
-   ['assetBrowRot','v-assetBrowRot']]
+   ['assetBrowRot','v-assetBrowRot'],['browScale','v-browScale'],
+   ['browGap','v-browGap'],['browRise','v-browRise']]
    .forEach(([src,dst]) => { const el = $(dst); if (el) el.textContent = $(src).value; });
 }
 
 // ---------------------------------------------------------------------------
 // Dessin des yeux
 // ---------------------------------------------------------------------------
-const VB_EYES  = { w: 200, h: 110 };
+const VB_EYES  = { w: 200, h: 150 };
 const VB_MOUTH = { w: 200, h: 90  };
 
 function eyeOutline(cx, cy, rx, ry, shape) {
@@ -737,9 +747,10 @@ function glyphEye(cx, cy, r, s, kind) {
 
 function drawEyes(s, e, b, uid) {
   e = e || {}; b = b || {};
-  const cy = VB_EYES.h * .55;
-  const sc = e.scale || 1;
-  const rx = s.ew * sc, ry = s.eh * sc;
+  const cy = VB_EYES.h * .62;
+  // La forme de l'oeil releve du style : elle ne varie pas d'une expression
+  // a l'autre, seules l'ouverture et les paupieres bougent
+  const rx = s.ew, ry = s.eh;
   const open = e.open !== undefined ? e.open : 1;
   let out = '';
 
@@ -831,17 +842,19 @@ function drawEyes(s, e, b, uid) {
 
     if (s.brows) {
       const ba = (b.a || 0) * side;
-      const by = cy - ry - 12 + (b.y || 0);
-      const bw = rx * 1.1;
+      const k = (s.browScale || 1) * (b.k !== undefined ? b.k : 1);
+      const by = cy - ry - 12 - (s.browRise || 0) + (b.y || 0);
+      const bw = rx * 1.1 * k;
       const bAsym = b.asym && side > 0 ? -1 : 1;
+      const cxb = cx + side * ((s.browGap || 0) + (b.gap || 0));
       if (s.aBrow && ASSETS[s.aBrow]) {
         // L'asset est dessine tel quel d'un cote, en miroir de l'autre
         const mirrored = (side < 0) !== !!s.aBrowFlip;
         const angle = (ba * bAsym) + (s.aBrowRot || 0) * side;
-        out += assetAt(s.aBrow, cx, by, bw * 2 * s.aBrowK, s.ink, angle, mirrored);
+        out += assetAt(s.aBrow, cxb, by, bw * 2 * s.aBrowK, s.ink, angle, mirrored);
       } else {
-        out += `<g transform="rotate(${ba*bAsym} ${cx} ${by})">
-                  <path d="M ${cx-bw} ${by} Q ${cx} ${by-4} ${cx+bw} ${by}"
+        out += `<g transform="rotate(${ba*bAsym} ${cxb} ${by})">
+                  <path d="M ${cxb-bw} ${by} Q ${cxb} ${by-4} ${cxb+bw} ${by}"
                         fill="none" stroke="${s.ink}" stroke-width="${s.stroke*1.3}" stroke-linecap="round"/>
                 </g>`;
       }
@@ -1079,6 +1092,9 @@ function renderAll() {
 // enregistrees, par personnage, dans overrides.json.
 // ---------------------------------------------------------------------------
 const BASE = JSON.parse(JSON.stringify(EXPR));
+// Taille de l'oeil et de la pupille : reglages de style, pas d'expression.
+// Elles restent modifiables expression par expression dans l'editeur.
+BASE.forEach(x => { delete x.e.scale; delete x.e.pupil; });
 let overrides = {};
 let editing = null;
 
@@ -1099,6 +1115,8 @@ const F_EYES = [
 const F_BROW = [
   ['a', "Angle", -35, 35, 1, 0],
   ['y', "Hauteur", -10, 10, .5, 0],
+  ['k', "Taille", .4, 2.2, .05, 1],
+  ['gap', "Ecartement", -30, 30, 1, 0],
 ];
 const F_MOUTH = [
   ['curve', "Courbure", -1, 1, .05, 0],
@@ -1620,7 +1638,7 @@ async function exportSingles() {
 const STYLE_IDS = ['stroke','inkColor','scleraColor','pupilColor','mouthColor','eyeShape',
                    'iris','irisColor','scleraShade','lashes','wobble','wobbleScale','inkVar',
                    'assetPupil','assetPupilScale','assetBrow','assetBrowScale',
-                   'assetBrowRot','assetBrowFlip',
+                   'assetBrowRot','assetBrowFlip','browScale','browGap','browRise',
                    'eyeW','eyeH','eyeGap','pupil','shine','mW','mH','cellW','cols','prefix'];
 
 function styleJSON() {
@@ -1659,6 +1677,7 @@ function loadStyleFile(ev) {
   ev.target.value = '';
 }
 
+applyOverrides();
 onSrcChange();
 initLinked();
 </script>
