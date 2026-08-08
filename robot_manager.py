@@ -713,6 +713,31 @@ class RBM_OT_select_robot(bpy.types.Operator):
         return {'FINISHED'}
 
 
+def merge_duplicates():
+    """Remappe les datablocks .001 sur leur original : un append recree
+    systematiquement ceux qui existent deja dans le fichier."""
+    merged = 0
+
+    for data in (bpy.data.materials, bpy.data.images):
+        for item in list(data):
+            match = re.match(r"^(.*)\.\d{3}$", item.name)
+            if not match:
+                continue
+
+            base = data.get(match.group(1))
+            if base is None or base is item:
+                continue
+
+            try:
+                item.user_remap(base)
+                data.remove(item)
+                merged += 1
+            except Exception:
+                pass
+
+    return merged
+
+
 class RBM_OT_instantiate(bpy.types.Operator):
     bl_idname = "rbm.instantiate"
     bl_label = "Instancier dans la scene"
@@ -755,6 +780,7 @@ class RBM_OT_instantiate(bpy.types.Operator):
                     rig.select_set(True)
                     context.view_layer.objects.active = rig
 
+                merge_duplicates()
                 self.report({'INFO'}, "{} instancie depuis {}".format(robot, READY_FILE))
                 return {'FINISHED'}
 
@@ -804,6 +830,7 @@ class RBM_OT_instantiate(bpy.types.Operator):
         armature.select_set(True)
         context.view_layer.objects.active = armature
 
+        merge_duplicates()
         msg = "{} importe dans {}".format(files[0], coll.name)
 
         if scene.rbm_auto_rig:

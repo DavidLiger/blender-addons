@@ -1488,7 +1488,9 @@ class EXPR_PT_panel(bpy.types.Panel):
             if scene.expr_source == 'JSON':
                 if scene.expr_image:
                     tree2, map2, tex2 = _find_nodes(obj)
-                    same = tex2 is not None and tex2.image is scene.expr_image
+                    same = (tex2 is not None and tex2.image is not None
+                            and bpy.path.abspath(tex2.image.filepath)
+                            == bpy.path.abspath(scene.expr_image.filepath))
                     sub.label(text=scene.expr_image.name
                               + ("" if same else "  (materiau desynchronise)"),
                               icon='IMAGE_DATA' if same else 'ERROR')
