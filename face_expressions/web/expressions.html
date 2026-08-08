@@ -132,7 +132,22 @@
           <div class="field"><label>Trait <span class="val" id="v-stroke"></span></label>
             <input type="range" id="stroke" min="0" max="10" step="0.5" value="3" oninput="renderAll()"></div>
           <div class="field"><label>Couleur trait</label>
-            <input type="color" id="inkColor" value="#141414" oninput="renderAll()"></div>
+            <input type="color" id="inkColor" value="#141414" oninput="renderAll()">
+            </div>
+        </div>
+        <div class="field"><label>Trait a la couleur de la tete :</label>
+          <div class="row2">
+            <label style="display:flex;align-items:center;gap:5px;color:var(--text);font-size:.75rem">
+              <input type="checkbox" id="headEye" style="width:auto" onchange="renderAll()"> Contour des yeux</label>
+            <label style="display:flex;align-items:center;gap:5px;color:var(--text);font-size:.75rem">
+              <input type="checkbox" id="headLid" style="width:auto" onchange="renderAll()"> Paupieres</label>
+          </div>
+          <div class="row2">
+            <label style="display:flex;align-items:center;gap:5px;color:var(--text);font-size:.75rem">
+              <input type="checkbox" id="headBrow" style="width:auto" onchange="renderAll()"> Sourcils</label>
+            <label style="display:flex;align-items:center;gap:5px;color:var(--text);font-size:.75rem">
+              <input type="checkbox" id="headMouth" style="width:auto" onchange="renderAll()"> Bouche</label>
+          </div>
         </div>
         <div class="row2">
           <div class="field"><label>Sclere (blanc)</label>
@@ -648,7 +663,13 @@ async function importAsset(ev, slot) {
 
 function style() {
   return {
-    stroke: num('stroke'), ink: $('inkColor').value,
+    stroke: num('stroke'),
+    ink: $('inkColor').value,
+    // Un trait a la couleur de la tete disparait visuellement, element par element
+    inkEye: $('headEye').checked ? $('lidColor').value : $('inkColor').value,
+    inkLid: $('headLid').checked ? $('lidColor').value : $('inkColor').value,
+    inkBrow: $('headBrow').checked ? $('lidColor').value : $('inkColor').value,
+    inkMouth: $('headMouth').checked ? $('lidColor').value : $('inkColor').value,
     sclera: $('scleraColor').value, pupilCol: $('pupilColor').value,
     mouthCol: $('mouthColor').value,
     shape: $('eyeShape').value,
@@ -819,7 +840,7 @@ function drawEyes(s, e, b, uid) {
       return `<path d="M ${cx-w} ${edgeY} Q ${cx} ${edgeY-bow} ${cx+w} ${edgeY}
                        L ${cx+w} ${far} L ${cx-w} ${far} Z" fill="${s.lidCol}"/>
               <path d="M ${cx-w} ${edgeY} Q ${cx} ${edgeY-bow} ${cx+w} ${edgeY}"
-                    fill="none" stroke="${s.ink}" stroke-width="${s.stroke}"
+                    fill="none" stroke="${s.inkLid}" stroke-width="${s.stroke}"
                     stroke-linecap="round"/>`;
     };
 
@@ -864,11 +885,11 @@ function drawEyes(s, e, b, uid) {
         // L'asset est dessine tel quel d'un cote, en miroir de l'autre
         const mirrored = (side < 0) !== !!s.aBrowFlip;
         const angle = (ba * bAsym) + (s.aBrowRot || 0) * side;
-        out += assetAt(s.aBrow, cxb, by, bw * 2 * s.aBrowK, s.ink, angle, mirrored);
+        out += assetAt(s.aBrow, cxb, by, bw * 2 * s.aBrowK, s.inkBrow, angle, mirrored);
       } else {
         out += `<g transform="rotate(${ba*bAsym} ${cxb} ${by})">
                   <path d="M ${cxb-bw} ${by} Q ${cxb} ${by-4} ${cxb+bw} ${by}"
-                        fill="none" stroke="${s.ink}" stroke-width="${s.stroke*1.3}" stroke-linecap="round"/>
+                        fill="none" stroke="${s.inkBrow}" stroke-width="${s.stroke*1.3}" stroke-linecap="round"/>
                 </g>`;
       }
     }
@@ -973,10 +994,13 @@ function viewBox() {
 
 function svgBody(x, s, uid) {
   const mode = $('partMode').value;
-  if (mode === 'eyes')  return drawEyes(s, x.e, x.b, uid);
-  if (mode === 'mouth') return drawMouth(s, x.m);
-  return drawEyes(s, x.e, x.b, uid) +
-         `<g transform="translate(0,${VB_EYES.h})">${drawMouth(s, x.m)}</g>`;
+  const se = { ...s, ink: s.inkEye };
+  const sm = { ...s, ink: s.inkMouth };
+
+  if (mode === 'eyes')  return drawEyes(se, x.e, x.b, uid);
+  if (mode === 'mouth') return drawMouth(sm, x.m);
+  return drawEyes(se, x.e, x.b, uid) +
+         `<g transform="translate(0,${VB_EYES.h})">${drawMouth(sm, x.m)}</g>`;
 }
 
 // Epaisseur variable : le trait garde sa continuite, des passes pointillees
@@ -1143,9 +1167,15 @@ function applyOverrides() {
   EXPR.forEach((x, i) => {
     const src = BASE[i];
     const ov = overrides[x.id];
-    x.e = { ...src.e, ...(ov && ov.e || {}) };
-    x.b = { ...src.b, ...(ov && ov.b || {}) };
-    x.m = { ...src.m, ...(ov && ov.m || {}) };
+    const merge = (base, diff) => {
+      const out = { ...base, ...(diff || {}) };
+      Object.keys(out).forEach(k => { if (out[k] === null) delete out[k]; });
+      return out;
+    };
+
+    x.e = merge(src.e, ov && ov.e);
+    x.b = merge(src.b, ov && ov.b);
+    x.m = merge(src.m, ov && ov.m);
   });
 }
 
@@ -1298,8 +1328,9 @@ function diffFrom(base, current) {
   Object.keys(current).forEach(k => {
     if (JSON.stringify(current[k]) !== JSON.stringify(base[k])) out[k] = current[k];
   });
+  // null marque une suppression : undefined serait efface par JSON.stringify
   Object.keys(base).forEach(k => {
-    if (!(k in current)) out[k] = undefined;
+    if (!(k in current)) out[k] = null;
   });
   return Object.keys(out).length ? out : null;
 }
@@ -1454,6 +1485,10 @@ async function loadCharacterStyle() {
     STYLE_IDS.forEach(id => { if (o[id] !== undefined) $(id).value = o[id]; });
     if (o.brows !== undefined) $('brows').checked = o.brows;
     if (o.teeth !== undefined) $('teeth').checked = o.teeth;
+    if (o.assetBrowFlip !== undefined) $('assetBrowFlip').checked = o.assetBrowFlip;
+    ['headEye', 'headLid', 'headBrow', 'headMouth'].forEach(id => {
+      if (o[id] !== undefined) $(id).checked = o[id];
+    });
     if (o.enabled) EXPR.forEach(x => {
       if (o.enabled[x.id] !== undefined) enabled[x.id] = o.enabled[x.id];
     });
@@ -1660,6 +1695,7 @@ function styleJSON() {
   o.brows = $('brows').checked;
   o.teeth = $('teeth').checked;
   o.assetBrowFlip = $('assetBrowFlip').checked;
+  ['headEye', 'headLid', 'headBrow', 'headMouth'].forEach(id => { o[id] = $(id).checked; });
   o.enabled = { ...enabled };
   return o;
 }
@@ -1681,6 +1717,9 @@ function loadStyleFile(ev) {
       if (o.brows !== undefined) $('brows').checked = o.brows;
       if (o.teeth !== undefined) $('teeth').checked = o.teeth;
       if (o.assetBrowFlip !== undefined) $('assetBrowFlip').checked = o.assetBrowFlip;
+      ['headEye', 'headLid', 'headBrow', 'headMouth'].forEach(id => {
+        if (o[id] !== undefined) $(id).checked = o[id];
+      });
       if (o.enabled) EXPR.forEach(x => { if (o.enabled[x.id] !== undefined) enabled[x.id] = o.enabled[x.id]; });
       renderAll();
       flash('Style charge');

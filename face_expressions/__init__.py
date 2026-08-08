@@ -873,6 +873,12 @@ class EXPR_OT_load_json(bpy.types.Operator):
             item.col = int(fr.get("col", 0))
             item.row = int(fr.get("row", 0))
 
+        # La valeur memorisee peut pointer une expression absente du nouveau sheet
+        try:
+            scene.expr_current = scene.expr_items[0].ident
+        except Exception:
+            pass
+
         img_msg = ""
         img_name = data.get("image", "")
         if img_name:
@@ -887,6 +893,11 @@ class EXPR_OT_load_json(bpy.types.Operator):
                     img_msg = " - image illisible ({})".format(e)
             else:
                 img_msg = " - image absente du dossier ({})".format(img_name)
+
+        # Realigne le materiau sur l'image qu'on vient de recharger
+        tree, mapping, tex = _find_nodes(scene.expr_target)
+        if tex is not None and scene.expr_image is not None:
+            tex.image = scene.expr_image
 
         _load_cached_previews(scene)
         self.report({'INFO'}, "{} expression(s) - grille {}x{}{}".format(
@@ -968,8 +979,14 @@ class EXPR_OT_setup(bpy.types.Operator):
             tex.location = (-320, 300)
             created_chain = True
 
-        if scene.expr_image and tex.image is None:
-            tex.image = scene.expr_image
+        if scene.expr_image:
+            # Le noeud peut pointer un doublon du meme fichier : on le realigne
+            if tex.image is not scene.expr_image:
+                tex.image = scene.expr_image
+            try:
+                tex.image.reload()
+            except Exception:
+                pass
 
         mapping = next((n for n in tree.nodes if n.type == 'MAPPING'), None)
         if mapping is None:
@@ -1179,7 +1196,11 @@ class EXPR_PT_panel(bpy.types.Panel):
 
             if scene.expr_source == 'JSON':
                 if scene.expr_image:
-                    sub.label(text=scene.expr_image.name, icon='IMAGE_DATA')
+                    tree2, map2, tex2 = _find_nodes(obj)
+                    same = tex2 is not None and tex2.image is scene.expr_image
+                    sub.label(text=scene.expr_image.name
+                              + ("" if same else "  (materiau desynchronise)"),
+                              icon='IMAGE_DATA' if same else 'ERROR')
                 else:
                     warn = box.row()
                     warn.alert = True
