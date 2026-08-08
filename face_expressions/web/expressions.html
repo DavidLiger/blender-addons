@@ -96,7 +96,11 @@
   .box .preview{background:#fff;border-radius:8px;display:flex;
     align-items:center;justify-content:center;padding:12px;align-self:center}
   .box .preview svg{width:100%;height:auto;max-height:56vh}
-  .box .tools{overflow-y:auto;max-height:82vh;padding-right:6px}
+  .box .tools{display:flex;flex-direction:column;max-height:82vh;overflow:hidden}
+  .box .tools h2{flex-shrink:0}
+  .box .tools .edit-foot{flex-shrink:0;padding-top:8px;
+    border-top:1px solid var(--border);margin-top:8px}
+  #edit-fields{flex:1;min-height:0;overflow-y:auto;padding-right:6px}
   .box h2{margin:0 0 10px;font-size:.9rem}
   .grp{border:1px solid var(--border);border-radius:6px;padding:8px;margin-bottom:10px}
   .grp .t{font-size:.7rem;text-transform:uppercase;letter-spacing:.08em;
@@ -109,6 +113,7 @@
   <h1>Generateur d'expressions</h1>
   <div class="toolbar">
     <span class="msg" id="msg"></span>
+    <span class="msg" id="saveState"></span>
     <select id="srcMode" onchange="onSrcChange()" style="width:auto">
       <option value="gen">Expressions generees</option>
       <option value="draw">Mes dessins</option>
@@ -318,6 +323,25 @@
       </div>
     </div>
 
+    <div class="section" id="s-ref">
+      <div class="section-header" onclick="tog('s-ref')"><span>References</span><span class="chev">&#9662;</span></div>
+      <div class="section-body">
+        <p class="hint" style="margin-bottom:8px">
+          Une reference reunit le style et toutes les retouches. Elle est
+          partagee entre les personnages.
+        </p>
+        <div class="field"><label>Reference</label>
+          <select id="refSel"><option value="">(aucune)</option></select></div>
+        <div class="row2">
+          <button class="btn sec" onclick="loadPreset()">Charger</button>
+          <button class="btn sec" onclick="savePreset()">Enregistrer sous...</button>
+        </div>
+        <button class="btn sec" onclick="savePreset('_default')">
+          Definir comme reference par defaut</button>
+        <div class="msg" id="refMsg"></div>
+      </div>
+    </div>
+
     <div class="section" id="s-exp2">
       <div class="section-header" onclick="tog('s-exp2')"><span>Export</span><span class="chev">&#9662;</span></div>
       <div class="section-body">
@@ -355,10 +379,12 @@
     <div class="tools">
       <h2 id="edit-title">Expression</h2>
       <div id="edit-fields"></div>
-      <button class="btn" onclick="saveOverride()">Enregistrer</button>
-      <button class="btn sec" onclick="resetOverride()">Revenir a l'origine</button>
-      <button class="btn sec" onclick="closeEditor()">Fermer</button>
-      <div class="msg" id="edit-msg"></div>
+      <div class="edit-foot">
+        <button class="btn" onclick="saveOverride()">Enregistrer</button>
+        <button class="btn sec" onclick="resetOverride()">Revenir a l'origine</button>
+        <button class="btn sec" onclick="closeEditor()">Fermer</button>
+        <div class="msg" id="edit-msg"></div>
+      </div>
     </div>
   </div>
 </div>
@@ -1174,6 +1200,121 @@ function activeList() {
   return srcMode() === 'draw' ? drawings : EXPR;
 }
 
+// ---------------------------------------------------------------------------
+// Enregistrement automatique
+// Style et retouches partent au fil de l'eau ; le sprite sheet, lui, reste
+// soumis a l'export explicite.
+// ---------------------------------------------------------------------------
+let booting = true;
+let saveTimer = null;
+let saving = false;
+
+function setSaveState(text, ok) {
+  const el = $('saveState');
+  if (!el) return;
+  el.textContent = text;
+  el.style.color = ok === false ? '#e06c6c' : 'var(--ok)';
+}
+
+// Les references vivent dans creations/_presets, hors de tout personnage
+async function listPresets() {
+  if (!LINKED) return;
+
+  let names = [];
+  try {
+    const res = await fetch('/list/_presets?t=' + Date.now());
+    if (res.ok) names = (await res.json()).files.filter(f => /\.json$/i.test(f));
+  } catch (err) { /* dossier absent */ }
+
+  const sel = $('refSel');
+  const keep = sel.value;
+  sel.innerHTML = '<option value="">(aucune)</option>';
+  names.sort().forEach(n => {
+    const opt = document.createElement('option');
+    opt.value = n;
+    opt.textContent = n.replace(/\.json$/i, '');
+    sel.appendChild(opt);
+  });
+  if ([...sel.options].some(o => o.value === keep)) sel.value = keep;
+}
+
+async function savePreset(forced) {
+  if (!LINKED) { $('refMsg').textContent = 'Disponible depuis Blender seulement'; return; }
+
+  const raw = forced || prompt('Nom de la reference :', CTX.robot || 'reference');
+  if (!raw) return;
+
+  const name = raw.replace(/[^A-Za-z0-9_-]+/g, '-') + '.json';
+  const payload = { style: styleJSON(), overrides };
+
+  try {
+    const res = await fetch('/save', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: '_presets/' + name,
+                             text: JSON.stringify(payload, null, 1) }),
+    });
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.error || 'echec');
+
+    await listPresets();
+    $('refSel').value = name;
+    $('refMsg').textContent = name + ' enregistree';
+  } catch (err) {
+    $('refMsg').textContent = 'Erreur : ' + err.message;
+  }
+}
+
+function applyPresetData(data) {
+  booting = true;
+  const o = data.style || {};
+  STYLE_IDS.forEach(id => { if (o[id] !== undefined) $(id).value = o[id]; });
+  ['brows', 'teeth', 'assetBrowFlip', 'headEye', 'headLid', 'headBrow', 'headMouth']
+    .forEach(id => { if (o[id] !== undefined) $(id).checked = o[id]; });
+
+  overrides = data.overrides || {};
+  applyOverrides();
+  booting = false;
+}
+
+
+async function loadPreset() {
+  const name = $('refSel').value;
+  if (!name) return;
+
+  try {
+    const res = await fetch('/files/../_presets/' + name + '?t=' + Date.now());
+    if (!res.ok) throw new Error('introuvable');
+    const data = await res.json();
+
+    applyPresetData(data);
+    renderAll();
+    $('refMsg').textContent = name.replace(/\.json$/i, '') + ' appliquee';
+  } catch (err) {
+    $('refMsg').textContent = 'Erreur : ' + err.message;
+  }
+}
+
+function scheduleSave() {
+  if (booting || !LINKED || !CTX.robot) return;
+  setSaveState('modifie...');
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(doAutoSave, 700);
+}
+
+async function doAutoSave() {
+  if (saving) { scheduleSave(); return; }
+  saving = true;
+  try {
+    await serverSave('style.json', JSON.stringify(styleJSON(), null, 2), false);
+    await serverSave('overrides.json', JSON.stringify(overrides, null, 1), false);
+    setSaveState('enregistre');
+  } catch (err) {
+    setSaveState('erreur : ' + err.message, false);
+  }
+  saving = false;
+}
+
 function renderAll() {
   syncLabels();
   const s = style();
@@ -1215,6 +1356,8 @@ function renderAll() {
 
   const on = EXPR.filter(x => enabled[x.id]).length;
   $('count').textContent = on + ' / ' + EXPR.length + ' expression(s) selectionnee(s)';
+
+  scheduleSave();
 }
 
 // ---------------------------------------------------------------------------
@@ -1573,7 +1716,14 @@ async function loadCharacterStyle() {
 
   try {
     const res = await fetch('/files/' + charPath('style.json') + '?t=' + Date.now());
-    if (!res.ok) return false;
+
+    // Personnage neuf : on part de la reference par defaut si elle existe
+    if (!res.ok) {
+      const def = await fetch('/files/../_presets/_default.json?t=' + Date.now());
+      if (!def.ok) return false;
+      applyPresetData(await def.json());
+      return true;
+    }
 
     const o = await res.json();
     STYLE_IDS.forEach(id => { if (o[id] !== undefined) $(id).value = o[id]; });
@@ -1595,6 +1745,7 @@ async function loadCharacterStyle() {
 let ctxSerial = null;
 
 async function applyContext(c) {
+  booting = true;
   CTX.robot = c.robot || CTX.robot;
   CTX.zone = c.zone || CTX.zone;
   CTX.sheet = c.sheet || CTX.sheet;
@@ -1617,6 +1768,7 @@ async function applyContext(c) {
   if (CTX.head) $('lidColor').value = CTX.head;
 
   onSrcChange();
+  booting = false;
 
   if (CTX.expr && EXPR.some(x => x.id === CTX.expr)) openEditor(CTX.expr);
   else closeEditor();
@@ -1650,6 +1802,7 @@ async function initLinked() {
   const found = await loadCharacterStyle();
   await loadOverrides();
   await loadAssets();
+  await listPresets();
   CTX.head = PARAMS.get('head') || '';
   if (CTX.head) $('lidColor').value = CTX.head;
 
@@ -1667,6 +1820,21 @@ async function initLinked() {
 
   // Les clics suivants sur le crayon mettent cet onglet a jour
   setInterval(pollContext, 1200);
+  booting = false;
+  setSaveState('a jour');
+
+  // Mise en route d'un personnage neuf : les deux planches sont generees
+  if (PARAMS.get('init')) {
+    setSaveState('generation des planches...');
+    for (const zone of ['eyes', 'mouth']) {
+      $('partMode').value = zone;
+      onSrcChange();
+      await exportSheet();
+    }
+    $('partMode').value = CTX.zone || 'eyes';
+    onSrcChange();
+    setSaveState('planches creees');
+  }
 }
 
 // ---------------------------------------------------------------------------

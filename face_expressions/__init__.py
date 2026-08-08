@@ -611,6 +611,56 @@ def _zone_json_folder(obj):
     return ""
 
 
+def robot_of(obj):
+    """Personnage auquel appartient ce maillage : par son materiau de zone,
+    sinon par sa collection ROBOT_<nom>_NN."""
+    if obj is None:
+        return ""
+
+    for mat in (getattr(obj.data, "materials", None) or []):
+        if mat is not None and mat.name.startswith("FACE_"):
+            parts = mat.name.split("_", 2)
+            if len(parts) == 3:
+                return parts[2]
+
+    for coll in obj.users_collection:
+        if coll.name.startswith("ROBOT_"):
+            return re.sub(r"_\d+$", "", coll.name[len("ROBOT_"):])
+
+    return ""
+
+
+def expressions_dir(robot):
+    root = maker_root()
+    if not root or not robot:
+        return ""
+    return os.path.join(root, CREATIONS, robot, "expressions")
+
+
+def find_sheet(robot, zone):
+    """JSON de cette zone dans le dossier du personnage."""
+    folder = expressions_dir(robot)
+    if not folder or not os.path.isdir(folder):
+        return ""
+
+    match = next((f for f in sorted(os.listdir(folder))
+                  if f.lower().endswith(".json") and zone in f.lower()), None)
+    return os.path.join(folder, match) if match else ""
+
+
+def clear_sheet(scene):
+    """Vide le panneau : le personnage courant n'a pas de sprite sheet."""
+    global _restoring
+    _restoring = True
+    try:
+        scene.expr_items.clear()
+        scene.expr_name = ""
+        scene.expr_json = ""
+        scene.expr_image = None
+    finally:
+        _restoring = False
+
+
 def _auto_load_zone(scene, obj):
     """Met le panneau a jour pour la zone courante, sans intervention."""
     if obj is None:
@@ -623,18 +673,13 @@ def _auto_load_zone(scene, obj):
             return True                      # deja en place
         return _restore_from_object(scene, obj)
 
-    # Zone jamais configuree : on cherche son JSON a cote de celui de l'autre zone
-    folder = _zone_json_folder(obj)
-    if not folder:
+    # Le personnage se deduit de l'objet, pas du JSON encore charge
+    path = find_sheet(robot_of(obj), current_zone(scene))
+    if not path:
+        clear_sheet(scene)
         return False
 
-    zone = current_zone(scene)
-    match = next((f for f in sorted(os.listdir(folder))
-                  if f.lower().endswith(".json") and zone in f.lower()), None)
-    if match is None:
-        return False
-
-    scene.expr_json = os.path.join(folder, match)
+    scene.expr_json = path
     scene.expr_target = obj
     try:
         bpy.ops.expr.load_json()
@@ -1231,6 +1276,44 @@ class EXPR_OT_forget(bpy.types.Operator):
 # ===========================================================================
 # Panneau
 # ===========================================================================
+class EXPR_OT_init_sheets(bpy.types.Operator):
+    bl_idname = "expr.init_sheets"
+    bl_label = "Creer les sprite sheets"
+    bl_description = ("Ouvre l'editeur, qui genere les deux planches du personnage "
+                      "a partir de la reference par defaut")
+
+    def execute(self, context):
+        scene = context.scene
+        obj = scene.expr_target or context.active_object
+        robot = robot_of(obj)
+
+        if not robot:
+            self.report({'ERROR'}, "Personnage non identifie : le maillage doit etre "
+                                   "dans une collection ROBOT_ ou porter un materiau FACE_")
+            return {'CANCELLED'}
+
+        ok, msg = start_server()
+        if not ok:
+            self.report({'ERROR'}, "Serveur local : {}".format(msg))
+            return {'CANCELLED'}
+
+        try:
+            os.makedirs(expressions_dir(robot), exist_ok=True)
+        except Exception as e:
+            self.report({'ERROR'}, "Dossier impossible : {}".format(e))
+            return {'CANCELLED'}
+
+        url = "http://127.0.0.1:{}/expressions.html?{}".format(
+            _server_port(), urllib.parse.urlencode(
+                {"robot": robot, "zone": current_zone(scene),
+                 "head": _head_hex(obj), "init": "1"}))
+
+        webbrowser.open(url)
+        self.report({'INFO'}, "Generation en cours dans le navigateur, "
+                              "puis Charger le JSON")
+        return {'FINISHED'}
+
+
 class EXPR_PT_panel(bpy.types.Panel):
     bl_label = "Expressions"
     bl_idname = "EXPR_PT_panel"
@@ -1279,6 +1362,27 @@ class EXPR_PT_panel(bpy.types.Panel):
             grid.prop(scene, "expr_cols", text="Colonnes")
             grid.prop(scene, "expr_rows", text="Lignes")
             box.operator("expr.from_image", icon='FILE_REFRESH')
+
+        if not scene.expr_items:
+            robot = robot_of(obj)
+            info = box.column(align=True)
+
+            if robot:
+                info.label(text="Personnage : " + robot, icon='OUTLINER_OB_ARMATURE')
+
+                missing = [z for z, _l, _d in FACE_ZONES
+                           if zone_material(obj, z) is None
+                           or not zone_material(obj, z).name.startswith("FACE_" + z)]
+                if missing:
+                    warn = box.row()
+                    warn.alert = True
+                    warn.label(text="Faces absentes : " + ", ".join(missing)
+                               + " (Robot Maker > Visage)", icon='ERROR')
+
+                info.label(text="Aucun sprite sheet dans son dossier", icon='INFO')
+                box.operator("expr.init_sheets", icon='ADD')
+            else:
+                info.label(text="Selectionner le maillage d'un personnage", icon='INFO')
 
         if scene.expr_items:
             sub = box.column()
@@ -1407,6 +1511,7 @@ classes = (
     EXPR_OT_forget,
     EXPR_PT_panel,
     EXPR_OT_fit_reset,
+    EXPR_OT_init_sheets,
 )
 
 
