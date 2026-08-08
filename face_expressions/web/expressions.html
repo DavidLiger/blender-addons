@@ -202,8 +202,12 @@
           <input type="range" id="scleraShade" min="0" max="1" step="0.05" value="0" oninput="renderAll()"></div>
         <div class="field"><label>Position de l'ombre <span class="val" id="v-shadePos"></span></label>
           <input type="range" id="shadePos" min="0" max="1" step="0.05" value="1" oninput="renderAll()"></div>
-        <div class="field"><label>Cils <span class="val" id="v-lashes"></span></label>
-          <input type="range" id="lashes" min="0" max="1" step="0.05" value="0" oninput="renderAll()"></div>
+        <div class="row2">
+          <div class="field"><label>Cils <span class="val" id="v-lashes"></span></label>
+            <input type="range" id="lashes" min="0" max="1" step="0.05" value="0" oninput="renderAll()"></div>
+          <div class="field"><label>Nombre <span class="val" id="v-lashN"></span></label>
+            <input type="range" id="lashN" min="2" max="24" step="1" value="5" oninput="renderAll()"></div>
+        </div>
         <div class="field"><label>Couleur des paupieres</label>
           <input type="color" id="lidColor" value="#c9c9cc" oninput="renderAll()"></div>
         <div class="row2">
@@ -211,6 +215,12 @@
             <input type="range" id="crow" min="0" max="1" step="0.05" value="0" oninput="renderAll()"></div>
           <div class="field"><label>Cernes <span class="val" id="v-bags"></span></label>
             <input type="range" id="bags" min="0" max="1" step="0.05" value="0" oninput="renderAll()"></div>
+        </div>
+        <div class="row2">
+          <div class="field"><label>Hauteur cernes <span class="val" id="v-bagY"></span></label>
+            <input type="range" id="bagY" min="-1.5" max="1.5" step="0.05" value="0" oninput="renderAll()"></div>
+          <div class="field"><label>Inclinaison <span class="val" id="v-bagRot"></span></label>
+            <input type="range" id="bagRot" min="-40" max="40" step="1" value="0" oninput="renderAll()"></div>
         </div>
         <div class="field"><label><input type="checkbox" id="brows" checked onchange="renderAll()" style="width:auto"> Sourcils</label></div>
         <div class="row2">
@@ -694,7 +704,9 @@ function style() {
     lidCol: $('lidColor').value,
     lips: num('lips'), lipCol: $('lipColor').value,
     crow: num('crow'), bags: num('bags'),
-    scleraShade: num('scleraShade'), shadePos: num('shadePos'), lashes: num('lashes'),
+    scleraShade: num('scleraShade'), shadePos: num('shadePos'),
+    lashes: num('lashes'), lashN: num('lashN'),
+    bagY: num('bagY'), bagRot: num('bagRot'),
     wobble: num('wobble'), wobbleScale: num('wobbleScale'), inkVar: num('inkVar'),
     aPupil: $('assetPupil').value, aPupilK: num('assetPupilScale'),
     aBrow: $('assetBrow').value, aBrowK: num('assetBrowScale'),
@@ -711,7 +723,8 @@ function syncLabels() {
    ['assetPupilScale','v-assetPupilScale'],['assetBrowScale','v-assetBrowScale'],
    ['assetBrowRot','v-assetBrowRot'],['browScale','v-browScale'],
    ['browGap','v-browGap'],['browRise','v-browRise'],
-   ['lips','v-lips'],['crow','v-crow'],['bags','v-bags'],['shadePos','v-shadePos']]
+   ['lips','v-lips'],['crow','v-crow'],['bags','v-bags'],['shadePos','v-shadePos'],
+   ['lashN','v-lashN'],['bagY','v-bagY'],['bagRot','v-bagRot']]
    .forEach(([src,dst]) => { const el = $(dst); if (el) el.textContent = $(src).value; });
 }
 
@@ -877,13 +890,13 @@ function drawEyes(s, e, b, uid) {
     // Cils : trois traits sur le bord superieur externe
     // Cils repartis sur tout le bord superieur, plus longs vers l'exterieur
     if (s.lashes > 0) {
-      const n = 5;
+      const n = Math.max(2, Math.round(s.lashN));
       for (let k = 0; k < n; k++) {
-        const t = k / (n - 1);                      // 0 interieur, 1 exterieur
-        const ang = Math.PI * (1 - t * .78) * -1;   // du sommet vers le coin
+        const t = k / (n - 1);                      // 0 exterieur, 1 interieur
+        const ang = Math.PI * (1 - t * .78) * -1;   // du coin vers le sommet
         const bx = cx + Math.cos(ang) * rx * -side;
         const by = cy + Math.sin(ang) * ry;
-        const len = ry * (.3 + .45 * t) * s.lashes;
+        const len = ry * (.3 + .45 * (1 - t)) * s.lashes;
 
         out += `<line x1="${bx}" y1="${by}"
                   x2="${bx + Math.cos(ang) * len * -side}"
@@ -910,12 +923,15 @@ function drawEyes(s, e, b, uid) {
 
     // Cerne sous l'oeil
     if (s.bags > 0) {
-      const by2 = cy + ry * (1.15 + s.bags * .25);
-      out += `<path d="M ${cx - rx * .85} ${by2 - ry * .18}
-                       Q ${cx} ${by2 + ry * .3 * s.bags} ${cx + rx * .85} ${by2 - ry * .18}"
-                fill="none" stroke="${s.inkEye}"
-                stroke-width="${s.stroke * .6}" stroke-linecap="round"
-                opacity="${.35 + s.bags * .5}"/>`;
+      const by2 = cy + ry * (1.15 + s.bags * .25 + (s.bagY || 0));
+      const rot = (s.bagRot || 0) * -side;      // symetrique d'un oeil a l'autre
+      out += `<g transform="rotate(${rot} ${cx} ${by2})">
+                <path d="M ${cx - rx * .85} ${by2 - ry * .18}
+                         Q ${cx} ${by2 + ry * .3 * s.bags} ${cx + rx * .85} ${by2 - ry * .18}"
+                  fill="none" stroke="${s.inkEye}"
+                  stroke-width="${s.stroke * .6}" stroke-linecap="round"
+                  opacity="${.35 + s.bags * .5}"/>
+              </g>`;
     }
 
     if (e.tears)
@@ -1771,7 +1787,7 @@ const STYLE_IDS = ['stroke','inkColor','scleraColor','pupilColor','mouthColor','
                    'iris','irisColor','scleraShade','lashes','wobble','wobbleScale','inkVar',
                    'assetPupil','assetPupilScale','assetBrow','assetBrowScale',
                    'assetBrowRot','assetBrowFlip','browScale','browGap','browRise','lidColor',
-                   'lips','lipColor','crow','bags','shadePos',
+                   'lips','lipColor','crow','bags','shadePos','lashN','bagY','bagRot',
                    'eyeW','eyeH','eyeGap','pupil','shine','mW','mH','cellW','cols','prefix'];
 
 function styleJSON() {
