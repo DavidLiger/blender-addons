@@ -1,0 +1,991 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Generateur d'expressions</title>
+<style>
+  :root {
+    --bg:#1b1b1d; --panel:#242427; --panel-2:#2c2c30; --border:#3a3a3f;
+    --text:#e6e6e8; --muted:#9a9aa0; --accent:#e0923d; --accent-soft:#4a3420;
+    --ok:#6fcf7d;
+    --mono: ui-monospace,"Cascadia Mono","JetBrains Mono",Consolas,monospace;
+    --sans: -apple-system,"Segoe UI",system-ui,sans-serif;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%;margin:0}
+  body{background:var(--bg);color:var(--text);font-family:var(--sans);
+       line-height:1.4;display:flex;flex-direction:column;overflow:hidden}
+
+  .topbar{flex-shrink:0;display:flex;align-items:center;justify-content:space-between;
+          gap:16px;padding:10px 16px;background:var(--panel);border-bottom:1px solid var(--border)}
+  h1{font-size:.95rem;font-weight:600;margin:0;white-space:nowrap}
+  .toolbar{display:flex;align-items:center;gap:8px}
+
+  .main{flex:1;min-height:0;display:grid;grid-template-columns:320px 1fr}
+  @media(max-width:860px){.main{grid-template-columns:1fr;grid-template-rows:auto 1fr}}
+
+  .cfg{overflow-y:auto;min-height:0;padding:14px;border-right:1px solid var(--border)}
+  .grid-col{overflow-y:auto;min-height:0;padding:14px}
+
+  .section{background:var(--panel);border:1px solid var(--border);border-radius:8px;
+           margin-bottom:14px;overflow:hidden}
+  .section-header{display:flex;align-items:center;justify-content:space-between;
+    padding:10px 12px;cursor:pointer;font-size:.74rem;text-transform:uppercase;
+    letter-spacing:.08em;color:var(--muted);font-weight:600;user-select:none}
+  .section-header:hover{color:var(--text)}
+  .section-header .chev{transition:transform .15s}
+  .section.collapsed .chev{transform:rotate(-90deg)}
+  .section-body{padding:0 12px 12px}
+  .section.collapsed .section-body{display:none}
+
+  .field{display:flex;flex-direction:column;gap:3px;margin-bottom:9px}
+  .field label{font-size:.72rem;color:var(--muted);display:flex;justify-content:space-between}
+  .field label .val{font-family:var(--mono);color:var(--text)}
+  input[type=range]{width:100%;accent-color:var(--accent)}
+  input[type=number],input[type=text],select{background:var(--panel-2);
+    border:1px solid var(--border);color:var(--text);border-radius:5px;padding:5px 7px;
+    font-family:var(--mono);font-size:.82rem;width:100%}
+  input[type=color]{width:100%;height:28px;background:var(--panel-2);
+    border:1px solid var(--border);border-radius:5px;padding:2px}
+  .row2{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+
+  .btn{background:var(--accent-soft);border:1px solid var(--accent);color:var(--accent);
+       border-radius:6px;padding:7px 12px;font-size:.82rem;font-weight:600;cursor:pointer;width:100%}
+  .btn:hover{background:var(--accent);color:#1b1b1d}
+  .btn.sec{background:var(--panel-2);border-color:var(--border);color:var(--text)}
+  .btn.sec:hover{border-color:var(--accent);color:var(--accent);background:var(--panel-2)}
+  .btn+.btn{margin-top:7px}
+
+  .msg{font-size:.75rem;color:var(--ok);min-height:1em;margin-top:5px}
+  .hint{font-size:.7rem;color:var(--muted)}
+
+  .sheet{display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:10px}
+  .cell{background:var(--panel);border:1px solid var(--border);border-radius:8px;
+        padding:6px;cursor:pointer}
+  .cell:hover{border-color:var(--accent)}
+  .cell.off{opacity:.35}
+  .cell svg,.cell img{width:100%;height:auto;display:block;background:#fff;border-radius:4px}
+  .cell img{object-fit:contain}
+  .dlist{max-height:220px;overflow-y:auto}
+  .drow{display:flex;align-items:center;gap:6px;padding:3px 0;font-family:var(--mono);font-size:.7rem}
+  .drow .nm2{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text)}
+  .drow button{background:none;border:1px solid var(--border);color:var(--muted);
+    border-radius:4px;width:20px;height:20px;cursor:pointer;font-size:.7rem;padding:0}
+  .drow button:hover{color:var(--accent);border-color:var(--accent)}
+  .cell .nm{font-family:var(--mono);font-size:.66rem;color:var(--muted);
+            text-align:center;margin-top:4px;white-space:nowrap;overflow:hidden;
+            text-overflow:ellipsis}
+  .cell.off .nm{text-decoration:line-through}
+</style>
+</head>
+<body>
+
+<header class="topbar">
+  <h1>Generateur d'expressions</h1>
+  <div class="toolbar">
+    <span class="msg" id="msg"></span>
+    <select id="srcMode" onchange="onSrcChange()" style="width:auto">
+      <option value="gen">Expressions generees</option>
+      <option value="draw">Mes dessins</option>
+    </select>
+    <select id="partMode" onchange="renderAll()" style="width:auto">
+      <option value="combined">Yeux + bouche</option>
+      <option value="eyes">Yeux seuls</option>
+      <option value="mouth">Bouches seules</option>
+    </select>
+  </div>
+</header>
+
+<div class="main">
+
+  <div class="cfg">
+
+    <div class="section" id="s-style">
+      <div class="section-header" onclick="tog('s-style')"><span>Style de base</span><span class="chev">&#9662;</span></div>
+      <div class="section-body">
+        <div class="row2">
+          <div class="field"><label>Trait <span class="val" id="v-stroke"></span></label>
+            <input type="range" id="stroke" min="0" max="10" step="0.5" value="3" oninput="renderAll()"></div>
+          <div class="field"><label>Couleur trait</label>
+            <input type="color" id="inkColor" value="#141414" oninput="renderAll()"></div>
+        </div>
+        <div class="row2">
+          <div class="field"><label>Sclere (blanc)</label>
+            <input type="color" id="scleraColor" value="#ffffff" oninput="renderAll()"></div>
+          <div class="field"><label>Pupille / iris</label>
+            <input type="color" id="pupilColor" value="#141414" oninput="renderAll()"></div>
+        </div>
+        <div class="field"><label>Bouche (interieur)</label>
+          <input type="color" id="mouthColor" value="#8c2f39" oninput="renderAll()"></div>
+      </div>
+    </div>
+
+    <div class="section" id="s-eyes">
+      <div class="section-header" onclick="tog('s-eyes')"><span>Yeux</span><span class="chev">&#9662;</span></div>
+      <div class="section-body">
+        <div class="field"><label>Forme</label>
+          <select id="eyeShape" onchange="renderAll()">
+            <option value="oval">Ovale</option>
+            <option value="round">Rond</option>
+            <option value="almond">Amande</option>
+            <option value="rect">Rectangle (ecran)</option>
+          </select></div>
+        <div class="row2">
+          <div class="field"><label>Largeur <span class="val" id="v-eyeW"></span></label>
+            <input type="range" id="eyeW" min="8" max="34" step="1" value="20" oninput="renderAll()"></div>
+          <div class="field"><label>Hauteur <span class="val" id="v-eyeH"></span></label>
+            <input type="range" id="eyeH" min="8" max="40" step="1" value="24" oninput="renderAll()"></div>
+        </div>
+        <div class="row2">
+          <div class="field"><label>Ecartement <span class="val" id="v-eyeGap"></span></label>
+            <input type="range" id="eyeGap" min="40" max="120" step="2" value="72" oninput="renderAll()"></div>
+          <div class="field"><label>Pupille <span class="val" id="v-pupil"></span></label>
+            <input type="range" id="pupil" min="0.1" max="1" step="0.05" value="0.45" oninput="renderAll()"></div>
+        </div>
+        <div class="field"><label>Reflet <span class="val" id="v-shine"></span></label>
+          <input type="range" id="shine" min="0" max="1" step="0.05" value="0.35" oninput="renderAll()"></div>
+        <div class="field"><label><input type="checkbox" id="brows" checked onchange="renderAll()" style="width:auto"> Sourcils</label></div>
+      </div>
+    </div>
+
+    <div class="section" id="s-mouth">
+      <div class="section-header" onclick="tog('s-mouth')"><span>Bouche</span><span class="chev">&#9662;</span></div>
+      <div class="section-body">
+        <div class="row2">
+          <div class="field"><label>Largeur <span class="val" id="v-mW"></span></label>
+            <input type="range" id="mW" min="10" max="55" step="1" value="30" oninput="renderAll()"></div>
+          <div class="field"><label>Hauteur <span class="val" id="v-mH"></span></label>
+            <input type="range" id="mH" min="4" max="40" step="1" value="18" oninput="renderAll()"></div>
+        </div>
+        <div class="field"><label><input type="checkbox" id="teeth" checked onchange="renderAll()" style="width:auto"> Dents quand la bouche est ouverte</label></div>
+      </div>
+    </div>
+
+    <div class="section" id="s-exp">
+      <div class="section-header" onclick="tog('s-exp')"><span>Expressions</span><span class="chev">&#9662;</span></div>
+      <div class="section-body">
+        <div class="row2">
+          <button class="btn sec" onclick="setAllOn(true)">Tout cocher</button>
+          <button class="btn sec" onclick="setAllOn(false)">Tout decocher</button>
+        </div>
+        <p class="hint" style="margin-top:8px">Cliquer une vignette pour l'inclure ou l'exclure de l'export.</p>
+        <div class="msg" id="count"></div>
+      </div>
+    </div>
+
+    <div class="section" id="s-draw">
+      <div class="section-header" onclick="tog('s-draw')"><span>Mes dessins</span><span class="chev">&#9662;</span></div>
+      <div class="section-body">
+        <button class="btn sec" onclick="document.getElementById('drawFiles').click()">Choisir les images</button>
+        <input type="file" id="drawFiles" accept="image/*" multiple style="display:none" onchange="loadDrawings(event)">
+        <p class="hint" style="margin-top:6px">
+          Un fichier = une expression. L'ordre suit le nom du fichier :
+          prefixe-les (01_neutre.png, 02_joyeux.png...) pour maitriser la grille.
+          Le numero est retire du nom affiche.
+        </p>
+        <div class="dlist" id="dlist"></div>
+        <button class="btn sec" id="btn-clear-draw" style="display:none" onclick="clearDrawings()">Vider la liste</button>
+      </div>
+    </div>
+
+    <div class="section" id="s-exp2">
+      <div class="section-header" onclick="tog('s-exp2')"><span>Export</span><span class="chev">&#9662;</span></div>
+      <div class="section-body">
+        <div class="row2">
+          <div class="field"><label>Taille cellule (px)</label>
+            <input type="number" id="cellW" value="256" min="32" step="16"></div>
+          <div class="field"><label>Colonnes</label>
+            <input type="number" id="cols" value="8" min="1" step="1"></div>
+        </div>
+        <div class="field" id="cellH-wrap" style="display:none"><label>Hauteur cellule (px)</label>
+          <input type="number" id="cellH" value="256" min="8" step="16">
+        </div>
+        <div class="field"><label>Prefixe des fichiers</label>
+          <input type="text" id="prefix" value="robot"></div>
+        <button class="btn" onclick="exportSheet()">Sprite sheet (PNG + JSON)</button>
+        <button class="btn sec" onclick="exportSingles()">PNG separes (un par expression)</button>
+        <button class="btn sec" onclick="saveStyle()">Sauvegarder le style (.json)</button>
+        <button class="btn sec" onclick="document.getElementById('loadStyle').click()">Charger un style (.json)</button>
+        <input type="file" id="loadStyle" accept="application/json" style="display:none" onchange="loadStyleFile(event)">
+        <div class="msg" id="exportMsg"></div>
+      </div>
+    </div>
+
+  </div>
+
+  <div class="grid-col">
+    <div class="sheet" id="sheet"></div>
+  </div>
+
+</div>
+
+<script>
+// ===========================================================================
+// Definition des expressions
+//   eyes : open (0-1), tilt (deg, + = interieur haut = colere),
+//          lidBot (0-1), px/py (regard), scale, glyph (forme speciale)
+//   brow : angle (deg), y (offset), curve
+//   mouth: type, curve (-1..1 : bas/haut), w/h (facteurs), open (0-1),
+//          tilt (deg), teeth, tongue
+// ===========================================================================
+const EXPR = [
+  {id:'neutre',      n:'Neutre',        e:{}, b:{}, m:{t:'line'}},
+  {id:'sourire',     n:'Sourire',       e:{open:.9}, b:{a:-4}, m:{t:'curve',curve:.7}},
+  {id:'joyeux',      n:'Joyeux',        e:{glyph:'happy'}, b:{a:-8}, m:{t:'open',curve:.8,open:.55,teeth:1}},
+  {id:'rire',        n:'Rire',          e:{glyph:'happy'}, b:{a:-10}, m:{t:'open',curve:1,open:.9,teeth:1,tongue:1}},
+  {id:'hilare',      n:'Hilare',        e:{glyph:'happy'}, b:{a:-12,y:-3}, m:{t:'open',curve:1,open:1,w:1.25,teeth:1,tongue:1}},
+  {id:'ricane',      n:'Ricane',        e:{open:.5,tilt:6,px:.3}, b:{a:6}, m:{t:'curve',curve:.6,tilt:-10,w:.8}},
+  {id:'malin',       n:'Malin',         e:{open:.55,tilt:8}, b:{a:10,y:-2}, m:{t:'curve',curve:.5,tilt:-14}},
+  {id:'fier',        n:'Fier',          e:{open:.6,py:-.2}, b:{a:-6,y:-3}, m:{t:'curve',curve:.45,w:.85}},
+  {id:'clin',        n:'Clin d\u2019\u0153il', e:{wink:1,open:.9}, b:{a:-6}, m:{t:'curve',curve:.6,tilt:-8}},
+  {id:'timide',      n:'Timide',        e:{open:.55,py:.25,lidBot:.3}, b:{a:-6,y:2}, m:{t:'curve',curve:.3,w:.6}},
+  {id:'gene',        n:'G\u00EAn\u00E9', e:{open:.5,px:.4,lidBot:.35}, b:{a:-10,y:1}, m:{t:'wave',w:.8}},
+  {id:'triste',      n:'Triste',        e:{open:.65,tilt:-12,py:.2}, b:{a:-16,y:2}, m:{t:'curve',curve:-.7}},
+  {id:'pleure',      n:'Pleure',        e:{glyph:'sad',tears:1}, b:{a:-18,y:2}, m:{t:'open',curve:-.8,open:.6,w:.9}},
+  {id:'larme',       n:'Larme',         e:{open:.7,tilt:-10,tears:1}, b:{a:-14}, m:{t:'curve',curve:-.5}},
+  {id:'deprime',     n:'D\u00E9prim\u00E9', e:{open:.35,tilt:-8,py:.35,lidBot:.2}, b:{a:-12,y:3}, m:{t:'curve',curve:-.35,w:.7}},
+  {id:'boude',       n:'Boude',         e:{open:.45,tilt:-6,py:.3}, b:{a:-10,y:2}, m:{t:'curve',curve:-.45,w:.6,tilt:6}},
+  {id:'agace',       n:'Agac\u00E9',    e:{open:.4,tilt:10,lidBot:.15}, b:{a:14}, m:{t:'line',tilt:-8,w:.8}},
+  {id:'colere',      n:'Col\u00E8re',   e:{open:.75,tilt:20,scale:1.05}, b:{a:24,y:-1}, m:{t:'curve',curve:-.7,w:1.05}},
+  {id:'furieux',     n:'Furieux',       e:{open:.9,tilt:26,scale:1.1,px:0}, b:{a:30,y:-2}, m:{t:'grit',open:.7,w:1.15,teeth:1}},
+  {id:'rage',        n:'Rage',          e:{glyph:'angry'}, b:{a:32,y:-3}, m:{t:'open',curve:-.6,open:1,w:1.2,teeth:1}},
+  {id:'menace',      n:'Menace',        e:{open:.35,tilt:22,lidBot:.25}, b:{a:26}, m:{t:'grit',open:.4,teeth:1}},
+  {id:'surpris',     n:'Surpris',       e:{open:1,scale:1.2,pupil:.75}, b:{a:-10,y:-5}, m:{t:'o',open:.55}},
+  {id:'choque',      n:'Choqu\u00E9',   e:{open:1,scale:1.35,pupil:.5}, b:{a:-14,y:-7}, m:{t:'o',open:.9,h:1.3}},
+  {id:'stupefait',   n:'Stup\u00E9fait', e:{open:1,scale:1.3,pupil:.35}, b:{a:-12,y:-6}, m:{t:'open',open:.8,w:.7,h:1.4}},
+  {id:'peur',        n:'Peur',          e:{open:1,scale:1.15,pupil:.35,py:.15}, b:{a:-20,y:-4}, m:{t:'wave',open:.4,w:1.1}},
+  {id:'terrifie',    n:'Terrifi\u00E9', e:{open:1,scale:1.3,pupil:.25,shake:1}, b:{a:-24,y:-6}, m:{t:'open',curve:-.9,open:.95,w:1.1,teeth:1}},
+  {id:'inquiet',     n:'Inquiet',       e:{open:.8,tilt:-8,px:.25}, b:{a:-16,y:-1}, m:{t:'wave',w:.85}},
+  {id:'confus',      n:'Confus',        e:{open:.75,asym:1}, b:{a:8,asym:1,y:-3}, m:{t:'wave',w:.7,tilt:6}},
+  {id:'perplexe',    n:'Perplexe',      e:{open:.65,px:.35,asym:1}, b:{a:12,asym:1,y:-4}, m:{t:'curve',curve:-.2,w:.6,tilt:10}},
+  {id:'pensif',      n:'Pensif',        e:{open:.6,px:.45,py:-.25}, b:{a:6,y:-2}, m:{t:'curve',curve:.15,w:.55,tilt:8}},
+  {id:'suspicieux',  n:'Suspicieux',    e:{open:.35,px:.4,lidBot:.2}, b:{a:16,asym:1}, m:{t:'line',w:.7,tilt:6}},
+  {id:'blase',       n:'Blas\u00E9',    e:{open:.4,py:-.15,lidBot:.1}, b:{a:2,y:1}, m:{t:'line',w:.75}},
+  {id:'ennuye',      n:'Ennuy\u00E9',   e:{open:.35,py:.2,px:.3}, b:{a:-4,y:2}, m:{t:'curve',curve:-.25,w:.7}},
+  {id:'fatigue',     n:'Fatigu\u00E9',  e:{open:.3,tilt:-6,lidBot:.3,py:.2}, b:{a:-8,y:3}, m:{t:'curve',curve:-.2,w:.65}},
+  {id:'endormi',     n:'Endormi',       e:{glyph:'closed'}, b:{a:-4,y:3}, m:{t:'o',open:.35,w:.5}},
+  {id:'epuise',      n:'\u00C9puis\u00E9', e:{glyph:'closed'}, b:{a:-10,y:4}, m:{t:'wave',w:.9,open:.3}},
+  {id:'amoureux',    n:'Amoureux',      e:{glyph:'heart'}, b:{a:-8,y:-2}, m:{t:'curve',curve:.8,w:.9}},
+  {id:'admiratif',   n:'Admiratif',     e:{glyph:'star'}, b:{a:-10,y:-3}, m:{t:'open',curve:.7,open:.6,teeth:1}},
+  {id:'etourdi',     n:'\u00C9tourdi',  e:{glyph:'spiral'}, b:{a:-6,y:-2}, m:{t:'wave',w:1,open:.35}},
+  {id:'ko',          n:'KO',            e:{glyph:'x'}, b:{a:-8,y:2}, m:{t:'wave',w:.9,open:.5,tilt:-8}},
+  {id:'degoute',     n:'D\u00E9go\u00FBt\u00E9', e:{open:.45,tilt:8,asym:1}, b:{a:14,asym:1}, m:{t:'wave',curve:-.4,w:.85,tilt:-8}},
+  {id:'ecoeure',     n:'\u00C9c\u0153ur\u00E9', e:{open:.5,tilt:-6,py:.15}, b:{a:-10}, m:{t:'open',curve:-.7,open:.7,tongue:1}},
+  {id:'malade',      n:'Malade',        e:{open:.4,tilt:-10,py:.3,lidBot:.25}, b:{a:-14,y:2}, m:{t:'wave',curve:-.5,w:.8,open:.3}},
+  {id:'hurle',       n:'Hurle',         e:{glyph:'sad'}, b:{a:-16,y:-4}, m:{t:'open',curve:-.5,open:1,w:.85,h:1.4,teeth:1,tongue:1}},
+  {id:'chuchote',    n:'Chuchote',      e:{open:.6,px:.4}, b:{a:4,y:-1}, m:{t:'o',open:.3,w:.45,tilt:-6}},
+  {id:'siffle',      n:'Siffle',        e:{open:.55,py:-.2}, b:{a:-6,y:-2}, m:{t:'o',open:.4,w:.4}},
+  {id:'mange',       n:'Mange',         e:{glyph:'happy'}, b:{a:-6}, m:{t:'open',curve:.3,open:.7,w:.8,teeth:1,tongue:1}},
+  {id:'scan',        n:'Scan / alerte', e:{glyph:'scan'}, b:{a:0,y:-4}, m:{t:'line',w:.6}},
+  {id:'off',         n:'\u00C9teint',   e:{glyph:'off'}, b:{a:0,y:2}, m:{t:'line',w:.5}},
+];
+
+let enabled = {};
+EXPR.forEach(x => enabled[x.id] = true);
+
+// Dessins fournis par l'utilisateur : { id, name, img, url }
+let drawings = [];
+
+function srcMode() { return document.getElementById('srcMode').value; }
+
+// Tri naturel : 2_x avant 10_x
+function natCmp(a, b) {
+  return a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' });
+}
+
+// "03_en-colere.png" -> id "en-colere", libelle "en colere"
+function parseDrawName(file) {
+  const base = file.name.replace(/\.[^.]+$/, '');
+  const clean = base.replace(/^[\s_\-.]*\d+[\s_\-.]+/, '') || base;
+  return {
+    id: clean.toLowerCase().replace(/[^a-z0-9_\-]+/gi, '-').replace(/^-+|-+$/g, '') || base,
+    name: clean.replace(/[_\-]+/g, ' ').trim(),
+  };
+}
+
+async function loadDrawings(ev) {
+  const files = [...ev.target.files].sort((a, b) => natCmp(a.name, b.name));
+  clearDrawings();
+
+  for (const f of files) {
+    const meta = parseDrawName(f);
+    const url = URL.createObjectURL(f);
+    const img = await new Promise(res => {
+      const im = new Image();
+      im.onload = () => res(im);
+      im.onerror = () => res(null);
+      im.src = url;
+    });
+    if (!img) { URL.revokeObjectURL(url); continue; }
+
+    let id = meta.id, k = 2;
+    while (drawings.some(d => d.id === id)) id = meta.id + '-' + (k++);
+
+    drawings.push({ id, name: meta.name, img, url, file: f.name });
+    enabled[id] = true;
+  }
+
+  // Hauteur de cellule deduite du premier dessin
+  if (drawings.length) {
+    const d0 = drawings[0];
+    const cw = parseInt($('cellW').value) || 256;
+    $('cellH').value = Math.round(cw * d0.img.naturalHeight / d0.img.naturalWidth);
+    $('srcMode').value = 'draw';
+  }
+
+  ev.target.value = '';
+  onSrcChange();
+}
+
+function clearDrawings() {
+  drawings.forEach(d => URL.revokeObjectURL(d.url));
+  drawings = [];
+  renderDrawList();
+}
+
+function removeDrawing(id) {
+  const i = drawings.findIndex(d => d.id === id);
+  if (i < 0) return;
+  URL.revokeObjectURL(drawings[i].url);
+  drawings.splice(i, 1);
+  renderDrawList();
+  renderAll();
+}
+
+function renderDrawList() {
+  const list = $('dlist');
+  list.innerHTML = '';
+  $('btn-clear-draw').style.display = drawings.length ? '' : 'none';
+
+  drawings.forEach((d, i) => {
+    const row = document.createElement('div');
+    row.className = 'drow';
+    row.innerHTML = `<span style="color:var(--muted)">${String(i+1).padStart(2,'0')}</span>`
+                  + `<span class="nm2">${d.name}</span>`;
+    const btn = document.createElement('button');
+    btn.textContent = '\u00D7';
+    btn.title = 'Retirer';
+    btn.onclick = () => removeDrawing(d.id);
+    row.appendChild(btn);
+    list.appendChild(row);
+  });
+}
+
+function onSrcChange() {
+  const draw = srcMode() === 'draw';
+  $('partMode').disabled = draw;
+  $('cellH-wrap').style.display = draw ? '' : 'none';
+  renderDrawList();
+  renderAll();
+}
+
+// ---------------------------------------------------------------------------
+// Lecture des reglages
+// ---------------------------------------------------------------------------
+const $ = id => document.getElementById(id);
+const num = id => parseFloat($(id).value);
+
+function style() {
+  return {
+    stroke: num('stroke'), ink: $('inkColor').value,
+    sclera: $('scleraColor').value, pupilCol: $('pupilColor').value,
+    mouthCol: $('mouthColor').value,
+    shape: $('eyeShape').value,
+    ew: num('eyeW'), eh: num('eyeH'), gap: num('eyeGap'),
+    pupil: num('pupil'), shine: num('shine'), brows: $('brows').checked,
+    mw: num('mW'), mh: num('mH'), teeth: $('teeth').checked,
+  };
+}
+
+function syncLabels() {
+  [['stroke','v-stroke'],['eyeW','v-eyeW'],['eyeH','v-eyeH'],['eyeGap','v-eyeGap'],
+   ['pupil','v-pupil'],['shine','v-shine'],['mW','v-mW'],['mH','v-mH']]
+   .forEach(([src,dst]) => { const el = $(dst); if (el) el.textContent = $(src).value; });
+}
+
+// ---------------------------------------------------------------------------
+// Dessin des yeux
+// ---------------------------------------------------------------------------
+const VB_EYES  = { w: 200, h: 110 };
+const VB_MOUTH = { w: 200, h: 90  };
+
+function eyeOutline(cx, cy, rx, ry, shape) {
+  if (shape === 'round')  return `<circle cx="${cx}" cy="${cy}" r="${Math.min(rx,ry)}"/>`;
+  if (shape === 'rect')   return `<rect x="${cx-rx}" y="${cy-ry}" width="${rx*2}" height="${ry*2}" rx="${Math.min(rx,ry)*.25}"/>`;
+  if (shape === 'almond') {
+    return `<path d="M ${cx-rx} ${cy} Q ${cx} ${cy-ry*1.35} ${cx+rx} ${cy}
+                     Q ${cx} ${cy+ry*1.35} ${cx-rx} ${cy} Z"/>`;
+  }
+  return `<ellipse cx="${cx}" cy="${cy}" rx="${rx}" ry="${ry}"/>`;
+}
+
+function glyphEye(cx, cy, r, s, kind) {
+  const S = s.stroke, ink = s.ink;
+  const line = (x1,y1,x2,y2) =>
+    `<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="${ink}" stroke-width="${S}" stroke-linecap="round"/>`;
+
+  if (kind === 'happy')
+    return `<path d="M ${cx-r} ${cy+r*.35} Q ${cx} ${cy-r*.75} ${cx+r} ${cy+r*.35}"
+             fill="none" stroke="${ink}" stroke-width="${S*1.2}" stroke-linecap="round"/>`;
+  if (kind === 'sad')
+    return `<path d="M ${cx-r} ${cy-r*.35} Q ${cx} ${cy+r*.75} ${cx+r} ${cy-r*.35}"
+             fill="none" stroke="${ink}" stroke-width="${S*1.2}" stroke-linecap="round"/>`;
+  if (kind === 'closed')
+    return `<path d="M ${cx-r} ${cy} Q ${cx} ${cy+r*.5} ${cx+r} ${cy}"
+             fill="none" stroke="${ink}" stroke-width="${S*1.2}" stroke-linecap="round"/>`;
+  if (kind === 'x')
+    return line(cx-r*.7,cy-r*.7,cx+r*.7,cy+r*.7) + line(cx+r*.7,cy-r*.7,cx-r*.7,cy+r*.7);
+  if (kind === 'angry') {
+    return `<path d="M ${cx-r} ${cy-r*.7} L ${cx+r} ${cy-r*.1} L ${cx+r*.6} ${cy+r*.7}
+             L ${cx-r*.9} ${cy+r*.5} Z" fill="${s.sclera}" stroke="${ink}" stroke-width="${S}"/>
+            <circle cx="${cx+r*.1}" cy="${cy+r*.15}" r="${r*.3}" fill="${s.pupilCol}"/>`;
+  }
+  if (kind === 'heart') {
+    const k = r*.95;
+    return `<path d="M ${cx} ${cy+k*.75}
+             C ${cx-k*1.3} ${cy-k*.15} ${cx-k*.55} ${cy-k*1.05} ${cx} ${cy-k*.35}
+             C ${cx+k*.55} ${cy-k*1.05} ${cx+k*1.3} ${cy-k*.15} ${cx} ${cy+k*.75} Z"
+             fill="${s.pupilCol}" stroke="${ink}" stroke-width="${S*.6}"/>`;
+  }
+  if (kind === 'star') {
+    let pts = '';
+    for (let i = 0; i < 10; i++) {
+      const rad = (i % 2 ? r*.42 : r);
+      const a = -Math.PI/2 + i*Math.PI/5;
+      pts += `${(cx+Math.cos(a)*rad).toFixed(1)},${(cy+Math.sin(a)*rad).toFixed(1)} `;
+    }
+    return `<polygon points="${pts.trim()}" fill="${s.pupilCol}" stroke="${ink}" stroke-width="${S*.6}"/>`;
+  }
+  if (kind === 'spiral') {
+    let d = `M ${cx} ${cy}`;
+    for (let i = 0; i <= 60; i++) {
+      const a = i/60 * Math.PI*5, rr = r * i/60;
+      d += ` L ${(cx+Math.cos(a)*rr).toFixed(1)} ${(cy+Math.sin(a)*rr).toFixed(1)}`;
+    }
+    return `<path d="${d}" fill="none" stroke="${ink}" stroke-width="${S*.8}" stroke-linecap="round"/>`;
+  }
+  if (kind === 'scan')
+    return `<rect x="${cx-r}" y="${cy-r*.45}" width="${r*2}" height="${r*.9}" rx="${r*.2}"
+             fill="${s.sclera}" stroke="${ink}" stroke-width="${S}"/>
+            ${line(cx-r*.75,cy,cx+r*.75,cy)}`;
+  if (kind === 'off')
+    return `<rect x="${cx-r}" y="${cy-r*.45}" width="${r*2}" height="${r*.9}" rx="${r*.2}"
+             fill="#3a3a3f" stroke="${ink}" stroke-width="${S}"/>`;
+  return '';
+}
+
+function drawEyes(s, e, b, uid) {
+  e = e || {}; b = b || {};
+  const cy = VB_EYES.h * .55;
+  const sc = e.scale || 1;
+  const rx = s.ew * sc, ry = s.eh * sc;
+  const open = e.open !== undefined ? e.open : 1;
+  let out = '';
+
+  [-1, 1].forEach((side, idx) => {
+    const cx = VB_EYES.w/2 + side * s.gap/2;
+    const asym = e.asym && side > 0 ? .6 : 1;   // un oeil different de l'autre
+    const closed = e.wink && side > 0;
+
+    if (e.glyph) {
+      out += glyphEye(cx, cy, Math.max(rx, ry) * .9, s, e.glyph);
+      return;
+    }
+    if (closed) {
+      out += glyphEye(cx, cy, Math.max(rx, ry) * .9, s, 'closed');
+      return;
+    }
+
+    const oy = ry * open * asym;
+    const clip = `clip-${uid}-${idx}`;
+
+    out += `<defs><clipPath id="${clip}">${eyeOutline(cx, cy, rx, oy, s.shape)}</clipPath></defs>`;
+    out += `<g clip-path="url(#${clip})">`;
+    out += eyeOutline(cx, cy, rx, oy, s.shape).replace('/>', ` fill="${s.sclera}"/>`);
+
+    // pupille
+    const pr = Math.min(rx, ry) * (e.pupil !== undefined ? e.pupil : s.pupil);
+    const pxo = (e.px || 0) * side * rx * .5;
+    const pyo = (e.py || 0) * ry * .6;
+    out += `<circle cx="${cx+pxo}" cy="${cy+pyo}" r="${pr}" fill="${s.pupilCol}"/>`;
+    if (s.shine > 0)
+      out += `<circle cx="${cx+pxo-pr*.35}" cy="${cy+pyo-pr*.4}" r="${pr*s.shine*.55}" fill="#fff" opacity=".9"/>`;
+
+    // paupieres
+    const tilt = (e.tilt || 0) * side * (e.asym && side > 0 ? -1 : 1);
+    const lidY = cy - oy - 1;
+    out += `<g transform="rotate(${tilt} ${cx} ${cy})">
+              <rect x="${cx-rx*1.6}" y="${lidY-ry*2}" width="${rx*3.2}" height="${ry*2}"
+                    fill="${s.sclera}" opacity="0"/>
+              <path d="M ${cx-rx*1.3} ${cy-oy*.55} L ${cx+rx*1.3} ${cy-oy*.55}
+                       L ${cx+rx*1.3} ${cy-ry*2.4} L ${cx-rx*1.3} ${cy-ry*2.4} Z"
+                    fill="${s.ink}" opacity="${e.tilt ? 1 : 0}"/>
+            </g>`;
+    if (e.lidBot)
+      out += `<path d="M ${cx-rx*1.2} ${cy+oy*(1-e.lidBot)} L ${cx+rx*1.2} ${cy+oy*(1-e.lidBot)}
+                       L ${cx+rx*1.2} ${cy+ry*2} L ${cx-rx*1.2} ${cy+ry*2} Z" fill="${s.ink}"/>`;
+    out += `</g>`;
+
+    out += eyeOutline(cx, cy, rx, oy, s.shape)
+             .replace('/>', ` fill="none" stroke="${s.ink}" stroke-width="${s.stroke}"/>`);
+
+    if (e.tears)
+      out += `<path d="M ${cx+rx*.5} ${cy+oy*.7} q ${rx*.18} ${ry*.7} 0 ${ry*1.1}
+                       q ${-rx*.18} ${-ry*.4} 0 ${-ry*1.1} Z"
+                fill="#5aa9e6" stroke="${s.ink}" stroke-width="${s.stroke*.5}"/>`;
+
+    if (s.brows) {
+      const ba = (b.a || 0) * side;
+      const by = cy - ry - 12 + (b.y || 0);
+      const bw = rx * 1.1;
+      const bAsym = b.asym && side > 0 ? -1 : 1;
+      out += `<g transform="rotate(${ba*bAsym} ${cx} ${by})">
+                <path d="M ${cx-bw} ${by} Q ${cx} ${by-4} ${cx+bw} ${by}"
+                      fill="none" stroke="${s.ink}" stroke-width="${s.stroke*1.3}" stroke-linecap="round"/>
+              </g>`;
+    }
+  });
+
+  if (e.shake) {
+    out = `<g>${out}</g>` +
+      `<g opacity=".28" transform="translate(3,-2)">${out}</g>`;
+  }
+  return out;
+}
+
+// ---------------------------------------------------------------------------
+// Dessin de la bouche
+// ---------------------------------------------------------------------------
+function drawMouth(s, m) {
+  m = m || {};
+  const cx = VB_MOUTH.w/2, cy = VB_MOUTH.h*.5;
+  const w = s.mw * (m.w || 1);
+  const h = s.mh * (m.h || 1);
+  const curve = m.curve || 0;
+  const open = m.open || 0;
+  const t = m.t || 'line';
+  const S = s.stroke;
+  let out = '';
+
+  const wrap = inner => `<g transform="rotate(${m.tilt || 0} ${cx} ${cy})">${inner}</g>`;
+
+  if (t === 'line')
+    return wrap(`<path d="M ${cx-w} ${cy} Q ${cx} ${cy-curve*h*1.2} ${cx+w} ${cy}"
+      fill="none" stroke="${s.ink}" stroke-width="${S*1.2}" stroke-linecap="round"/>`);
+
+  if (t === 'curve')
+    return wrap(`<path d="M ${cx-w} ${cy-curve*h*.35} Q ${cx} ${cy+curve*h*1.15} ${cx+w} ${cy-curve*h*.35}"
+      fill="none" stroke="${s.ink}" stroke-width="${S*1.2}" stroke-linecap="round"/>`);
+
+  if (t === 'wave') {
+    const a = h * .3, seg = w/2;
+    return wrap(`<path d="M ${cx-w} ${cy}
+        q ${seg/2} ${-a} ${seg} 0 q ${seg/2} ${a} ${seg} 0
+        q ${seg/2} ${-a} ${seg} 0 q ${seg/2} ${a} ${seg} 0"
+      fill="none" stroke="${s.ink}" stroke-width="${S*1.2}" stroke-linecap="round"/>`);
+  }
+
+  if (t === 'o') {
+    const rx = w * .55, ry = h * (.6 + open);
+    out = `<ellipse cx="${cx}" cy="${cy}" rx="${rx}" ry="${ry}"
+             fill="${s.mouthCol}" stroke="${s.ink}" stroke-width="${S*1.1}"/>`;
+    return wrap(out);
+  }
+
+  if (t === 'grit') {
+    const oh = h * (.5 + open);
+    out = `<rect x="${cx-w}" y="${cy-oh/2}" width="${w*2}" height="${oh}" rx="${oh*.15}"
+             fill="${s.mouthCol}" stroke="${s.ink}" stroke-width="${S*1.1}"/>`;
+    if (s.teeth) {
+      out += `<rect x="${cx-w}" y="${cy-oh/2}" width="${w*2}" height="${oh*.42}" fill="#fff"/>`;
+      out += `<rect x="${cx-w}" y="${cy+oh*.08}" width="${w*2}" height="${oh*.42}" fill="#fff"/>`;
+      for (let i = 1; i < 6; i++) {
+        const x = cx - w + (w*2) * i/6;
+        out += `<line x1="${x}" y1="${cy-oh/2}" x2="${x}" y2="${cy+oh/2}"
+                  stroke="${s.ink}" stroke-width="${S*.5}"/>`;
+      }
+      out += `<rect x="${cx-w}" y="${cy-oh/2}" width="${w*2}" height="${oh}" rx="${oh*.15}"
+                fill="none" stroke="${s.ink}" stroke-width="${S*1.1}"/>`;
+    }
+    return wrap(out);
+  }
+
+  // 'open' : bouche ouverte, coins remontant ou descendant selon curve
+  const oh = h * (.6 + open * 1.6);
+  const top = cy - oh/2, bot = cy + oh/2;
+  const cOff = curve * oh * .5;
+  const id = 'mclip' + Math.random().toString(36).slice(2, 8);
+
+  const path = `M ${cx-w} ${cy-cOff}
+                Q ${cx} ${top - cOff*.2} ${cx+w} ${cy-cOff}
+                Q ${cx} ${bot + cOff*.6} ${cx-w} ${cy-cOff} Z`;
+
+  out = `<defs><clipPath id="${id}"><path d="${path}"/></clipPath></defs>`;
+  out += `<path d="${path}" fill="${s.mouthCol}"/>`;
+  out += `<g clip-path="url(#${id})">`;
+  if (s.teeth && m.teeth)
+    out += `<rect x="${cx-w}" y="${top-cOff*.2}" width="${w*2}" height="${oh*.3}" fill="#fff"/>`;
+  if (m.tongue)
+    out += `<ellipse cx="${cx}" cy="${bot}" rx="${w*.5}" ry="${oh*.35}"
+              fill="#d9636f" stroke="${s.ink}" stroke-width="${S*.5}"/>`;
+  out += `</g>`;
+  out += `<path d="${path}" fill="none" stroke="${s.ink}" stroke-width="${S*1.1}" stroke-linejoin="round"/>`;
+  return wrap(out);
+}
+
+// ---------------------------------------------------------------------------
+// Assemblage
+// ---------------------------------------------------------------------------
+function viewBox() {
+  const mode = $('partMode').value;
+  if (mode === 'eyes')  return { w: VB_EYES.w,  h: VB_EYES.h };
+  if (mode === 'mouth') return { w: VB_MOUTH.w, h: VB_MOUTH.h };
+  return { w: VB_EYES.w, h: VB_EYES.h + VB_MOUTH.h };
+}
+
+function svgBody(x, s, uid) {
+  const mode = $('partMode').value;
+  if (mode === 'eyes')  return drawEyes(s, x.e, x.b, uid);
+  if (mode === 'mouth') return drawMouth(s, x.m);
+  return drawEyes(s, x.e, x.b, uid) +
+         `<g transform="translate(0,${VB_EYES.h})">${drawMouth(s, x.m)}</g>`;
+}
+
+function svgFor(x, s, uid) {
+  const vb = viewBox();
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${vb.w} ${vb.h}">`
+       + svgBody(x, s, uid) + `</svg>`;
+}
+
+// Liste active selon la source choisie
+function activeList() {
+  return srcMode() === 'draw' ? drawings : EXPR;
+}
+
+function renderAll() {
+  syncLabels();
+  const s = style();
+  const sheet = $('sheet');
+  sheet.innerHTML = '';
+
+  if (srcMode() === 'draw') {
+    drawings.forEach(d => {
+      const cell = document.createElement('div');
+      cell.className = 'cell' + (enabled[d.id] ? '' : ' off');
+      cell.onclick = () => { enabled[d.id] = !enabled[d.id]; renderAll(); };
+      cell.innerHTML = `<img src="${d.url}" alt="">` + `<div class="nm">${d.name}</div>`;
+      sheet.appendChild(cell);
+    });
+
+    const onD = drawings.filter(d => enabled[d.id]).length;
+    $('count').textContent = drawings.length
+      ? onD + ' / ' + drawings.length + ' dessin(s) selectionne(s)'
+      : 'Aucun dessin charge';
+    return;
+  }
+
+  EXPR.forEach((x, i) => {
+    const cell = document.createElement('div');
+    cell.className = 'cell' + (enabled[x.id] ? '' : ' off');
+    cell.onclick = () => { enabled[x.id] = !enabled[x.id]; renderAll(); };
+    cell.innerHTML = svgFor(x, s, i) + `<div class="nm">${x.n}</div>`;
+    sheet.appendChild(cell);
+  });
+
+  const on = EXPR.filter(x => enabled[x.id]).length;
+  $('count').textContent = on + ' / ' + EXPR.length + ' expression(s) selectionnee(s)';
+}
+
+function setAllOn(v) { activeList().forEach(x => enabled[x.id] = v); renderAll(); }
+function tog(id) { $(id).classList.toggle('collapsed'); }
+
+// ---------------------------------------------------------------------------
+// Rasterisation
+// ---------------------------------------------------------------------------
+function svgToImage(svg) {
+  return new Promise((res, rej) => {
+    const blob = new Blob([svg], { type: 'image/svg+xml;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const img = new Image();
+    img.onload = () => { URL.revokeObjectURL(url); res(img); };
+    img.onerror = e => { URL.revokeObjectURL(url); rej(e); };
+    img.src = url;
+  });
+}
+
+function download(blob, name) {
+  const a = document.createElement('a');
+  a.download = name;
+  a.href = URL.createObjectURL(blob);
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+
+function flash(msg) { $('exportMsg').textContent = msg; }
+
+// ---------------------------------------------------------------------------
+// Liaison avec l'addon Blender
+// La page est servie par le serveur local de l'addon : lecture et ecriture
+// passent par lui, sans selecteur de fichier ni permission navigateur.
+// ---------------------------------------------------------------------------
+const PARAMS = new URLSearchParams(location.search);
+const LINKED = location.protocol.startsWith('http') && PARAMS.has('robot');
+
+const CTX = {
+  robot: PARAMS.get('robot') || '',
+  zone: PARAMS.get('zone') || '',
+  sheet: PARAMS.get('sheet') || '',
+  expr: PARAMS.get('expr') || '',
+};
+
+function charPath(file) {
+  return CTX.robot + '/expressions/' + file;
+}
+
+async function serverSave(file, payload, binary) {
+  const body = binary
+    ? { path: charPath(file), b64: payload }
+    : { path: charPath(file), text: payload };
+
+  const res = await fetch('/save', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+
+  const data = await res.json();
+  if (!data.ok) throw new Error(data.error || 'echec');
+  return data.path;
+}
+
+function blobToB64(blob) {
+  return new Promise((res, rej) => {
+    const r = new FileReader();
+    r.onload = () => res(r.result);
+    r.onerror = rej;
+    r.readAsDataURL(blob);
+  });
+}
+
+// Remplace le telechargement quand la page est pilotee par l'addon
+async function deliver(blob, name, asText) {
+  if (!LINKED) { download(blob, name); return name; }
+
+  if (asText) {
+    return await serverSave(name, await blob.text(), false);
+  }
+  return await serverSave(name, await blobToB64(blob), true);
+}
+
+// Charge le style du personnage, s'il en a un
+async function loadCharacterStyle() {
+  if (!LINKED) return false;
+
+  try {
+    const res = await fetch('/files/' + charPath('style.json') + '?t=' + Date.now());
+    if (!res.ok) return false;
+
+    const o = await res.json();
+    STYLE_IDS.forEach(id => { if (o[id] !== undefined) $(id).value = o[id]; });
+    if (o.brows !== undefined) $('brows').checked = o.brows;
+    if (o.teeth !== undefined) $('teeth').checked = o.teeth;
+    if (o.enabled) EXPR.forEach(x => {
+      if (o.enabled[x.id] !== undefined) enabled[x.id] = o.enabled[x.id];
+    });
+    return true;
+  } catch (err) {
+    return false;
+  }
+}
+
+async function initLinked() {
+  if (!LINKED) return;
+
+  // La zone dicte ce qui est edite
+  if (CTX.zone === 'eyes' || CTX.zone === 'mouth') {
+    $('partMode').value = CTX.zone === 'eyes' ? 'eyes' : 'mouth';
+  }
+
+  // Le prefixe reprend celui du sprite sheet existant (robot_eyes.json -> robot)
+  const base = CTX.sheet.replace(/\.json$/i, '');
+  const cut = base.lastIndexOf('_');
+  if (cut > 0) $('prefix').value = base.slice(0, cut);
+
+  const found = await loadCharacterStyle();
+
+  const banner = document.createElement('div');
+  banner.className = 'msg';
+  banner.style.color = 'var(--accent)';
+  banner.textContent = CTX.robot + ' - ' + (CTX.zone || 'zone ?')
+    + (CTX.expr ? ' - ' + CTX.expr : '')
+    + (found ? ' - style charge' : ' - style par defaut');
+  document.querySelector('.topbar').appendChild(banner);
+
+  renderAll();
+
+  // Met en evidence l'expression demandee
+  if (CTX.expr) {
+    const cells = [...document.querySelectorAll('.cell')];
+    const index = EXPR.findIndex(x => x.id === CTX.expr);
+    if (index >= 0 && cells[index]) {
+      cells[index].style.outline = '2px solid var(--accent)';
+      cells[index].scrollIntoView({ block: 'center' });
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Export sprite sheet + index JSON
+// ---------------------------------------------------------------------------
+// Dimensions d'une cellule et nom de la partie exportee
+function cellSize() {
+  const cw = Math.max(8, parseInt($('cellW').value) || 256);
+  if (srcMode() === 'draw') {
+    return { cw, ch: Math.max(8, parseInt($('cellH').value) || cw) };
+  }
+  const vb = viewBox();
+  return { cw, ch: Math.round(cw * vb.h / vb.w) };
+}
+
+function partName() {
+  return srcMode() === 'draw' ? 'dessins' : $('partMode').value;
+}
+
+function exportList() {
+  return activeList().filter(x => enabled[x.id]);
+}
+
+// Dessine une cellule (generee ou dessin) dans le contexte, en "contain"
+async function drawCell(ctx, item, i, s, x, y, cw, ch) {
+  if (srcMode() === 'draw') {
+    const iw = item.img.naturalWidth, ih = item.img.naturalHeight;
+    const k = Math.min(cw / iw, ch / ih);          // contain : rien n'est rogne
+    const dw = iw * k, dh = ih * k;
+    ctx.drawImage(item.img, x + (cw - dw) / 2, y + (ch - dh) / 2, dw, dh);
+    return;
+  }
+  const img = await svgToImage(svgFor(item, s, 'e' + i));
+  ctx.drawImage(img, x, y, cw, ch);
+}
+
+async function exportSheet() {
+  const s = style();
+  const list = exportList();
+  if (!list.length) { flash('Rien a exporter'); return; }
+
+  const { cw, ch } = cellSize();
+  const cols = Math.max(1, parseInt($('cols').value) || 8);
+  const rows = Math.ceil(list.length / cols);
+
+  const canvas = document.createElement('canvas');
+  canvas.width = cols * cw;
+  canvas.height = rows * ch;
+  const ctx = canvas.getContext('2d');
+
+  const frames = [];
+  for (let i = 0; i < list.length; i++) {
+    flash('Rendu ' + (i+1) + '/' + list.length + '...');
+    const cx = (i % cols) * cw, cy = Math.floor(i / cols) * ch;
+    await drawCell(ctx, list[i], i, s, cx, cy, cw, ch);
+    frames.push({ id: list[i].id, name: list[i].n || list[i].name, index: i,
+                  col: i % cols, row: Math.floor(i / cols),
+                  x: cx, y: cy, w: cw, h: ch,
+                  u0: cx / canvas.width,  v0: cy / canvas.height,
+                  u1: (cx + cw) / canvas.width, v1: (cy + ch) / canvas.height });
+  }
+
+  const prefix = ($('prefix').value || 'sprite').trim();
+  const base = prefix + '_' + partName();
+
+  const blob = await new Promise(r => canvas.toBlob(r, 'image/png'));
+
+  const meta = { image: base + '.png', part: partName(),
+                 source: srcMode() === 'draw' ? 'drawings' : 'generated',
+                 sheet: { w: canvas.width, h: canvas.height, cols, rows, cellW: cw, cellH: ch },
+                 style: srcMode() === 'draw' ? null : styleJSON(), frames };
+
+  try {
+    await deliver(blob, base + '.png', false);
+    await deliver(new Blob([JSON.stringify(meta, null, 2)],
+                           { type: 'application/json' }), base + '.json', true);
+
+    // Le style du personnage suit l'export
+    if (LINKED && srcMode() !== 'draw') {
+      await serverSave('style.json', JSON.stringify(styleJSON(), null, 2), false);
+    }
+  } catch (err) {
+    flash('Erreur d\'enregistrement : ' + err.message);
+    return;
+  }
+
+  flash(list.length + ' cellules ' + (LINKED ? 'enregistrees dans ' + CTX.robot
+                                             : 'exportees')
+        + ' (' + cols + 'x' + rows + ')');
+}
+
+async function exportSingles() {
+  const s = style();
+  const list = exportList();
+  if (!list.length) { flash('Rien a exporter'); return; }
+
+  const { cw, ch } = cellSize();
+  const prefix = ($('prefix').value || 'sprite').trim();
+
+  for (let i = 0; i < list.length; i++) {
+    flash('Export ' + (i+1) + '/' + list.length + '...');
+    const c = document.createElement('canvas');
+    c.width = cw; c.height = ch;
+    await drawCell(c.getContext('2d'), list[i], i, s, 0, 0, cw, ch);
+    const blob = await new Promise(r => c.toBlob(r, 'image/png'));
+    download(blob, prefix + '_' + partName() + '_' + String(i+1).padStart(2,'0') + '_' + list[i].id + '.png');
+    await new Promise(r => setTimeout(r, 120));   // laisse le navigateur suivre
+  }
+  flash(list.length + ' fichiers exportes');
+}
+
+// ---------------------------------------------------------------------------
+// Sauvegarde / chargement du style
+// ---------------------------------------------------------------------------
+const STYLE_IDS = ['stroke','inkColor','scleraColor','pupilColor','mouthColor','eyeShape',
+                   'eyeW','eyeH','eyeGap','pupil','shine','mW','mH','cellW','cols','prefix'];
+
+function styleJSON() {
+  const o = {};
+  STYLE_IDS.forEach(id => o[id] = $(id).value);
+  o.brows = $('brows').checked;
+  o.teeth = $('teeth').checked;
+  o.enabled = { ...enabled };
+  return o;
+}
+
+function saveStyle() {
+  const name = ($('prefix').value || 'style').trim() + '_style.json';
+  download(new Blob([JSON.stringify(styleJSON(), null, 2)], { type: 'application/json' }), name);
+  flash('Style sauvegarde');
+}
+
+function loadStyleFile(ev) {
+  const f = ev.target.files[0];
+  if (!f) return;
+  const r = new FileReader();
+  r.onload = e => {
+    try {
+      const o = JSON.parse(e.target.result);
+      STYLE_IDS.forEach(id => { if (o[id] !== undefined) $(id).value = o[id]; });
+      if (o.brows !== undefined) $('brows').checked = o.brows;
+      if (o.teeth !== undefined) $('teeth').checked = o.teeth;
+      if (o.enabled) EXPR.forEach(x => { if (o.enabled[x.id] !== undefined) enabled[x.id] = o.enabled[x.id]; });
+      renderAll();
+      flash('Style charge');
+    } catch (err) { flash('Fichier invalide'); }
+  };
+  r.readAsText(f);
+  ev.target.value = '';
+}
+
+onSrcChange();
+initLinked();
+</script>
+</body>
+</html>

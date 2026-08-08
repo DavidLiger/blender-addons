@@ -30,7 +30,8 @@ _server = None
 _server_thread = None
 
 CREATIONS = "creations"
-EXPR_MAKER = "expression-maker"
+# La page vit dans l'addon : une seule copie, versionnee avec le code
+WEB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "web")
 
 
 def maker_root():
@@ -72,9 +73,8 @@ class _ExprHandler(SimpleHTTPRequestHandler):
         return target if target.startswith(base) else None
 
     def translate_path(self, path):
-        # Les fichiers de l'editeur sont servis depuis expression-maker/
         clean = posixpath.normpath(urllib.parse.urlparse(path).path).lstrip("/")
-        return os.path.join(self.root, EXPR_MAKER, clean.replace("/", os.sep))
+        return os.path.join(WEB_DIR, clean.replace("/", os.sep))
 
     def do_GET(self):
         parsed = urllib.parse.urlparse(self.path)
@@ -239,9 +239,9 @@ class EXPR_OT_open_editor(bpy.types.Operator):
             self.report({'ERROR'}, "Serveur local : {}".format(msg))
             return {'CANCELLED'}
 
-        page = os.path.join(maker_root(), EXPR_MAKER, "expressions.html")
+        page = os.path.join(WEB_DIR, "expressions.html")
         if not os.path.isfile(page):
-            self.report({'ERROR'}, "expressions.html absent de {}".format(EXPR_MAKER))
+            self.report({'ERROR'}, "expressions.html absent de {}".format(WEB_DIR))
             return {'CANCELLED'}
 
         params = {
