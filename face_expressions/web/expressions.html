@@ -903,6 +903,13 @@ function buildFields() {
     eyes.appendChild(choice('e', 'glyph', "Forme speciale", GLYPHS));
     if (!editing.e.glyph) {
       F_EYES.forEach(f => eyes.appendChild(field('e', ...f)));
+    } else {
+      const note = document.createElement('div');
+      note.className = 'hint';
+      note.style.marginBottom = '6px';
+      note.textContent = "Forme speciale active : les reglages d'yeux sont "
+        + "conserves mais sans effet. Repasser sur (aucun) pour les retrouver.";
+      eyes.appendChild(note);
     }
     ['wink', 'tears', 'shake', 'asym'].forEach(k =>
       eyes.appendChild(toggle('e', k, k)));
