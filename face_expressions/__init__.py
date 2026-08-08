@@ -381,6 +381,32 @@ def _srgb_encode(a):
     return np.where(a <= 0.0031308, a * 12.92, 1.055 * np.power(np.clip(a, 0, None), 1/2.4) - 0.055)
 
 
+def _thumbs_outdated(scene):
+    """Vrai si les vignettes manquent ou datent d'avant la planche."""
+    if not scene.expr_items:
+        return False
+
+    if not any(_icon_for(scene.expr_name, i.ident) for i in scene.expr_items):
+        return True
+
+    img = scene.expr_image
+    if img is None:
+        return False
+
+    folder = _thumb_dir(scene.expr_name)
+    if not os.path.isdir(folder):
+        return True
+
+    try:
+        source = os.path.getmtime(bpy.path.abspath(img.filepath))
+        newest = max(os.path.getmtime(os.path.join(folder, f))
+                     for f in os.listdir(folder) if f.lower().endswith(".png"))
+    except Exception:
+        return False
+
+    return source > newest + 1.0
+
+
 def _slice_sheet(scene, report=None):
     """Decoupe le sprite sheet en une image par expression."""
     global _previews
@@ -525,7 +551,9 @@ def zone_material(obj, zone):
         if mat is not None and mat.name.startswith(prefix):
             return mat
 
-    return getattr(obj, "active_material", None)
+    # Pas de repli sur le materiau actif : on ecraserait celui d'un objet
+    # quelconque selectionne dans la scene
+    return None
 
 
 def _store_on_object(scene, obj):
@@ -673,8 +701,12 @@ def _auto_load_zone(scene, obj):
     if key in obj and (not path or bpy.path.abspath(scene.expr_json) == path):
         _fit_read(scene, obj)
         if _stored_sheet_name(obj) == scene.expr_name:
+            _sync_current_from_material(scene, force=True)
             return True                      # deja en place
-        return _restore_from_object(scene, obj)
+
+        ok = _restore_from_object(scene, obj)
+        _sync_current_from_material(scene, force=True)
+        return ok
     if not path:
         clear_sheet(scene)
         return False
@@ -717,6 +749,10 @@ def _sync_active_object():
     _last_active = name
 
     if obj is None or obj.type != 'MESH':
+        return
+
+    # Seuls les maillages portant un materiau de visage sont concernes
+    if not any(zone_material(obj, z) for z, _l, _d in FACE_ZONES):
         return
 
     _restoring = True
@@ -917,10 +953,10 @@ def _current_item(scene, obj):
     return next((i for i in scene.expr_items if i.col == col and i.row == row), None)
 
 
-def _sync_current_from_material(scene):
+def _sync_current_from_material(scene, force=False):
     global _restoring
 
-    if _restoring or not scene.expr_follow_frame:
+    if _restoring or (not force and not scene.expr_follow_frame):
         return
 
     obj = scene.expr_target
@@ -988,6 +1024,7 @@ class EXPR_OT_load_json(bpy.types.Operator):
     both: bpy.props.BoolProperty(default=True, options={'SKIP_SAVE'})
 
     def execute(self, context):
+        global _restoring
         scene = context.scene
         path = bpy.path.abspath(scene.expr_json)
 
@@ -1010,7 +1047,10 @@ class EXPR_OT_load_json(bpy.types.Operator):
         sheet = data.get("sheet", {})
         scene.expr_cols = int(sheet.get("cols", 1)) or 1
         scene.expr_rows = int(sheet.get("rows", 1)) or 1
-        scene.expr_name = os.path.basename(path)
+        # Deux personnages peuvent avoir des planches de meme nom : la cle du
+        # cache de vignettes doit les distinguer
+        owner = robot_from_path(path)
+        scene.expr_name = (owner + "_" if owner else "") + os.path.basename(path)
 
         scene.expr_items.clear()
         for fr in frames:
@@ -1021,10 +1061,15 @@ class EXPR_OT_load_json(bpy.types.Operator):
             item.row = int(fr.get("row", 0))
 
         # La valeur memorisee peut pointer une expression absente du nouveau sheet
+        # Remise a une valeur valide, sans declencher l'apercu automatique :
+        # il ecraserait la valeur animee que le realignement doit relire
+        _restoring = True
         try:
             scene.expr_current = scene.expr_items[0].ident
         except Exception:
             pass
+        finally:
+            _restoring = False
 
         img_msg = ""
         img_name = data.get("image", "")
@@ -1047,6 +1092,23 @@ class EXPR_OT_load_json(bpy.types.Operator):
             tex.image = scene.expr_image
 
         _load_cached_previews(scene)
+
+        # Vignettes absentes ou plus anciennes que la planche : on redecoupe
+        if scene.expr_image is not None and _thumbs_outdated(scene):
+            _previews.clear()
+            _slice_sheet(scene)
+
+        _sync_current_from_material(scene, force=True)
+
+        # Le sprite sheet de l'autre zone est relu aussi
+
+        # Planche jamais decoupee : on genere les vignettes maintenant
+        if scene.expr_image is not None and not any(
+                _icon_for(scene.expr_name, i.ident) for i in scene.expr_items):
+            _slice_sheet(scene)
+
+        # La liste se cale sur ce que le materiau affiche a la frame courante
+        _sync_current_from_material(scene, force=True)
 
         # Le sprite sheet de l'autre zone est relu aussi : une modification
         # dans l'editeur touche souvent les deux
@@ -1112,7 +1174,8 @@ class EXPR_OT_from_image(bpy.types.Operator):
                 item.col = col
                 item.row = row
 
-        scene.expr_name = img.name
+        owner = robot_from_path(img.filepath)
+        scene.expr_name = (owner + "_" if owner else "") + img.name
         _load_cached_previews(scene)
         msg = "{} cellule(s) - grille {}x{}".format(cols * rows, cols, rows)
         if names:
