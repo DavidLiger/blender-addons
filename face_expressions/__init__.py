@@ -666,15 +666,15 @@ def _auto_load_zone(scene, obj):
     if obj is None:
         return False
 
+    # Le personnage se deduit de l'objet, pas du JSON encore charge
+    path = find_sheet(robot_of(obj), current_zone(scene))
+
     key = data_key(scene)
-    if key in obj:
+    if key in obj and (not path or bpy.path.abspath(scene.expr_json) == path):
         _fit_read(scene, obj)
         if _stored_sheet_name(obj) == scene.expr_name:
             return True                      # deja en place
         return _restore_from_object(scene, obj)
-
-    # Le personnage se deduit de l'objet, pas du JSON encore charge
-    path = find_sheet(robot_of(obj), current_zone(scene))
     if not path:
         clear_sheet(scene)
         return False
@@ -788,14 +788,12 @@ FACE_ZONES = [('eyes', "Yeux", "Zone des yeux"),
 # ===========================================================================
 # Materiau
 # ===========================================================================
-def _find_nodes(obj):
+def _find_nodes_zone(obj, zone):
     if obj is None:
         return None, None, None
 
-    mat = zone_material(obj, current_zone())
-    if mat is None:
-        return None, None, None
-    if not mat.use_nodes or mat.node_tree is None:
+    mat = zone_material(obj, zone)
+    if mat is None or not mat.use_nodes or mat.node_tree is None:
         return None, None, None
 
     tree = mat.node_tree
@@ -804,6 +802,13 @@ def _find_nodes(obj):
         mapping = next((n for n in tree.nodes if n.type == 'MAPPING'), None)
     tex = next((n for n in tree.nodes if n.type == 'TEX_IMAGE'), None)
     return tree, mapping, tex
+
+
+def _find_nodes(obj):
+    if obj is None:
+        return None, None, None
+
+    return _find_nodes_zone(obj, current_zone())
 
 
 def _adjust_node(tree, create=False):
@@ -976,7 +981,11 @@ def _on_current_change(self, context):
 # ===========================================================================
 class EXPR_OT_load_json(bpy.types.Operator):
     bl_idname = "expr.load_json"
-    bl_label = "Charger le JSON"
+    bl_label = "Recharger les planches"
+    bl_description = ("Relit le sprite sheet du personnage : a utiliser apres une "
+                      "modification dans l'editeur")
+
+    both: bpy.props.BoolProperty(default=True, options={'SKIP_SAVE'})
 
     def execute(self, context):
         scene = context.scene
@@ -1038,6 +1047,28 @@ class EXPR_OT_load_json(bpy.types.Operator):
             tex.image = scene.expr_image
 
         _load_cached_previews(scene)
+
+        # Le sprite sheet de l'autre zone est relu aussi : une modification
+        # dans l'editeur touche souvent les deux
+        if self.both:
+            other = 'mouth' if current_zone(scene) == 'eyes' else 'eyes'
+            path2 = find_sheet(robot_of(scene.expr_target), other)
+            if path2:
+                img2 = None
+                try:
+                    with open(path2, "r", encoding="utf-8") as f:
+                        name2 = json.load(f).get("image", "")
+                    img_path2 = os.path.join(os.path.dirname(path2), name2)
+                    if name2 and os.path.isfile(img_path2):
+                        img2 = bpy.data.images.load(img_path2, check_existing=True)
+                        img2.reload()
+                except Exception:
+                    pass
+
+                tree2, map2, tex2 = _find_nodes_zone(scene.expr_target, other)
+                if tex2 is not None and img2 is not None:
+                    tex2.image = img2
+
         self.report({'INFO'}, "{} expression(s) - grille {}x{}{}".format(
             len(frames), scene.expr_cols, scene.expr_rows, img_msg))
         return {'FINISHED'}
