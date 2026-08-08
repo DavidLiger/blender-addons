@@ -105,6 +105,19 @@
   .grp{border:1px solid var(--border);border-radius:6px;padding:8px;margin-bottom:10px}
   .grp .t{font-size:.7rem;text-transform:uppercase;letter-spacing:.08em;
     color:var(--muted);margin-bottom:6px}
+  .picker{max-width:640px;max-height:85vh;overflow-y:auto;display:block;
+    background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:16px}
+  .picker h2{margin:0 0 12px;font-size:.9rem}
+  .pgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(110px,1fr));gap:10px}
+  .ptile{background:var(--panel-2);border:1px solid var(--border);border-radius:8px;
+    padding:8px;cursor:pointer;text-align:center}
+  .ptile:hover{border-color:var(--accent)}
+  .ptile.sel{box-shadow:inset 0 0 0 1px var(--accent);border-color:var(--accent)}
+  .ptile svg{width:100%;height:auto;background:#fff;border-radius:4px}
+  .ptile .pn{font-family:var(--mono);font-size:.66rem;color:var(--muted);
+    margin-top:5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .ptile .none{height:56px;display:flex;align-items:center;justify-content:center;
+    background:var(--panel);border-radius:4px;color:var(--muted);font-size:.7rem}
 </style>
 </head>
 <body>
@@ -284,7 +297,8 @@
           Commun a toute la serie</label>
 
         <div class="field"><label>Pupille</label>
-          <select id="assetPupil" onchange="renderAll()"><option value="">(procedurale)</option></select></div>
+          <select id="assetPupil" onchange="renderAll()" style="display:none"><option value="">(procedurale)</option></select>
+          <button class="btn sec" id="btnPupil" onclick="openPicker('pupil')">(procedurale)</button></div>
         <div class="row2">
           <div class="field"><label>Taille <span class="val" id="v-assetPupilScale"></span></label>
             <input type="range" id="assetPupilScale" min="0.3" max="3" step="0.05" value="1" oninput="renderAll()"></div>
@@ -294,7 +308,8 @@
         </div>
 
         <div class="field" style="margin-top:8px"><label>Sourcil</label>
-          <select id="assetBrow" onchange="renderAll()"><option value="">(procedural)</option></select></div>
+          <select id="assetBrow" onchange="renderAll()" style="display:none"><option value="">(procedural)</option></select>
+          <button class="btn sec" id="btnBrow" onclick="openPicker('brow')">(procedural)</button></div>
         <div class="row2">
           <div class="field"><label>Taille <span class="val" id="v-assetBrowScale"></span></label>
             <input type="range" id="assetBrowScale" min="0.3" max="3" step="0.05" value="1" oninput="renderAll()"></div>
@@ -391,6 +406,13 @@
         <div class="msg" id="edit-msg"></div>
       </div>
     </div>
+  </div>
+</div>
+
+<div class="ov" id="pick-ov" onclick="if(event.target===this) closePicker()">
+  <div class="picker">
+    <h2 id="pick-title">Choisir</h2>
+    <div class="pgrid" id="pick-grid"></div>
   </div>
 </div>
 
@@ -677,6 +699,67 @@ function fillAssetSelects() {
 
     if ([...sel.options].some(o => o.value === keep)) sel.value = keep;
   });
+
+  refreshAssetButtons();
+}
+
+// ---------------------------------------------------------------------------
+// Choix visuel d'un asset
+// ---------------------------------------------------------------------------
+const PICK = { pupil: { sel: 'assetPupil', btn: 'btnPupil', label: "Pupille" },
+               brow:  { sel: 'assetBrow',  btn: 'btnBrow',  label: "Sourcil" } };
+
+function assetLabel(name) {
+  return name ? name.replace(/^(pupil|brow)_/, '').replace(/\.(svg|png)$/i, '')
+              : '(procedural)';
+}
+
+function refreshAssetButtons() {
+  Object.entries(PICK).forEach(([slot, cfg]) => {
+    const btn = $(cfg.btn);
+    if (btn) btn.textContent = assetLabel($(cfg.sel).value);
+  });
+}
+
+function assetPreview(name, slot) {
+  const s = style();
+  const color = slot === 'pupil' ? s.pupilCol : s.inkBrow;
+  return `<svg viewBox="0 0 100 60">${assetAt(name, 50, 30, 72, color, 0, false)}</svg>`;
+}
+
+function openPicker(slot) {
+  const cfg = PICK[slot];
+  const current = $(cfg.sel).value;
+
+  $('pick-title').textContent = cfg.label;
+  const grid = $('pick-grid');
+  grid.innerHTML = '';
+
+  const tile = (name) => {
+    const el = document.createElement('div');
+    el.className = 'ptile' + (name === current ? ' sel' : '');
+    el.innerHTML = (name ? assetPreview(name, slot)
+                         : '<div class="none">procedural</div>')
+                 + `<div class="pn">${assetLabel(name)}</div>`;
+    el.onclick = () => choosePicker(slot, name);
+    grid.appendChild(el);
+  };
+
+  tile('');
+  Object.keys(ASSETS).filter(n => n.startsWith(slot + '_')).sort().forEach(tile);
+
+  $('pick-ov').classList.add('open');
+}
+
+function choosePicker(slot, name) {
+  $(PICK[slot].sel).value = name;
+  closePicker();
+  refreshAssetButtons();
+  renderAll();
+}
+
+function closePicker() {
+  $('pick-ov').classList.remove('open');
 }
 
 async function importAsset(ev, slot) {
@@ -1789,6 +1872,7 @@ async function applyContext(c) {
   // Relu a chaque fois : le fichier a pu changer depuis une autre session
   await loadAssets();
   await loadCharacterStyle();
+  refreshAssetButtons();
   await loadOverrides();
 
   // La couleur de la tete vient du materiau Blender : elle prime sur le style
@@ -2029,6 +2113,9 @@ function loadStyleFile(ev) {
 applyOverrides();
 onSrcChange();
 initLinked();
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') closePicker();
+})
 </script>
 </body>
 </html>
