@@ -14,6 +14,251 @@ import bpy.utils.previews
 import os
 import json
 import re
+import base64
+import posixpath
+import threading
+import urllib.parse
+import webbrowser
+from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
+
+# ===========================================================================
+# Serveur local
+# Sert expression-maker/ et le dossier des personnages, et accepte l'ecriture
+# de fichiers. Le navigateur n'a donc besoin d'aucune permission disque.
+# ===========================================================================
+_server = None
+_server_thread = None
+
+CREATIONS = "creations"
+EXPR_MAKER = "expression-maker"
+
+
+def maker_root():
+    """Racine ROBOTS, reprise de Robot Maker si l'addon est installe."""
+    try:
+        prefs = bpy.context.preferences.addons[__name__].preferences
+        if prefs.root:
+            return bpy.path.abspath(prefs.root)
+    except Exception:
+        pass
+
+    try:
+        addon = bpy.context.preferences.addons.get("robot_maker")
+        if addon and addon.preferences.root:
+            return bpy.path.abspath(addon.preferences.root)
+    except Exception:
+        pass
+
+    return ""
+
+
+def _server_port():
+    try:
+        return bpy.context.preferences.addons[__name__].preferences.port
+    except Exception:
+        return 8777
+
+
+class _ExprHandler(SimpleHTTPRequestHandler):
+    root = ""
+
+    def log_message(self, fmt, *args):
+        pass                                   # console Blender deja bavarde
+
+    def _under_root(self, relative):
+        """Chemin absolu, refuse s'il sort de la racine."""
+        base = os.path.normpath(self.root)
+        target = os.path.normpath(os.path.join(base, relative.replace("/", os.sep)))
+        return target if target.startswith(base) else None
+
+    def translate_path(self, path):
+        # Les fichiers de l'editeur sont servis depuis expression-maker/
+        clean = posixpath.normpath(urllib.parse.urlparse(path).path).lstrip("/")
+        return os.path.join(self.root, EXPR_MAKER, clean.replace("/", os.sep))
+
+    def do_GET(self):
+        parsed = urllib.parse.urlparse(self.path)
+
+        # /files/<chemin sous creations/> : assets et sprite sheets
+        if parsed.path.startswith("/files/"):
+            target = self._under_root(os.path.join(
+                CREATIONS, posixpath.normpath(parsed.path[7:]).lstrip("/")))
+            if target is None or not os.path.isfile(target):
+                self.send_error(404)
+                return
+
+            with open(target, "rb") as f:
+                payload = f.read()
+
+            self.send_response(200)
+            self.send_header("Content-Type", self.guess_type(target))
+            self.send_header("Content-Length", str(len(payload)))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(payload)
+            return
+
+        # /list/<chemin> : contenu d'un dossier, en JSON
+        if parsed.path.startswith("/list/"):
+            target = self._under_root(os.path.join(
+                CREATIONS, posixpath.normpath(parsed.path[6:]).lstrip("/")))
+            if target is None or not os.path.isdir(target):
+                self.send_error(404)
+                return
+
+            names = sorted(f for f in os.listdir(target)
+                           if os.path.isfile(os.path.join(target, f)))
+            self._json({"files": names})
+            return
+
+        SimpleHTTPRequestHandler.do_GET(self)
+
+    def do_POST(self):
+        if urllib.parse.urlparse(self.path).path != "/save":
+            self.send_error(404)
+            return
+
+        try:
+            size = int(self.headers.get("Content-Length", 0))
+            data = json.loads(self.rfile.read(size).decode("utf-8"))
+        except Exception as e:
+            self._json({"ok": False, "error": str(e)}, 400)
+            return
+
+        target = self._under_root(os.path.join(CREATIONS, data.get("path", "")))
+        if target is None:
+            self._json({"ok": False, "error": "chemin refuse"}, 403)
+            return
+
+        try:
+            os.makedirs(os.path.dirname(target), exist_ok=True)
+            if "b64" in data:
+                payload = base64.b64decode(data["b64"].split(",")[-1])
+                with open(target, "wb") as f:
+                    f.write(payload)
+            else:
+                with open(target, "w", encoding="utf-8") as f:
+                    f.write(data.get("text", ""))
+        except Exception as e:
+            self._json({"ok": False, "error": str(e)}, 500)
+            return
+
+        self._json({"ok": True, "path": target})
+
+    def _json(self, payload, status=200):
+        body = json.dumps(payload).encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+
+def start_server():
+    """Demarre le serveur si la racine existe. Retourne (ok, message)."""
+    global _server, _server_thread
+
+    if _server is not None:
+        return True, "deja demarre"
+
+    root = maker_root()
+    if not root or not os.path.isdir(root):
+        return False, "racine ROBOTS introuvable"
+
+    _ExprHandler.root = root
+    port = _server_port()
+
+    try:
+        _server = ThreadingHTTPServer(("127.0.0.1", port), _ExprHandler)
+    except Exception as e:
+        _server = None
+        return False, "port {} indisponible ({})".format(port, e)
+
+    _server_thread = threading.Thread(target=_server.serve_forever, daemon=True)
+    _server_thread.start()
+    return True, "http://127.0.0.1:{}".format(port)
+
+
+def stop_server():
+    global _server, _server_thread
+
+    if _server is not None:
+        try:
+            _server.shutdown()
+            _server.server_close()
+        except Exception:
+            pass
+    _server = None
+    _server_thread = None
+
+
+def robot_from_path(path):
+    """Nom du personnage deduit d'un chemin sous creations/<perso>/..."""
+    parts = os.path.normpath(bpy.path.abspath(path or "")).split(os.sep)
+    if CREATIONS in parts:
+        index = parts.index(CREATIONS)
+        if index + 1 < len(parts):
+            return parts[index + 1]
+    return ""
+
+
+class EXPR_Preferences(bpy.types.AddonPreferences):
+    bl_idname = __name__
+
+    root: bpy.props.StringProperty(
+        name="Dossier ROBOTS", subtype='DIR_PATH', default="",
+        description="Laisser vide pour reprendre celui de Robot Maker")
+    port: bpy.props.IntProperty(
+        name="Port du serveur local", default=8777, min=1024, max=65535)
+
+    def draw(self, context):
+        layout = self.layout
+        layout.prop(self, "root")
+        layout.prop(self, "port")
+
+        row = layout.row()
+        row.scale_y = 0.7
+        row.label(text="Serveur : " + ("actif" if _server is not None else "arrete"),
+                  icon='CHECKMARK' if _server is not None else 'DOT')
+
+
+class EXPR_OT_open_editor(bpy.types.Operator):
+    bl_idname = "expr.open_editor"
+    bl_label = "Editer les expressions"
+    bl_description = ("Ouvre expressions.html dans le navigateur, sur le sprite sheet "
+                      "du personnage. Les enregistrements reviennent directement "
+                      "dans son dossier")
+
+    expression: bpy.props.StringProperty(default="")
+
+    def execute(self, context):
+        scene = context.scene
+
+        ok, msg = start_server()
+        if not ok:
+            self.report({'ERROR'}, "Serveur local : {}".format(msg))
+            return {'CANCELLED'}
+
+        page = os.path.join(maker_root(), EXPR_MAKER, "expressions.html")
+        if not os.path.isfile(page):
+            self.report({'ERROR'}, "expressions.html absent de {}".format(EXPR_MAKER))
+            return {'CANCELLED'}
+
+        params = {
+            "robot": robot_from_path(scene.expr_json),
+            "zone": current_zone(scene),
+            "sheet": os.path.basename(bpy.path.abspath(scene.expr_json or "")),
+        }
+        if self.expression:
+            params["expr"] = self.expression
+
+        url = "http://127.0.0.1:{}/expressions.html?{}".format(
+            _server_port(), urllib.parse.urlencode(
+                {k: v for k, v in params.items() if v}))
+
+        webbrowser.open(url)
+        self.report({'INFO'}, url)
+        return {'FINISHED'}
 
 
 # ===========================================================================
@@ -981,6 +1226,9 @@ class EXPR_PT_panel(bpy.types.Panel):
         if not scene.expr_auto_preview:
             op = row.operator("expr.apply", text="Apercu")
             op.keyframe = False
+            
+        row.operator("expr.open_editor", text="",
+                     icon='GREASEPENCIL').expression = scene.expr_current
 
         if scene.expr_items and mapping is None:
             warn = layout.row()
@@ -992,6 +1240,8 @@ class EXPR_PT_panel(bpy.types.Panel):
 # Enregistrement
 # ===========================================================================
 classes = (
+    EXPR_Preferences,
+    EXPR_OT_open_editor,
     EXPR_Item,
     EXPR_OT_load_json,
     EXPR_OT_from_image,
@@ -1060,6 +1310,7 @@ def register():
 
 def unregister():
     global _previews
+    stop_server()
     if _previews is not None:
         bpy.utils.previews.remove(_previews)
         _previews = None
