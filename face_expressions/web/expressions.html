@@ -1505,6 +1505,7 @@ async function applyContext(c) {
   CTX.zone = c.zone || CTX.zone;
   CTX.sheet = c.sheet || CTX.sheet;
   CTX.expr = c.expr || '';
+  CTX.head = c.head || CTX.head || '';
 
   if (CTX.zone === 'eyes' || CTX.zone === 'mouth') {
     $('partMode').value = CTX.zone;
@@ -1517,6 +1518,9 @@ async function applyContext(c) {
   // Relu a chaque fois : le fichier a pu changer depuis une autre session
   await loadCharacterStyle();
   await loadOverrides();
+
+  // La couleur de la tete vient du materiau Blender : elle prime sur le style
+  if (CTX.head) $('lidColor').value = CTX.head;
 
   onSrcChange();
 
@@ -1552,6 +1556,8 @@ async function initLinked() {
   const found = await loadCharacterStyle();
   await loadOverrides();
   await loadAssets();
+  CTX.head = PARAMS.get('head') || '';
+  if (CTX.head) $('lidColor').value = CTX.head;
 
   const banner = document.createElement('div');
   banner.className = 'msg';

@@ -232,6 +232,24 @@ class EXPR_Preferences(bpy.types.AddonPreferences):
         row.label(text="Serveur : " + ("actif" if _server is not None else "arrete"),
                   icon='CHECKMARK' if _server is not None else 'DOT')
 
+def _head_hex(obj):
+    """Base Color du materiau de zone, en hexadecimal sRGB."""
+    tree, mapping, tex = _find_nodes(obj)
+    if tree is None:
+        return ""
+
+    node = next((n for n in tree.nodes if n.type == 'BSDF_PRINCIPLED'), None)
+    if node is None:
+        return ""
+
+    def enc(v):
+        v = max(0.0, min(1.0, v))
+        v = v * 12.92 if v <= 0.0031308 else 1.055 * (v ** (1 / 2.4)) - 0.055
+        return int(round(v * 255))
+
+    c = node.inputs["Base Color"].default_value
+    return "#{:02X}{:02X}{:02X}".format(enc(c[0]), enc(c[1]), enc(c[2]))
+
 
 class EXPR_OT_open_editor(bpy.types.Operator):
     bl_idname = "expr.open_editor"
@@ -263,6 +281,7 @@ class EXPR_OT_open_editor(bpy.types.Operator):
             "zone": current_zone(scene),
             "sheet": os.path.basename(bpy.path.abspath(scene.expr_json or "")),
             "expr": current if current and current != 'NONE' else "",
+            "head": _head_hex(scene.expr_target or context.active_object),
         }
 
         _ctx = dict(params, serial=_ctx.get("serial", 0) + 1)
@@ -599,6 +618,7 @@ def _auto_load_zone(scene, obj):
 
     key = data_key(scene)
     if key in obj:
+        _fit_read(scene, obj)
         if _stored_sheet_name(obj) == scene.expr_name:
             return True                      # deja en place
         return _restore_from_object(scene, obj)
@@ -739,6 +759,79 @@ def _find_nodes(obj):
         mapping = next((n for n in tree.nodes if n.type == 'MAPPING'), None)
     tex = next((n for n in tree.nodes if n.type == 'TEX_IMAGE'), None)
     return tree, mapping, tex
+
+
+def _adjust_node(tree, create=False):
+    """Noeud de cadrage, insere avant celui des cellules. Il agit sur
+    l'ensemble du sprite sans interferer avec le choix de l'expression."""
+    node = tree.nodes.get("FACE_Adjust")
+    if node is not None or not create:
+        return node
+
+    cell = tree.nodes.get("EXPR_Mapping")
+    if cell is None:
+        return None
+
+    node = tree.nodes.new('ShaderNodeMapping')
+    node.name = "FACE_Adjust"
+    node.label = "Cadrage"
+    node.location = (cell.location.x - 240, cell.location.y - 170)
+
+    if cell.inputs['Vector'].is_linked:
+        tree.links.new(cell.inputs['Vector'].links[0].from_socket,
+                       node.inputs['Vector'])
+    tree.links.new(node.outputs['Vector'], cell.inputs['Vector'])
+    return node
+
+
+def _fit_update(self, context):
+    scene = context.scene
+    tree, mapping, tex = _find_nodes(scene.expr_target or context.active_object)
+    if tree is None:
+        return
+
+    node = _adjust_node(tree, create=True)
+    if node is None:
+        return
+
+    node.inputs[3].default_value = (1.0 / max(.05, scene.expr_fit_w),
+                                    1.0 / max(.05, scene.expr_fit_h), 1.0)
+    node.inputs[1].default_value = (-scene.expr_off_x, -scene.expr_off_y, 0.0)
+
+
+def _fit_read(scene, obj):
+    """Recopie le cadrage du materiau dans les curseurs."""
+    global _restoring
+    tree, mapping, tex = _find_nodes(obj)
+    node = _adjust_node(tree) if tree is not None else None
+    if node is None:
+        return
+
+    _restoring = True
+    try:
+        sc = node.inputs[3].default_value
+        lo = node.inputs[1].default_value
+        scene.expr_fit_w = 1.0 / max(.05, sc[0])
+        scene.expr_fit_h = 1.0 / max(.05, sc[1])
+        scene.expr_off_x = -lo[0]
+        scene.expr_off_y = -lo[1]
+    finally:
+        _restoring = False
+
+
+class EXPR_OT_fit_reset(bpy.types.Operator):
+    bl_idname = "expr.fit_reset"
+    bl_label = "Recadrer"
+    bl_description = "Remet le sprite a sa taille et sa position d'origine"
+
+    def execute(self, context):
+        scene = context.scene
+        scene.expr_fit_w = 1.0
+        scene.expr_fit_h = 1.0
+        scene.expr_off_x = 0.0
+        scene.expr_off_y = 0.0
+        _fit_update(self, context)
+        return {'FINISHED'}
 
 
 def _set_constant(tree, mapping, frame):
@@ -1215,6 +1308,19 @@ class EXPR_PT_panel(bpy.types.Panel):
         row.prop(scene, "expr_pixel")
         layout.operator("expr.setup", icon='NODETREE')
 
+        box = layout.box()
+        row = box.row(align=True)
+        row.label(text="Cadrage du sprite", icon='MOD_UVPROJECT')
+        row.operator("expr.fit_reset", text="", icon='LOOP_BACK')
+
+        col = box.column(align=True)
+        r = col.row(align=True)
+        r.prop(scene, "expr_fit_w")
+        r.prop(scene, "expr_fit_h")
+        r = col.row(align=True)
+        r.prop(scene, "expr_off_x")
+        r.prop(scene, "expr_off_y")
+
         layout.separator()
 
         # --- Choix de l'expression ---
@@ -1300,6 +1406,7 @@ classes = (
     EXPR_OT_reload,
     EXPR_OT_forget,
     EXPR_PT_panel,
+    EXPR_OT_fit_reset,
 )
 
 
@@ -1324,6 +1431,14 @@ def register():
     S.expr_rows = bpy.props.IntProperty(default=1, min=1)
     S.expr_current = bpy.props.EnumProperty(
         name="Expression", items=_enum_items, update=_on_current_change)
+    S.expr_fit_w = bpy.props.FloatProperty(
+        name="Largeur", default=1.0, min=.05, max=8.0, update=_fit_update)
+    S.expr_fit_h = bpy.props.FloatProperty(
+        name="Hauteur", default=1.0, min=.05, max=8.0, update=_fit_update)
+    S.expr_off_x = bpy.props.FloatProperty(
+        name="Horizontal", default=0.0, min=-3.0, max=3.0, update=_fit_update)
+    S.expr_off_y = bpy.props.FloatProperty(
+        name="Vertical", default=0.0, min=-3.0, max=3.0, update=_fit_update)
     S.expr_follow_frame = bpy.props.BoolProperty(
         name="Suivre la timeline", default=True)
     S.expr_thumbs_view = bpy.props.BoolProperty(
@@ -1378,7 +1493,8 @@ def unregister():
     for prop in ("expr_follow_frame", "expr_thumbs_scale", "expr_thumbs_view", "expr_auto_preview",
                  "expr_follow_selection", "expr_pixel", "expr_emit", "expr_target",
                  "expr_image", "expr_source", "expr_current", "expr_rows",
-                 "expr_cols", "expr_name", "expr_json", "expr_zone", "expr_items"):
+                 "expr_cols", "expr_name", "expr_json", "expr_zone", "expr_items",
+                 "expr_fit_w", "expr_fit_h", "expr_off_x", "expr_off_y",):
         if hasattr(S, prop):
             delattr(S, prop)
 
