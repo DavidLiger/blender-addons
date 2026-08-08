@@ -77,6 +77,30 @@
             text-align:center;margin-top:4px;white-space:nowrap;overflow:hidden;
             text-overflow:ellipsis}
   .cell.off .nm{text-decoration:line-through}
+  .cell .edit{position:absolute;top:4px;right:4px;width:20px;height:20px;
+    border:1px solid var(--border);background:var(--panel-2);color:var(--muted);
+    border-radius:4px;font-size:.7rem;cursor:pointer;line-height:1;padding:0;
+    display:none}
+  .cell{position:relative}
+  .cell:hover .edit{display:block}
+  .cell .edit:hover{color:var(--accent);border-color:var(--accent)}
+  .cell.custom{box-shadow:inset 0 0 0 1px var(--accent)}
+
+  .ov{position:fixed;inset:0;background:rgba(0,0,0,.6);display:none;
+    align-items:center;justify-content:center;padding:20px;z-index:100}
+  .ov.open{display:flex}
+  .box{background:var(--panel);border:1px solid var(--border);border-radius:10px;
+    padding:16px;width:100%;max-width:820px;max-height:88vh;overflow:hidden;
+    display:grid;grid-template-columns:1fr 320px;gap:16px}
+  @media(max-width:760px){.box{grid-template-columns:1fr}}
+  .box .preview{background:#fff;border-radius:8px;display:flex;
+    align-items:center;justify-content:center;padding:12px}
+  .box .preview svg{width:100%;height:auto}
+  .box .tools{overflow-y:auto;padding-right:4px}
+  .box h2{margin:0 0 10px;font-size:.9rem}
+  .grp{border:1px solid var(--border);border-radius:6px;padding:8px;margin-bottom:10px}
+  .grp .t{font-size:.7rem;text-transform:uppercase;letter-spacing:.08em;
+    color:var(--muted);margin-bottom:6px}
 </style>
 </head>
 <body>
@@ -218,6 +242,20 @@
     <div class="sheet" id="sheet"></div>
   </div>
 
+</div>
+
+<div class="ov" id="edit-ov" onclick="if(event.target===this) closeEditor()">
+  <div class="box">
+    <div class="preview" id="edit-preview"></div>
+    <div class="tools">
+      <h2 id="edit-title">Expression</h2>
+      <div id="edit-fields"></div>
+      <button class="btn" onclick="saveOverride()">Enregistrer</button>
+      <button class="btn sec" onclick="resetOverride()">Revenir a l'origine</button>
+      <button class="btn sec" onclick="closeEditor()">Fermer</button>
+      <div class="msg" id="edit-msg"></div>
+    </div>
+  </div>
 </div>
 
 <script>
@@ -689,12 +727,259 @@ function renderAll() {
     const cell = document.createElement('div');
     cell.className = 'cell' + (enabled[x.id] ? '' : ' off');
     cell.onclick = () => { enabled[x.id] = !enabled[x.id]; renderAll(); };
+    if (overrides[x.id]) cell.classList.add('custom');
     cell.innerHTML = svgFor(x, s, i) + `<div class="nm">${x.n}</div>`;
+
+    const pen = document.createElement('button');
+    pen.className = 'edit';
+    pen.textContent = '\u270E';
+    pen.title = 'Editer cette expression';
+    pen.onclick = ev => { ev.stopPropagation(); openEditor(x.id); };
+    cell.appendChild(pen);
+
     sheet.appendChild(cell);
   });
 
   const on = EXPR.filter(x => enabled[x.id]).length;
   $('count').textContent = on + ' / ' + EXPR.length + ' expression(s) selectionnee(s)';
+}
+
+// ---------------------------------------------------------------------------
+// Editeur d'expression
+// Le fichier de base n'est jamais modifie : seules les differences sont
+// enregistrees, par personnage, dans overrides.json.
+// ---------------------------------------------------------------------------
+const BASE = JSON.parse(JSON.stringify(EXPR));
+let overrides = {};
+let editing = null;
+
+const GLYPHS = ['', 'happy', 'sad', 'closed', 'x', 'angry',
+                'heart', 'star', 'spiral', 'scan', 'off'];
+const MOUTHS = ['line', 'curve', 'wave', 'o', 'grit', 'open'];
+
+// [cle, libelle, min, max, pas, defaut]
+const F_EYES = [
+  ['open', "Ouverture", 0, 1, .05, 1],
+  ['tilt', "Inclinaison", -30, 30, 1, 0],
+  ['lidBot', "Paupiere basse", 0, 1, .05, 0],
+  ['px', "Regard horizontal", -1, 1, .05, 0],
+  ['py', "Regard vertical", -1, 1, .05, 0],
+  ['scale', "Taille", .5, 1.6, .05, 1],
+  ['pupil', "Pupille", .1, 1, .05, undefined],
+];
+const F_BROW = [
+  ['a', "Angle", -35, 35, 1, 0],
+  ['y', "Hauteur", -10, 10, .5, 0],
+];
+const F_MOUTH = [
+  ['curve', "Courbure", -1, 1, .05, 0],
+  ['w', "Largeur", .3, 1.6, .05, 1],
+  ['h', "Hauteur", .3, 1.8, .05, 1],
+  ['open', "Ouverture", 0, 1, .05, 0],
+  ['tilt', "Inclinaison", -25, 25, 1, 0],
+];
+
+function applyOverrides() {
+  EXPR.forEach((x, i) => {
+    const src = BASE[i];
+    const ov = overrides[x.id];
+    x.e = { ...src.e, ...(ov && ov.e || {}) };
+    x.b = { ...src.b, ...(ov && ov.b || {}) };
+    x.m = { ...src.m, ...(ov && ov.m || {}) };
+  });
+}
+
+function openEditor(id) {
+  editing = EXPR.find(x => x.id === id);
+  if (!editing) return;
+
+  $('edit-title').textContent = editing.n;
+  $('edit-msg').textContent = '';
+  buildFields();
+  refreshEditor();
+  $('edit-ov').classList.add('open');
+}
+
+function closeEditor() {
+  $('edit-ov').classList.remove('open');
+  editing = null;
+}
+
+function field(group, key, label, min, max, step, def) {
+  const target = editing[group];
+  const value = target[key] !== undefined ? target[key] : def;
+
+  const wrap = document.createElement('div');
+  wrap.className = 'field';
+  wrap.innerHTML = `<label>${label} <span class="val"></span></label>`;
+
+  const input = document.createElement('input');
+  input.type = 'range';
+  input.min = min; input.max = max; input.step = step;
+  input.value = (value === undefined ? (min + max) / 2 : value);
+
+  const out = wrap.querySelector('.val');
+  out.textContent = input.value;
+
+  input.oninput = () => {
+    target[key] = parseFloat(input.value);
+    out.textContent = input.value;
+    refreshEditor();
+  };
+
+  wrap.appendChild(input);
+  return wrap;
+}
+
+function toggle(group, key, label) {
+  const target = editing[group];
+  const wrap = document.createElement('div');
+  wrap.className = 'field';
+
+  const lab = document.createElement('label');
+  lab.style.color = 'var(--text)';
+
+  const input = document.createElement('input');
+  input.type = 'checkbox';
+  input.style.width = 'auto';
+  input.checked = !!target[key];
+  input.onchange = () => {
+    if (input.checked) target[key] = 1; else delete target[key];
+    refreshEditor();
+  };
+
+  lab.appendChild(input);
+  lab.appendChild(document.createTextNode(' ' + label));
+  wrap.appendChild(lab);
+  return wrap;
+}
+
+function choice(group, key, label, values) {
+  const target = editing[group];
+  const wrap = document.createElement('div');
+  wrap.className = 'field';
+  wrap.innerHTML = `<label>${label}</label>`;
+
+  const sel = document.createElement('select');
+  values.forEach(v => {
+    const opt = document.createElement('option');
+    opt.value = v;
+    opt.textContent = v || '(aucun)';
+    if ((target[key] || '') === v) opt.selected = true;
+    sel.appendChild(opt);
+  });
+
+  sel.onchange = () => {
+    if (sel.value) target[key] = sel.value; else delete target[key];
+    buildFields();
+    refreshEditor();
+  };
+
+  wrap.appendChild(sel);
+  return wrap;
+}
+
+function buildFields() {
+  const host = $('edit-fields');
+  host.innerHTML = '';
+
+  const mk = (title) => {
+    const g = document.createElement('div');
+    g.className = 'grp';
+    g.innerHTML = `<div class="t">${title}</div>`;
+    host.appendChild(g);
+    return g;
+  };
+
+  const eyes = mk("Yeux");
+  eyes.appendChild(choice('e', 'glyph', "Forme speciale", GLYPHS));
+  if (!editing.e.glyph) {
+    F_EYES.forEach(f => eyes.appendChild(field('e', ...f)));
+  }
+  ['wink', 'tears', 'shake', 'asym'].forEach(k =>
+    eyes.appendChild(toggle('e', k, k)));
+
+  const brow = mk("Sourcils");
+  F_BROW.forEach(f => brow.appendChild(field('b', ...f)));
+  brow.appendChild(toggle('b', 'asym', "asymetrique"));
+
+  const mouth = mk("Bouche");
+  mouth.appendChild(choice('m', 't', "Type", MOUTHS));
+  F_MOUTH.forEach(f => mouth.appendChild(field('m', ...f)));
+  ['teeth', 'tongue'].forEach(k => mouth.appendChild(toggle('m', k, k)));
+}
+
+function refreshEditor() {
+  if (!editing) return;
+  $('edit-preview').innerHTML = svgFor(editing, style(), 'edit');
+  renderAll();
+}
+
+function diffFrom(base, current) {
+  const out = {};
+  Object.keys(current).forEach(k => {
+    if (JSON.stringify(current[k]) !== JSON.stringify(base[k])) out[k] = current[k];
+  });
+  Object.keys(base).forEach(k => {
+    if (!(k in current)) out[k] = undefined;
+  });
+  return Object.keys(out).length ? out : null;
+}
+
+async function saveOverride() {
+  if (!editing) return;
+
+  const src = BASE.find(x => x.id === editing.id);
+  const entry = {};
+  ['e', 'b', 'm'].forEach(g => {
+    const d = diffFrom(src[g], editing[g]);
+    if (d) entry[g] = d;
+  });
+
+  if (Object.keys(entry).length) overrides[editing.id] = entry;
+  else delete overrides[editing.id];
+
+  if (!LINKED) {
+    $('edit-msg').textContent = 'Retouche gardee (session seulement)';
+    renderAll();
+    return;
+  }
+
+  try {
+    await serverSave('overrides.json', JSON.stringify(overrides, null, 1), false);
+    $('edit-msg').textContent = 'Enregistre';
+  } catch (err) {
+    $('edit-msg').textContent = 'Erreur : ' + err.message;
+  }
+  renderAll();
+}
+
+async function resetOverride() {
+  if (!editing) return;
+  delete overrides[editing.id];
+  applyOverrides();
+  editing = EXPR.find(x => x.id === editing.id);
+
+  buildFields();
+  refreshEditor();
+
+  if (LINKED) {
+    try {
+      await serverSave('overrides.json', JSON.stringify(overrides, null, 1), false);
+    } catch (err) { /* ignore */ }
+  }
+  $('edit-msg').textContent = 'Revenu a l\'origine';
+}
+
+async function loadOverrides() {
+  if (!LINKED) return;
+  try {
+    const res = await fetch('/files/' + charPath('overrides.json') + '?t=' + Date.now());
+    if (res.ok) overrides = await res.json();
+  } catch (err) {
+    overrides = {};
+  }
+  applyOverrides();
 }
 
 function setAllOn(v) { activeList().forEach(x => enabled[x.id] = v); renderAll(); }
@@ -731,6 +1016,7 @@ function flash(msg) { $('exportMsg').textContent = msg; }
 // ---------------------------------------------------------------------------
 const PARAMS = new URLSearchParams(location.search);
 const LINKED = location.protocol.startsWith('http') && PARAMS.has('robot');
+console.log('[expr] LINKED =', LINKED, location.href);
 
 const CTX = {
   robot: PARAMS.get('robot') || '',
@@ -813,6 +1099,7 @@ async function initLinked() {
   if (cut > 0) $('prefix').value = base.slice(0, cut);
 
   const found = await loadCharacterStyle();
+  await loadOverrides();
 
   const banner = document.createElement('div');
   banner.className = 'msg';
@@ -825,14 +1112,8 @@ async function initLinked() {
   renderAll();
 
   // Met en evidence l'expression demandee
-  if (CTX.expr) {
-    const cells = [...document.querySelectorAll('.cell')];
-    const index = EXPR.findIndex(x => x.id === CTX.expr);
-    if (index >= 0 && cells[index]) {
-      cells[index].style.outline = '2px solid var(--accent)';
-      cells[index].scrollIntoView({ block: 'center' });
-    }
-  }
+  // L'expression demandee s'ouvre directement dans l'editeur
+  if (CTX.expr && EXPR.some(x => x.id === CTX.expr)) openEditor(CTX.expr);
 }
 
 // ---------------------------------------------------------------------------
@@ -915,6 +1196,7 @@ async function exportSheet() {
       await serverSave('style.json', JSON.stringify(styleJSON(), null, 2), false);
     }
   } catch (err) {
+    console.error('[expr] save', err);
     flash('Erreur d\'enregistrement : ' + err.message);
     return;
   }
