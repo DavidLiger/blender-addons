@@ -200,10 +200,18 @@
         </div>
         <div class="field"><label>Ombre de la sclere <span class="val" id="v-scleraShade"></span></label>
           <input type="range" id="scleraShade" min="0" max="1" step="0.05" value="0" oninput="renderAll()"></div>
+        <div class="field"><label>Position de l'ombre <span class="val" id="v-shadePos"></span></label>
+          <input type="range" id="shadePos" min="0" max="1" step="0.05" value="1" oninput="renderAll()"></div>
         <div class="field"><label>Cils <span class="val" id="v-lashes"></span></label>
           <input type="range" id="lashes" min="0" max="1" step="0.05" value="0" oninput="renderAll()"></div>
         <div class="field"><label>Couleur des paupieres</label>
           <input type="color" id="lidColor" value="#c9c9cc" oninput="renderAll()"></div>
+        <div class="row2">
+          <div class="field"><label>Pattes d'oie <span class="val" id="v-crow"></span></label>
+            <input type="range" id="crow" min="0" max="1" step="0.05" value="0" oninput="renderAll()"></div>
+          <div class="field"><label>Cernes <span class="val" id="v-bags"></span></label>
+            <input type="range" id="bags" min="0" max="1" step="0.05" value="0" oninput="renderAll()"></div>
+        </div>
         <div class="field"><label><input type="checkbox" id="brows" checked onchange="renderAll()" style="width:auto"> Sourcils</label></div>
         <div class="row2">
           <div class="field"><label>Taille sourcils <span class="val" id="v-browScale"></span></label>
@@ -226,6 +234,12 @@
             <input type="range" id="mH" min="4" max="40" step="1" value="18" oninput="renderAll()"></div>
         </div>
         <div class="field"><label><input type="checkbox" id="teeth" checked onchange="renderAll()" style="width:auto"> Dents quand la bouche est ouverte</label></div>
+        <div class="row2">
+          <div class="field"><label>Levres <span class="val" id="v-lips"></span></label>
+            <input type="range" id="lips" min="0" max="4" step="0.1" value="0" oninput="renderAll()"></div>
+          <div class="field"><label>Couleur levres</label>
+            <input type="color" id="lipColor" value="#c26b6b" oninput="renderAll()"></div>
+        </div>
       </div>
     </div>
 
@@ -678,7 +692,9 @@ function style() {
     iris: num('iris'), irisCol: $('irisColor').value,
     browScale: num('browScale'), browGap: num('browGap'), browRise: num('browRise'),
     lidCol: $('lidColor').value,
-    scleraShade: num('scleraShade'), lashes: num('lashes'),
+    lips: num('lips'), lipCol: $('lipColor').value,
+    crow: num('crow'), bags: num('bags'),
+    scleraShade: num('scleraShade'), shadePos: num('shadePos'), lashes: num('lashes'),
     wobble: num('wobble'), wobbleScale: num('wobbleScale'), inkVar: num('inkVar'),
     aPupil: $('assetPupil').value, aPupilK: num('assetPupilScale'),
     aBrow: $('assetBrow').value, aBrowK: num('assetBrowScale'),
@@ -694,7 +710,8 @@ function syncLabels() {
    ['wobble','v-wobble'],['wobbleScale','v-wobbleScale'],['inkVar','v-inkVar'],
    ['assetPupilScale','v-assetPupilScale'],['assetBrowScale','v-assetBrowScale'],
    ['assetBrowRot','v-assetBrowRot'],['browScale','v-browScale'],
-   ['browGap','v-browGap'],['browRise','v-browRise']]
+   ['browGap','v-browGap'],['browRise','v-browRise'],
+   ['lips','v-lips'],['crow','v-crow'],['bags','v-bags'],['shadePos','v-shadePos']]
    .forEach(([src,dst]) => { const el = $(dst); if (el) el.textContent = $(src).value; });
 }
 
@@ -801,7 +818,8 @@ function drawEyes(s, e, b, uid) {
 
     // Sclere : ombre portee par la paupiere, du haut vers le bas
     if (s.scleraShade > 0) {
-      out += `<radialGradient id="${grad}" cx="50%" cy="85%" r="85%">
+      out += `<radialGradient id="${grad}" cx="50%"
+                cy="${(15 + s.shadePos * 70).toFixed(0)}%" r="85%">
                 <stop offset="55%" stop-color="${s.sclera}"/>
                 <stop offset="100%" stop-color="${s.ink}" stop-opacity="${s.scleraShade * .55}"/>
               </radialGradient>`;
@@ -857,16 +875,47 @@ function drawEyes(s, e, b, uid) {
              .replace('/>', ` fill="none" stroke="${s.ink}" stroke-width="${s.stroke}"/>`);
 
     // Cils : trois traits sur le bord superieur externe
+    // Cils repartis sur tout le bord superieur, plus longs vers l'exterieur
     if (s.lashes > 0) {
-      const len = ry * .55 * s.lashes;
-      for (let k = 0; k < 3; k++) {
-        const a = -Math.PI * (0.62 + k * 0.13) * (side > 0 ? 1 : 1);
-        const bx = cx + Math.cos(a) * rx * side;
-        const by = cy + Math.sin(a) * oy;
+      const n = 5;
+      for (let k = 0; k < n; k++) {
+        const t = k / (n - 1);                      // 0 interieur, 1 exterieur
+        const ang = Math.PI * (1 - t * .78) * -1;   // du sommet vers le coin
+        const bx = cx + Math.cos(ang) * rx * -side;
+        const by = cy + Math.sin(ang) * ry;
+        const len = ry * (.3 + .45 * t) * s.lashes;
+
         out += `<line x1="${bx}" y1="${by}"
-                  x2="${bx + Math.cos(a) * len * side}" y2="${by + Math.sin(a) * len}"
-                  stroke="${s.ink}" stroke-width="${s.stroke * .8}" stroke-linecap="round"/>`;
+                  x2="${bx + Math.cos(ang) * len * -side}"
+                  y2="${by + Math.sin(ang) * len}"
+                  stroke="${s.inkEye}" stroke-width="${s.stroke * .8}"
+                  stroke-linecap="round"/>`;
       }
+    }
+
+    // Pattes d'oie a l'angle externe
+    if (s.crow > 0) {
+      // Elles demarrent a distance du contour : l'espace vide fait la lecture
+      const ox = cx + side * rx * 1.35;
+      const len = rx * .4 * s.crow;
+      [-.35, 0, .35].forEach((a, k) => {
+        out += `<path d="M ${ox} ${cy + ry * a * .5}
+                         q ${side * len * .6} ${a * len * .5}
+                           ${side * len} ${a * len}"
+                  fill="none" stroke="${s.inkEye}"
+                  stroke-width="${s.stroke * .55}" stroke-linecap="round"
+                  opacity="${.5 + s.crow * .5}"/>`;
+      });
+    }
+
+    // Cerne sous l'oeil
+    if (s.bags > 0) {
+      const by2 = cy + ry * (1.15 + s.bags * .25);
+      out += `<path d="M ${cx - rx * .85} ${by2 - ry * .18}
+                       Q ${cx} ${by2 + ry * .3 * s.bags} ${cx + rx * .85} ${by2 - ry * .18}"
+                fill="none" stroke="${s.inkEye}"
+                stroke-width="${s.stroke * .6}" stroke-linecap="round"
+                opacity="${.35 + s.bags * .5}"/>`;
     }
 
     if (e.tears)
@@ -905,6 +954,34 @@ function drawEyes(s, e, b, uid) {
 // ---------------------------------------------------------------------------
 // Dessin de la bouche
 // ---------------------------------------------------------------------------
+// Les levres suivent le trace par construction : chaque contour recoit une
+// passe plus large posee dessous, quel que soit le type de bouche.
+function lipPass(markup, s) {
+  if (!s.lips) return markup;
+
+  const doc = new DOMParser().parseFromString(
+    '<svg xmlns="http://www.w3.org/2000/svg">' + markup + '</svg>', 'image/svg+xml');
+  const svg = doc.documentElement;
+  if (svg.querySelector('parsererror')) return markup;
+
+  svg.querySelectorAll('path,line,polyline,ellipse,rect,circle').forEach(el => {
+    const stroke = el.getAttribute('stroke');
+    const width = parseFloat(el.getAttribute('stroke-width')
+      || (el.style && el.style.strokeWidth) || 0);
+    if (!stroke || stroke === 'none' || !width) return;
+
+    const lip = el.cloneNode(false);
+    lip.setAttribute('fill', 'none');
+    lip.setAttribute('stroke', s.lipCol);
+    lip.setAttribute('stroke-width', (width * (1 + s.lips)).toFixed(2));
+    lip.setAttribute('stroke-linecap', 'round');
+    lip.setAttribute('stroke-linejoin', 'round');
+    el.parentNode.insertBefore(lip, el);
+  });
+
+  return svg.innerHTML;
+}
+
 function drawMouth(s, m) {
   m = m || {};
   const cx = VB_MOUTH.w/2, cy = VB_MOUTH.h*.5;
@@ -916,7 +993,8 @@ function drawMouth(s, m) {
   const S = s.stroke;
   let out = '';
 
-  const wrap = inner => `<g transform="rotate(${m.tilt || 0} ${cx} ${cy})">${inner}</g>`;
+  const wrap = inner =>
+    `<g transform="rotate(${m.tilt || 0} ${cx} ${cy})">${lipPass(inner, s)}</g>`;
 
   if (t === 'line')
     return wrap(`<path d="M ${cx-w} ${cy} Q ${cx} ${cy-curve*h*1.2} ${cx+w} ${cy}"
@@ -1693,6 +1771,7 @@ const STYLE_IDS = ['stroke','inkColor','scleraColor','pupilColor','mouthColor','
                    'iris','irisColor','scleraShade','lashes','wobble','wobbleScale','inkVar',
                    'assetPupil','assetPupilScale','assetBrow','assetBrowScale',
                    'assetBrowRot','assetBrowFlip','browScale','browGap','browRise','lidColor',
+                   'lips','lipColor','crow','bags','shadePos',
                    'eyeW','eyeH','eyeGap','pupil','shine','mW','mH','cellW','cols','prefix'];
 
 function styleJSON() {
