@@ -229,7 +229,7 @@ class EXPR_OT_open_editor(bpy.types.Operator):
                       "du personnage. Les enregistrements reviennent directement "
                       "dans son dossier")
 
-    expression: bpy.props.StringProperty(default="")
+    expression: bpy.props.StringProperty(default="", options={'SKIP_SAVE'})
 
     def execute(self, context):
         scene = context.scene
@@ -249,8 +249,11 @@ class EXPR_OT_open_editor(bpy.types.Operator):
             "zone": current_zone(scene),
             "sheet": os.path.basename(bpy.path.abspath(scene.expr_json or "")),
         }
-        if self.expression:
-            params["expr"] = self.expression
+        # Lu au moment du clic : la propriete de l'operateur est memorisee
+        # d'un appel a l'autre et resterait sur l'expression precedente
+        current = self.expression or scene.expr_current
+        if current and current != 'NONE':
+            params["expr"] = current
 
         url = "http://127.0.0.1:{}/expressions.html?{}".format(
             _server_port(), urllib.parse.urlencode(
@@ -1227,8 +1230,7 @@ class EXPR_PT_panel(bpy.types.Panel):
             op = row.operator("expr.apply", text="Apercu")
             op.keyframe = False
             
-        row.operator("expr.open_editor", text="",
-                     icon='GREASEPENCIL').expression = scene.expr_current
+        row.operator("expr.open_editor", text="", icon='GREASEPENCIL')
 
         if scene.expr_items and mapping is None:
             warn = layout.row()
