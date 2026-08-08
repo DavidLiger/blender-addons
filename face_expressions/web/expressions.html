@@ -216,6 +216,44 @@
       </div>
     </div>
 
+    <div class="section" id="s-assets">
+      <div class="section-header" onclick="tog('s-assets')"><span>Assets</span><span class="chev">&#9662;</span></div>
+      <div class="section-body">
+        <p class="hint" style="margin-bottom:8px">
+          Fichiers SVG places dans le dossier du personnage. Un trace sans
+          attribut fill prend la couleur d'encre.
+        </p>
+
+        <div class="field"><label>Pupille</label>
+          <select id="assetPupil" onchange="renderAll()"><option value="">(procedurale)</option></select></div>
+        <div class="row2">
+          <div class="field"><label>Taille <span class="val" id="v-assetPupilScale"></span></label>
+            <input type="range" id="assetPupilScale" min="0.3" max="3" step="0.05" value="1" oninput="renderAll()"></div>
+          <div class="field"><label>Importer</label>
+            <button class="btn sec" onclick="document.getElementById('impPupil').click()">SVG...</button>
+            <input type="file" id="impPupil" accept=".svg,.png" style="display:none" onchange="importAsset(event,'pupil')"></div>
+        </div>
+
+        <div class="field" style="margin-top:8px"><label>Sourcil</label>
+          <select id="assetBrow" onchange="renderAll()"><option value="">(procedural)</option></select></div>
+        <div class="row2">
+          <div class="field"><label>Taille <span class="val" id="v-assetBrowScale"></span></label>
+            <input type="range" id="assetBrowScale" min="0.3" max="3" step="0.05" value="1" oninput="renderAll()"></div>
+          <div class="field"><label>Importer</label>
+            <button class="btn sec" onclick="document.getElementById('impBrow').click()">SVG...</button>
+            <input type="file" id="impBrow" accept=".svg,.png" style="display:none" onchange="importAsset(event,'brow')"></div>
+        </div>
+        <div class="row2">
+          <div class="field"><label>Orientation <span class="val" id="v-assetBrowRot"></span></label>
+            <input type="range" id="assetBrowRot" min="-60" max="60" step="1" value="0" oninput="renderAll()"></div>
+          <div class="field"><label style="display:flex;align-items:center;gap:6px;color:var(--text)">
+            <input type="checkbox" id="assetBrowFlip" style="width:auto" onchange="renderAll()"> Inverser le cote</label></div>
+        </div>
+
+        <div class="msg" id="assetMsg"></div>
+      </div>
+    </div>
+
     <div class="section" id="s-draw">
       <div class="section-header" onclick="tog('s-draw')"><span>Mes dessins</span><span class="chev">&#9662;</span></div>
       <div class="section-body">
@@ -442,6 +480,162 @@ function onSrcChange() {
 const $ = id => document.getElementById(id);
 const num = id => parseFloat($(id).value);
 
+// ---------------------------------------------------------------------------
+// Bibliotheque d'assets
+// Les SVG sont stockes dans <perso>/expressions/assets/ et charges en memoire
+// pour etre inseres directement dans le dessin.
+// ---------------------------------------------------------------------------
+const ASSETS = {};          // nom de fichier -> { inner, vb }
+
+function parseAsset(text) {
+  const doc = new DOMParser().parseFromString(text, 'image/svg+xml');
+  const svg = doc.documentElement;
+  if (!svg || svg.querySelector('parsererror')) return null;
+
+  let vb = (svg.getAttribute('viewBox') || '').split(/[\s,]+/).map(parseFloat);
+  if (vb.length !== 4 || vb.some(isNaN)) {
+    const w = parseFloat(svg.getAttribute('width')) || 100;
+    const h = parseFloat(svg.getAttribute('height')) || 100;
+    vb = [0, 0, w, h];
+  }
+
+  return { inner: svg.innerHTML, vb };
+}
+
+// Insere l'asset centre sur (cx, cy), a la taille demandee
+function assetAt(name, cx, cy, size, color, rotate, mirror) {
+  const a = ASSETS[name];
+  if (!a) return '';
+
+  const span = Math.max(a.vb[2], a.vb[3]) || 1;
+  const k = size / span;
+  const ax = a.vb[0] + a.vb[2] / 2;
+  const ay = a.vb[1] + a.vb[3] / 2;
+
+  // Ordre : on amene le centre de l'asset a l'origine, on met a l'echelle,
+  // on retourne, on tourne, puis on place. Le miroir precede la rotation
+  // pour que l'angle reste lu dans le meme sens des deux cotes.
+  const t = [`translate(${cx} ${cy})`,
+             rotate ? `rotate(${rotate})` : '',
+             mirror ? 'scale(-1 1)' : '',
+             `scale(${k})`,
+             `translate(${-ax} ${-ay})`].filter(Boolean).join(' ');
+
+  const paint = a.raster ? '' : ` fill="${color}" stroke="none"`;
+  return `<g transform="${t}"${paint}>${a.inner}</g>`;
+}
+
+// Un PNG est embarque en data URL : une URL temporaire ne survivrait pas a la
+// rasterisation du sprite sheet.
+async function parseRaster(blob) {
+  const b64 = await new Promise((res, rej) => {
+    const r = new FileReader();
+    r.onload = () => res(r.result);
+    r.onerror = rej;
+    r.readAsDataURL(blob);
+  });
+
+  const img = await new Promise(res => {
+    const im = new Image();
+    im.onload = () => res(im);
+    im.onerror = () => res(null);
+    im.src = b64;
+  });
+  if (!img) return null;
+
+  const w = img.naturalWidth, h = img.naturalHeight;
+  return {
+    inner: `<image href="${b64}" x="0" y="0" width="${w}" height="${h}"/>`,
+    vb: [0, 0, w, h],
+    raster: true,
+  };
+}
+
+async function loadAssets() {
+  if (!LINKED) return;
+
+  Object.keys(ASSETS).forEach(k => delete ASSETS[k]);
+
+  let names = [];
+  try {
+    const res = await fetch('/list/' + CTX.robot + '/expressions/assets?t=' + Date.now());
+    if (res.ok) names = (await res.json()).files.filter(f => /\.(svg|png)$/i.test(f));
+  } catch (err) { /* dossier absent */ }
+
+  for (const name of names) {
+    try {
+      const res = await fetch('/files/' + CTX.robot + '/expressions/assets/' + name);
+      if (!res.ok) continue;
+
+      if (/\.png$/i.test(name)) {
+        const parsed = await parseRaster(await res.blob());
+        if (parsed) ASSETS[name] = parsed;
+      } else {
+        const parsed = parseAsset(await res.text());
+        if (parsed) ASSETS[name] = parsed;
+      }
+    } catch (err) { /* fichier illisible */ }
+  }
+
+  fillAssetSelects();
+}
+
+function fillAssetSelects() {
+  [['assetPupil', 'pupil'], ['assetBrow', 'brow']].forEach(([id, slot]) => {
+    const sel = $(id);
+    const keep = sel.value;
+    sel.innerHTML = '<option value="">(procedural)</option>';
+
+    Object.keys(ASSETS).filter(n => n.startsWith(slot + '_')).sort().forEach(n => {
+      const opt = document.createElement('option');
+      opt.value = n;
+      opt.textContent = n.replace(slot + '_', '').replace(/\.svg$/i, '');
+      sel.appendChild(opt);
+    });
+
+    if ([...sel.options].some(o => o.value === keep)) sel.value = keep;
+  });
+}
+
+async function importAsset(ev, slot) {
+  const file = ev.target.files[0];
+  ev.target.value = '';
+  if (!file) return;
+
+  const isPng = /\.png$/i.test(file.name);
+  const parsed = isPng ? await parseRaster(file) : parseAsset(await file.text());
+  if (!parsed) {
+    $('assetMsg').textContent = 'Fichier illisible';
+    return;
+  }
+
+  const clean = file.name.replace(/\.(svg|png)$/i, '').replace(/[^A-Za-z0-9_-]+/g, '-');
+  const name = slot + '_' + clean + (isPng ? '.png' : '.svg');
+
+  if (!LINKED) {
+    ASSETS[name] = parsed;
+    fillAssetSelects();
+    $(slot === 'pupil' ? 'assetPupil' : 'assetBrow').value = name;
+    $('assetMsg').textContent = 'Charge (session seulement)';
+    renderAll();
+    return;
+  }
+
+  try {
+    if (isPng) {
+      await serverSave('assets/' + name, await blobToB64(file), true);
+    } else {
+      await serverSave('assets/' + name, await file.text(), false);
+    }
+    await loadAssets();
+    $(slot === 'pupil' ? 'assetPupil' : 'assetBrow').value = name;
+    $('assetMsg').textContent = name + ' ajoute';
+    renderAll();
+  } catch (err) {
+    $('assetMsg').textContent = 'Erreur : ' + err.message;
+  }
+}
+
 function style() {
   return {
     stroke: num('stroke'), ink: $('inkColor').value,
@@ -453,6 +647,9 @@ function style() {
     iris: num('iris'), irisCol: $('irisColor').value,
     scleraShade: num('scleraShade'), lashes: num('lashes'),
     wobble: num('wobble'), wobbleScale: num('wobbleScale'), inkVar: num('inkVar'),
+    aPupil: $('assetPupil').value, aPupilK: num('assetPupilScale'),
+    aBrow: $('assetBrow').value, aBrowK: num('assetBrowScale'),
+    aBrowRot: num('assetBrowRot'), aBrowFlip: $('assetBrowFlip').checked,
     mw: num('mW'), mh: num('mH'), teeth: $('teeth').checked,
   };
 }
@@ -461,7 +658,9 @@ function syncLabels() {
   [['stroke','v-stroke'],['eyeW','v-eyeW'],['eyeH','v-eyeH'],['eyeGap','v-eyeGap'],
    ['pupil','v-pupil'],['shine','v-shine'],['mW','v-mW'],['mH','v-mH'],
    ['iris','v-iris'],['scleraShade','v-scleraShade'],['lashes','v-lashes'],
-   ['wobble','v-wobble'],['wobbleScale','v-wobbleScale'],['inkVar','v-inkVar']]
+   ['wobble','v-wobble'],['wobbleScale','v-wobbleScale'],['inkVar','v-inkVar'],
+   ['assetPupilScale','v-assetPupilScale'],['assetBrowScale','v-assetBrowScale'],
+   ['assetBrowRot','v-assetBrowRot']]
    .forEach(([src,dst]) => { const el = $(dst); if (el) el.textContent = $(src).value; });
 }
 
@@ -586,7 +785,11 @@ function drawEyes(s, e, b, uid) {
       out += `<circle cx="${cx+pxo}" cy="${cy+pyo}" r="${pr * (1 + s.iris)}"
                 fill="${s.irisCol}" stroke="${s.ink}" stroke-width="${s.stroke * .4}"/>`;
 
-    out += `<circle cx="${cx+pxo}" cy="${cy+pyo}" r="${pr}" fill="${s.pupilCol}"/>`;
+    if (s.aPupil && ASSETS[s.aPupil])
+      out += assetAt(s.aPupil, cx + pxo, cy + pyo, pr * 2 * s.aPupilK, s.pupilCol);
+    else
+      out += `<circle cx="${cx+pxo}" cy="${cy+pyo}" r="${pr}" fill="${s.pupilCol}"/>`;
+
     if (s.shine > 0)
       out += `<circle cx="${cx+pxo-pr*.35}" cy="${cy+pyo-pr*.4}" r="${pr*s.shine*.55}" fill="#fff" opacity=".9"/>`;
 
@@ -631,10 +834,17 @@ function drawEyes(s, e, b, uid) {
       const by = cy - ry - 12 + (b.y || 0);
       const bw = rx * 1.1;
       const bAsym = b.asym && side > 0 ? -1 : 1;
-      out += `<g transform="rotate(${ba*bAsym} ${cx} ${by})">
-                <path d="M ${cx-bw} ${by} Q ${cx} ${by-4} ${cx+bw} ${by}"
-                      fill="none" stroke="${s.ink}" stroke-width="${s.stroke*1.3}" stroke-linecap="round"/>
-              </g>`;
+      if (s.aBrow && ASSETS[s.aBrow]) {
+        // L'asset est dessine tel quel d'un cote, en miroir de l'autre
+        const mirrored = (side < 0) !== !!s.aBrowFlip;
+        const angle = (ba * bAsym) + (s.aBrowRot || 0) * side;
+        out += assetAt(s.aBrow, cx, by, bw * 2 * s.aBrowK, s.ink, angle, mirrored);
+      } else {
+        out += `<g transform="rotate(${ba*bAsym} ${cx} ${by})">
+                  <path d="M ${cx-bw} ${by} Q ${cx} ${by-4} ${cx+bw} ${by}"
+                        fill="none" stroke="${s.ink}" stroke-width="${s.stroke*1.3}" stroke-linecap="round"/>
+                </g>`;
+      }
     }
   });
 
@@ -1275,6 +1485,7 @@ async function initLinked() {
 
   const found = await loadCharacterStyle();
   await loadOverrides();
+  await loadAssets();
 
   const banner = document.createElement('div');
   banner.className = 'msg';
@@ -1408,6 +1619,8 @@ async function exportSingles() {
 // ---------------------------------------------------------------------------
 const STYLE_IDS = ['stroke','inkColor','scleraColor','pupilColor','mouthColor','eyeShape',
                    'iris','irisColor','scleraShade','lashes','wobble','wobbleScale','inkVar',
+                   'assetPupil','assetPupilScale','assetBrow','assetBrowScale',
+                   'assetBrowRot','assetBrowFlip',
                    'eyeW','eyeH','eyeGap','pupil','shine','mW','mH','cellW','cols','prefix'];
 
 function styleJSON() {
@@ -1415,6 +1628,7 @@ function styleJSON() {
   STYLE_IDS.forEach(id => o[id] = $(id).value);
   o.brows = $('brows').checked;
   o.teeth = $('teeth').checked;
+  o.assetBrowFlip = $('assetBrowFlip').checked;
   o.enabled = { ...enabled };
   return o;
 }
@@ -1435,6 +1649,7 @@ function loadStyleFile(ev) {
       STYLE_IDS.forEach(id => { if (o[id] !== undefined) $(id).value = o[id]; });
       if (o.brows !== undefined) $('brows').checked = o.brows;
       if (o.teeth !== undefined) $('teeth').checked = o.teeth;
+      if (o.assetBrowFlip !== undefined) $('assetBrowFlip').checked = o.assetBrowFlip;
       if (o.enabled) EXPR.forEach(x => { if (o.enabled[x.id] !== undefined) enabled[x.id] = o.enabled[x.id]; });
       renderAll();
       flash('Style charge');
