@@ -51,7 +51,10 @@ CATEGORIES = {
         ('HAND', "Main", "Gant facon cartoon"),
         ('FOOT', "Chaussure", "Chaussure ou pied"),
         ('HINGE', "Charniere", "Articulation : epaule, coude, hanche, genou, cheville"),
-        ('OTHER', "Autre", "Accessoire"),
+        ('HAIR', "Cheveux", "Coiffure"),
+        ('HAT', "Chapeau", "Chapeau, casque, couvre-chef"),
+        ('ACC', "Accessoire", "Lunettes, cravate, sac, outil"),
+        ('OTHER', "Autre", "Non classe"),
     ],
     'HUMAN': [
         ('TORSO', "Torse", "Buste, veste, chemise"),
@@ -60,17 +63,24 @@ CATEGORIES = {
         ('HAND', "Main", "Main ou gant"),
         ('FOOT', "Chaussure", "Chaussure ou pied"),
         ('HEAD', "Tete", "Visage, crane"),
-        ('HAIR', "Cheveux", "Coiffure, couvre-chef"),
-        ('OTHER', "Autre", "Accessoire"),
+        ('HAIR', "Cheveux", "Coiffure"),
+        ('HAT', "Chapeau", "Chapeau, casque, couvre-chef"),
+        ('ACC', "Accessoire", "Lunettes, cravate, sac, outil"),
+        ('OTHER', "Autre", "Non classe"),
     ],
 }
 
+# Categories partagees : le meme chapeau sert a un robot comme a un humanoide
+SHARED_CATEGORIES = {'HAT', 'HAIR', 'ACC'}
+
 CAT_DIRS = {
     'ROBOT': {'BODY': "body", 'HEAD': "head", 'HAND': "hands",
-              'FOOT': "feet", 'HINGE': "joints", 'OTHER': "other"},
+              'FOOT': "feet", 'HINGE': "joints", 'OTHER': "other",
+              'HAIR': "hair", 'HAT': "hats", 'ACC': "accessories"},
     'HUMAN': {'TORSO': "torso", 'ARMS': "arms", 'LEGS': "legs",
               'HAND': "hands", 'FOOT': "feet", 'HEAD': "head",
-              'HAIR': "hair", 'OTHER': "other"},
+              'OTHER': "other",
+              'HAIR': "hair", 'HAT': "hats", 'ACC': "accessories"},
 }
 
 
@@ -78,9 +88,19 @@ def family_categories(scene):
     return CATEGORIES.get(scene.rm_family, CATEGORIES['ROBOT'])
 
 
+_cat_cache = {}
+
+
 def category_items(self, context):
+    """Les chaines doivent rester referencees cote Python : Blender ne les
+    copie pas et l'affichage se corrompt si elles sont liberees."""
     scene = context.scene if context else None
-    return family_categories(scene) if scene else CATEGORIES['ROBOT']
+    family = scene.rm_family if scene else 'ROBOT'
+
+    if family not in _cat_cache:
+        _cat_cache[family] = [(c[0], c[1], c[2]) for c in CATEGORIES[family]]
+
+    return _cat_cache[family]
 
 # Noms proposes pour les points de connexion
 SOCKET_PRESETS = [
@@ -162,7 +182,17 @@ def deselect_all(context):
 # Robot-Manager s'appuiera sur cette organisation pour lister les robots et
 # retrouver leurs expressions.
 # ---------------------------------------------------------------------------
-LIBRARY_DIRS = ["body", "head", "hands", "feet", "joints", "other"]
+def library_tree(root):
+    """Tous les dossiers de la bibliotheque : un par categorie et par famille,
+    les categories partagees dans une branche commune."""
+    paths = []
+
+    for family, cats in CAT_DIRS.items():
+        for cat, sub in cats.items():
+            branch = "shared" if cat in SHARED_CATEGORIES else FAMILY_DIR.get(family)
+            paths.append(os.path.join(root, LIBRARY, branch, sub))
+
+    return sorted(set(paths))
 CREATIONS = "creations"
 LIBRARY = "library"
 EXPR_MAKER = "expression-maker"
@@ -222,8 +252,8 @@ class RM_OT_init_folders(bpy.types.Operator):
             return {'CANCELLED'}
 
         try:
-            for sub in LIBRARY_DIRS:
-                os.makedirs(os.path.join(root, LIBRARY, sub), exist_ok=True)
+            for path in library_tree(root):
+                os.makedirs(path, exist_ok=True)
             os.makedirs(os.path.join(root, CREATIONS), exist_ok=True)
             os.makedirs(os.path.join(root, EXPR_MAKER), exist_ok=True)
         except Exception as e:
@@ -300,13 +330,16 @@ _asset_previews = None
 _assets = {}            # categorie -> [(nom, chemin .blend)]
 
 
+
 def library_dir(context, category, create=False):
     root = root_path(context)
     if not root:
         return ""
+
     family = context.scene.rm_family
-    path = os.path.join(root, LIBRARY, FAMILY_DIR.get(family, "robot"),
-                        CAT_DIRS.get(family, {}).get(category, "other"))
+    sub = CAT_DIRS.get(family, {}).get(category, "other")
+    branch = "shared" if category in SHARED_CATEGORIES else FAMILY_DIR.get(family, "robot")
+    path = os.path.join(root, LIBRARY, branch, sub)
     if create:
         os.makedirs(path, exist_ok=True)
     return path
@@ -1459,8 +1492,25 @@ DEFAULT_RULES = {
 }
 
 
+_slot_cache = {}
+
+
 def slot_items(self, context):
-    return [(s, SLOT_LABEL.get(s, s), "") for s in SLOTS]
+    """Reperes du squelette, completes par ceux ajoutes a la main."""
+    extras = []
+    try:
+        coll = active_robot_collection(context)
+        extras = sorted(s.name[len(SOCKET_PREFIX):] for s in all_sockets(coll)
+                        if not s.get("robot_slot"))
+    except Exception:
+        extras = []
+
+    key = tuple(extras)
+    if key not in _slot_cache:
+        _slot_cache[key] = ([(s, SLOT_LABEL.get(s, s), "") for s in SLOTS]
+                            + [(e, e, "Repere ajoute a la main") for e in extras])
+
+    return _slot_cache[key]
 
 
 class RM_Rule(bpy.types.PropertyGroup):
@@ -1473,7 +1523,8 @@ class RM_Rule(bpy.types.PropertyGroup):
 
 
 CATEGORY_SLOT = {
-    'BODY': 'chest', 'TORSO': 'chest', 'HEAD': 'head', 'HAIR': 'head',
+    'BODY': 'chest', 'TORSO': 'chest', 'ACC': 'chest',
+    'HEAD': 'head', 'HAIR': 'head', 'HAT': 'head',
     'ARMS': 'elbow_L', 'HINGE': 'elbow_L', 'HAND': 'wrist_L',
     'LEGS': 'knee_L', 'FOOT': 'ankle_L', 'OTHER': 'chest',
 }
@@ -1545,8 +1596,15 @@ def skeleton_matrices(scene):
 def slot_empty(coll, slot):
     if coll is None:
         return None
+
+    found = next((o for o in coll.objects
+                  if o.get(K_SOCKET) and o.get("robot_slot") == slot), None)
+    if found is not None:
+        return found
+
+    # Repere ajoute a la main : il n'a pas de cle robot_slot, seulement son nom
     return next((o for o in coll.objects
-                 if o.get(K_SOCKET) and o.get("robot_slot") == slot), None)
+                 if o.get(K_SOCKET) and o.name[len(SOCKET_PREFIX):] == slot), None)
 
 
 def _place_skeleton(scene):
