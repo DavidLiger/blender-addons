@@ -91,6 +91,22 @@ class _ExprHandler(SimpleHTTPRequestHandler):
             return
 
         # /files/<chemin sous creations/> : assets et sprite sheets
+        # /open?path=... : ouvre le dossier dans l'explorateur
+        if parsed.path == "/open":
+            rel = urllib.parse.parse_qs(parsed.query).get("path", [""])[0]
+            target = self._under_root(os.path.join(CREATIONS, rel))
+            if target is None:
+                self._json({"ok": False, "error": "chemin refuse"}, 403)
+                return
+            try:
+                os.makedirs(target, exist_ok=True)
+                os.startfile(target)
+            except Exception as e:
+                self._json({"ok": False, "error": str(e)}, 500)
+                return
+            self._json({"ok": True})
+            return
+
         if parsed.path.startswith("/files/"):
             target = self._under_root(os.path.join(
                 CREATIONS, posixpath.normpath(parsed.path[7:]).lstrip("/")))
@@ -110,11 +126,26 @@ class _ExprHandler(SimpleHTTPRequestHandler):
             return
 
         # /list/<chemin> : contenu d'un dossier, en JSON
+        # /robots : personnages disponibles
+        if parsed.path == "/robots":
+            base = os.path.join(self.root, CREATIONS)
+            names = []
+            if os.path.isdir(base):
+                names = sorted(n for n in os.listdir(base)
+                               if os.path.isdir(os.path.join(base, n))
+                               and not n.startswith("_"))
+            self._json({"robots": names})
+            return
+
         if parsed.path.startswith("/list/"):
             target = self._under_root(os.path.join(
                 CREATIONS, posixpath.normpath(parsed.path[6:]).lstrip("/")))
-            if target is None or not os.path.isdir(target):
-                self.send_error(404)
+            if target is None:
+                self.send_error(403)
+                return
+
+            if not os.path.isdir(target):
+                self._json({"files": []})     # dossier absent : liste vide
                 return
 
             names = sorted(f for f in os.listdir(target)

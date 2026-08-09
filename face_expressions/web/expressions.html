@@ -22,8 +22,25 @@
   h1{font-size:.95rem;font-weight:600;margin:0;white-space:nowrap}
   .toolbar{display:flex;align-items:center;gap:8px}
 
-  .main{flex:1;min-height:0;display:grid;grid-template-columns:320px 1fr}
-  @media(max-width:860px){.main{grid-template-columns:1fr;grid-template-rows:auto 1fr}}
+  .main{flex:1;min-height:0;display:grid;grid-template-columns:320px 1fr 170px}
+  @media(max-width:1100px){.main{grid-template-columns:300px 1fr 140px}}
+  @media(max-width:860px){.main{grid-template-columns:1fr;grid-template-rows:auto 1fr}
+    .robots{display:none}}
+
+  .robots{overflow-y:auto;min-height:0;padding:12px;
+    border-left:1px solid var(--border);background:var(--panel)}
+  .robots h3{font-size:.7rem;text-transform:uppercase;letter-spacing:.08em;
+    color:var(--muted);margin:0 0 10px;font-weight:600}
+  .rtile{border:1px solid var(--border);border-radius:6px;padding:5px;
+    margin-bottom:8px;cursor:pointer;background:var(--panel-2)}
+  .rtile:hover{border-color:var(--accent)}
+  .rtile.sel{border-color:var(--accent);box-shadow:inset 0 0 0 1px var(--accent)}
+  .rcell{width:100%;height:56px;background:#fff no-repeat;border-radius:3px;
+    background-size:100% 100%}
+  .rtile .rn{font-family:var(--mono);font-size:.68rem;color:var(--muted);
+    text-align:center;margin-top:4px;overflow:hidden;text-overflow:ellipsis;
+    white-space:nowrap}
+  .rtile.sel .rn{color:var(--accent)}
 
   .cfg{overflow-y:auto;min-height:0;padding:14px;border-right:1px solid var(--border)}
   .grid-col{overflow-y:auto;min-height:0;padding:14px}
@@ -150,9 +167,9 @@
           <div class="field"><label>Trait <span class="val" id="v-stroke"></span></label>
             <input type="range" id="stroke" min="0" max="10" step="0.5" value="3" oninput="renderAll()"></div>
           <div class="field"><label>Couleur trait</label>
-            <input type="color" id="inkColor" value="#141414" oninput="renderAll()">
-            </div>
+            <input type="color" id="inkColor" value="#141414" oninput="renderAll()"></div>
         </div>
+
         <div class="field"><label>Trait a la couleur de la tete :</label>
           <div class="row2">
             <label style="display:flex;align-items:center;gap:5px;color:var(--text);font-size:.75rem">
@@ -167,14 +184,16 @@
               <input type="checkbox" id="headMouth" style="width:auto" onchange="renderAll()"> Bouche</label>
           </div>
         </div>
+
         <div class="row2">
           <div class="field"><label>Sclere (blanc)</label>
             <input type="color" id="scleraColor" value="#ffffff" oninput="renderAll()"></div>
-          <div class="field"><label>Pupille / iris</label>
+          <div class="field"><label>Pupille</label>
             <input type="color" id="pupilColor" value="#141414" oninput="renderAll()"></div>
         </div>
         <div class="field"><label>Bouche (interieur)</label>
           <input type="color" id="mouthColor" value="#8c2f39" oninput="renderAll()"></div>
+
         <div class="row2">
           <div class="field"><label>Trace manuel <span class="val" id="v-wobble"></span></label>
             <input type="range" id="wobble" min="0" max="4" step="0.1" value="0" oninput="renderAll()"></div>
@@ -183,6 +202,18 @@
         </div>
         <div class="field"><label>Variation d'epaisseur <span class="val" id="v-inkVar"></span></label>
           <input type="range" id="inkVar" min="0" max="1.5" step="0.05" value="0" oninput="renderAll()"></div>
+      </div>
+    </div>
+
+    <div class="section" id="s-assets">
+      <div class="section-header" onclick="tog('s-assets')"><span>Assets</span><span class="chev">&#9662;</span></div>
+      <div class="section-body">
+        <label style="display:flex;align-items:center;gap:6px;color:var(--text);
+                      font-size:.78rem;margin-bottom:8px">
+          <input type="checkbox" id="assetShared" checked style="width:auto">
+          Commun a toute la serie</label>
+
+        <div class="msg" id="assetMsg"></div>
       </div>
     </div>
 
@@ -196,6 +227,7 @@
             <option value="almond">Amande</option>
             <option value="rect">Rectangle (ecran)</option>
           </select></div>
+
         <div class="row2">
           <div class="field"><label>Largeur <span class="val" id="v-eyeW"></span></label>
             <input type="range" id="eyeW" min="8" max="34" step="1" value="20" oninput="renderAll()"></div>
@@ -210,24 +242,53 @@
         </div>
         <div class="field"><label>Reflet <span class="val" id="v-shine"></span></label>
           <input type="range" id="shine" min="0" max="1" step="0.05" value="0.35" oninput="renderAll()"></div>
+
         <div class="row2">
           <div class="field"><label>Iris <span class="val" id="v-iris"></span></label>
             <input type="range" id="iris" min="0" max="2" step="0.05" value="0" oninput="renderAll()"></div>
           <div class="field"><label>Couleur iris</label>
             <input type="color" id="irisColor" value="#3a7ca5" oninput="renderAll()"></div>
         </div>
+
+        <div class="field"><label>Pupille / iris</label>
+          <select id="assetPupil" onchange="renderAll()" style="display:none"><option value=""></option></select>
+          <button class="btn sec" id="btnPupil" onclick="openPicker('pupil')">(procedurale)</button>
+          <button class="btn sec" onclick="document.getElementById('impPupil').click()">Importer...</button>
+          <input type="file" id="impPupil" accept=".svg,.png" style="display:none" onchange="importAsset(event,'pupil')">
+          <button class="btn sec" onclick="openAssetFolder('pupil')">Dossier</button></div>
+        <div class="field"><label>Taille <span class="val" id="v-assetPupilScale"></span></label>
+          <input type="range" id="assetPupilScale" min="0.3" max="3" step="0.05" value="1" oninput="renderAll()"></div>
+
+        <div class="field" style="margin-top:8px"><label>Sourcil</label>
+          <select id="assetBrow" onchange="renderAll()" style="display:none"><option value=""></option></select>
+          <button class="btn sec" id="btnBrow" onclick="openPicker('brow')">(procedural)</button>
+          <button class="btn sec" onclick="document.getElementById('impBrow').click()">Importer...</button>
+          <input type="file" id="impBrow" accept=".svg,.png" style="display:none" onchange="importAsset(event,'brow')">
+          <button class="btn sec" onclick="openAssetFolder('brow')">Dossier</button></div>
+        <div class="row2">
+          <div class="field"><label>Taille <span class="val" id="v-assetBrowScale"></span></label>
+            <input type="range" id="assetBrowScale" min="0.3" max="3" step="0.05" value="1" oninput="renderAll()"></div>
+          <div class="field"><label>Orientation <span class="val" id="v-assetBrowRot"></span></label>
+            <input type="range" id="assetBrowRot" min="-60" max="60" step="1" value="0" oninput="renderAll()"></div>
+        </div>
+        <div class="field"><label style="display:flex;align-items:center;gap:6px;color:var(--text)">
+          <input type="checkbox" id="assetBrowFlip" style="width:auto" onchange="renderAll()"> Inverser le cote</label></div>
+
         <div class="field"><label>Ombre de la sclere <span class="val" id="v-scleraShade"></span></label>
           <input type="range" id="scleraShade" min="0" max="1" step="0.05" value="0" oninput="renderAll()"></div>
         <div class="field"><label>Position de l'ombre <span class="val" id="v-shadePos"></span></label>
           <input type="range" id="shadePos" min="0" max="1" step="0.05" value="1" oninput="renderAll()"></div>
+
         <div class="row2">
           <div class="field"><label>Cils <span class="val" id="v-lashes"></span></label>
             <input type="range" id="lashes" min="0" max="1" step="0.05" value="0" oninput="renderAll()"></div>
           <div class="field"><label>Nombre <span class="val" id="v-lashN"></span></label>
             <input type="range" id="lashN" min="2" max="24" step="1" value="5" oninput="renderAll()"></div>
         </div>
-        <div class="field"><label>Couleur des paupieres</label>
+
+        <div class="field"><label>Couleur de la tete</label>
           <input type="color" id="lidColor" value="#c9c9cc" oninput="renderAll()"></div>
+
         <div class="row2">
           <div class="field"><label>Pattes d'oie <span class="val" id="v-crow"></span></label>
             <input type="range" id="crow" min="0" max="1" step="0.05" value="0" oninput="renderAll()"></div>
@@ -240,6 +301,7 @@
           <div class="field"><label>Inclinaison <span class="val" id="v-bagRot"></span></label>
             <input type="range" id="bagRot" min="-40" max="40" step="1" value="0" oninput="renderAll()"></div>
         </div>
+
         <div class="field"><label><input type="checkbox" id="brows" checked onchange="renderAll()" style="width:auto"> Sourcils</label></div>
         <div class="row2">
           <div class="field"><label>Taille sourcils <span class="val" id="v-browScale"></span></label>
@@ -261,12 +323,43 @@
           <div class="field"><label>Hauteur <span class="val" id="v-mH"></span></label>
             <input type="range" id="mH" min="4" max="40" step="1" value="18" oninput="renderAll()"></div>
         </div>
+
         <div class="field"><label><input type="checkbox" id="teeth" checked onchange="renderAll()" style="width:auto"> Dents quand la bouche est ouverte</label></div>
+
+        <div class="field"><label>Couleur levres</label>
+          <input type="color" id="lipColor" value="#c26b6b" oninput="renderAll()"></div>
         <div class="row2">
-          <div class="field"><label>Levres <span class="val" id="v-lips"></span></label>
-            <input type="range" id="lips" min="0" max="4" step="0.1" value="0" oninput="renderAll()"></div>
-          <div class="field"><label>Couleur levres</label>
-            <input type="color" id="lipColor" value="#c26b6b" oninput="renderAll()"></div>
+          <div class="field"><label>Levre haute <span class="val" id="v-lipTop"></span></label>
+            <input type="range" id="lipTop" min="0" max="0.8" step="0.02" value="0" oninput="renderAll()"></div>
+          <div class="field"><label>Levre basse <span class="val" id="v-lipBot"></span></label>
+            <input type="range" id="lipBot" min="0" max="0.8" step="0.02" value="0" oninput="renderAll()"></div>
+        </div>
+
+        <div class="field" style="margin-top:8px"><label>Dents</label>
+          <select id="assetTeeth" onchange="renderAll()" style="display:none"><option value=""></option></select>
+          <button class="btn sec" id="btnTeeth" onclick="openPicker('teeth')">(procedural)</button>
+          <button class="btn sec" onclick="document.getElementById('impTeeth').click()">Importer...</button>
+          <input type="file" id="impTeeth" accept=".svg,.png" style="display:none" onchange="importAsset(event,'teeth')">
+          <button class="btn sec" onclick="openAssetFolder('teeth')">Dossier</button></div>
+
+        <div class="field"><label>Langue</label>
+          <select id="assetTongue" onchange="renderAll()" style="display:none"><option value=""></option></select>
+          <button class="btn sec" id="btnTongue" onclick="openPicker('tongue')">(procedural)</button>
+          <button class="btn sec" onclick="document.getElementById('impTongue').click()">Importer...</button>
+          <input type="file" id="impTongue" accept=".svg,.png" style="display:none" onchange="importAsset(event,'tongue')"></div>
+
+        <div class="field"><label>Luette</label>
+          <select id="assetUvula" onchange="renderAll()" style="display:none"><option value=""></option></select>
+          <button class="btn sec" id="btnUvula" onclick="openPicker('uvula')">(aucune)</button>
+          <button class="btn sec" onclick="document.getElementById('impUvula').click()">Importer...</button>
+          <input type="file" id="impUvula" accept=".svg,.png" style="display:none" onchange="importAsset(event,'uvula')">
+          <button class="btn sec" onclick="openAssetFolder('uvula')">Dossier</button></div>
+
+        <div class="row2">
+          <div class="field"><label>Taille dents <span class="val" id="v-teethK"></span></label>
+            <input type="range" id="teethK" min="0.2" max="2" step="0.05" value="1" oninput="renderAll()"></div>
+          <div class="field"><label>Taille langue <span class="val" id="v-tongueK"></span></label>
+            <input type="range" id="tongueK" min="0.2" max="2" step="0.05" value="1" oninput="renderAll()"></div>
         </div>
       </div>
     </div>
@@ -280,51 +373,6 @@
         </div>
         <p class="hint" style="margin-top:8px">Cliquer une vignette pour l'inclure ou l'exclure de l'export.</p>
         <div class="msg" id="count"></div>
-      </div>
-    </div>
-
-    <div class="section" id="s-assets">
-      <div class="section-header" onclick="tog('s-assets')"><span>Assets</span><span class="chev">&#9662;</span></div>
-      <div class="section-body">
-        <p class="hint" style="margin-bottom:8px">
-          Fichiers SVG places dans le dossier du personnage. Un trace sans
-          attribut fill prend la couleur d'encre.
-        </p>
-
-        <label style="display:flex;align-items:center;gap:6px;color:var(--text);
-                      font-size:.78rem;margin-bottom:8px">
-          <input type="checkbox" id="assetShared" checked style="width:auto">
-          Commun a toute la serie</label>
-
-        <div class="field"><label>Pupille</label>
-          <select id="assetPupil" onchange="renderAll()" style="display:none"><option value="">(procedurale)</option></select>
-          <button class="btn sec" id="btnPupil" onclick="openPicker('pupil')">(procedurale)</button></div>
-        <div class="row2">
-          <div class="field"><label>Taille <span class="val" id="v-assetPupilScale"></span></label>
-            <input type="range" id="assetPupilScale" min="0.3" max="3" step="0.05" value="1" oninput="renderAll()"></div>
-          <div class="field"><label>Importer</label>
-            <button class="btn sec" onclick="document.getElementById('impPupil').click()">SVG...</button>
-            <input type="file" id="impPupil" accept=".svg,.png" style="display:none" onchange="importAsset(event,'pupil')"></div>
-        </div>
-
-        <div class="field" style="margin-top:8px"><label>Sourcil</label>
-          <select id="assetBrow" onchange="renderAll()" style="display:none"><option value="">(procedural)</option></select>
-          <button class="btn sec" id="btnBrow" onclick="openPicker('brow')">(procedural)</button></div>
-        <div class="row2">
-          <div class="field"><label>Taille <span class="val" id="v-assetBrowScale"></span></label>
-            <input type="range" id="assetBrowScale" min="0.3" max="3" step="0.05" value="1" oninput="renderAll()"></div>
-          <div class="field"><label>Importer</label>
-            <button class="btn sec" onclick="document.getElementById('impBrow').click()">SVG...</button>
-            <input type="file" id="impBrow" accept=".svg,.png" style="display:none" onchange="importAsset(event,'brow')"></div>
-        </div>
-        <div class="row2">
-          <div class="field"><label>Orientation <span class="val" id="v-assetBrowRot"></span></label>
-            <input type="range" id="assetBrowRot" min="-60" max="60" step="1" value="0" oninput="renderAll()"></div>
-          <div class="field"><label style="display:flex;align-items:center;gap:6px;color:var(--text)">
-            <input type="checkbox" id="assetBrowFlip" style="width:auto" onchange="renderAll()"> Inverser le cote</label></div>
-        </div>
-
-        <div class="msg" id="assetMsg"></div>
       </div>
     </div>
 
@@ -374,6 +422,7 @@
         <div class="field" id="cellH-wrap" style="display:none"><label>Hauteur cellule (px)</label>
           <input type="number" id="cellH" value="256" min="8" step="16">
         </div>
+        <div class="msg" id="sheetSize" style="color:var(--muted)"></div>
         <div class="field"><label>Prefixe des fichiers</label>
           <input type="text" id="prefix" value="robot"></div>
         <button class="btn" onclick="exportSheet()">Sprite sheet (PNG + JSON)</button>
@@ -391,6 +440,10 @@
     <div class="sheet" id="sheet"></div>
   </div>
 
+<div class="robots">
+    <h3>Personnages</h3>
+    <div id="robot-list"></div>
+  </div>
 </div>
 
 <div class="ov" id="edit-ov" onclick="if(event.target===this) closeEditor()">
@@ -398,6 +451,10 @@
     <div class="preview" id="edit-preview"></div>
     <div class="tools">
       <h2 id="edit-title">Expression</h2>
+      <div class="row2" id="edit-tools" style="margin-bottom:10px">
+        <button class="btn sec" onclick="toggleHandles()" id="btnHandles">Poignees</button>
+        <button class="btn sec" onclick="resetShape()">Forme d'origine</button>
+      </div>
       <div id="edit-fields"></div>
       <div class="edit-foot">
         <button class="btn" onclick="saveOverride()">Enregistrer</button>
@@ -580,7 +637,23 @@ function onSrcChange() {
 // Lecture des reglages
 // ---------------------------------------------------------------------------
 const $ = id => document.getElementById(id);
-const num = id => parseFloat($(id).value);
+const num = (id, def = 0) => {
+  const el = $(id);
+  if (!el) { console.warn('[expr] champ absent :', id); return def; }
+  const v = parseFloat(el.value);
+  return isNaN(v) ? def : v;
+};
+
+const val = (id, def = '') => {
+  const el = $(id);
+  if (!el) { console.warn('[expr] champ absent :', id); return def; }
+  return el.value;
+};
+
+const chk = (id, def = false) => {
+  const el = $(id);
+  return el ? el.checked : def;
+};
 
 // ---------------------------------------------------------------------------
 // Bibliotheque d'assets
@@ -658,26 +731,30 @@ async function loadAssets() {
 
   Object.keys(ASSETS).forEach(k => delete ASSETS[k]);
 
-  // Communs d'abord, personnage ensuite : un asset local masque son homonyme
-  const sources = ['_assets', CTX.robot + '/expressions/assets'];
+  // Un sous-dossier par type. Communs d'abord, personnage ensuite :
+  // un asset local masque son homonyme commun.
+  const roots = ['_assets', CTX.robot + '/expressions/assets'];
 
-  for (const base of sources) {
-    let names = [];
-    try {
-      const res = await fetch('/list/' + base + '?t=' + Date.now());
-      if (res.ok) names = (await res.json()).files.filter(f => /\.(svg|png)$/i.test(f));
-    } catch (err) { continue; }
-
-    for (const name of names) {
+  for (const root of roots) {
+    for (const slot of Object.keys(PICK)) {
+      const base = root + '/' + slot;
+      let names = [];
       try {
-        const res = await fetch('/files/' + base + '/' + name);
-        if (!res.ok) continue;
+        const res = await fetch('/list/' + base + '?t=' + Date.now());
+        if (res.ok) names = (await res.json()).files.filter(f => /\.(svg|png)$/i.test(f));
+      } catch (err) { continue; }
 
-        const parsed = /\.png$/i.test(name)
-          ? await parseRaster(await res.blob())
-          : parseAsset(await res.text());
-        if (parsed) ASSETS[name] = parsed;
-      } catch (err) { /* fichier illisible */ }
+      for (const name of names) {
+        try {
+          const res = await fetch('/files/' + base + '/' + name);
+          if (!res.ok) continue;
+
+          const parsed = /\.png$/i.test(name)
+            ? await parseRaster(await res.blob())
+            : parseAsset(await res.text());
+          if (parsed) ASSETS[slot + '/' + name] = parsed;
+        } catch (err) { /* fichier illisible */ }
+      }
     }
   }
 
@@ -685,19 +762,28 @@ async function loadAssets() {
 }
 
 function fillAssetSelects() {
-  [['assetPupil', 'pupil'], ['assetBrow', 'brow']].forEach(([id, slot]) => {
+  Object.entries(PICK).forEach(([slot, cfg]) => {
+    const id = cfg.sel;
     const sel = $(id);
     const keep = sel.value;
     sel.innerHTML = '<option value="">(procedural)</option>';
 
-    Object.keys(ASSETS).filter(n => n.startsWith(slot + '_')).sort().forEach(n => {
+    Object.keys(ASSETS).filter(n => n.startsWith(slot + '/')).sort().forEach(n => {
       const opt = document.createElement('option');
       opt.value = n;
       opt.textContent = n.replace(slot + '_', '').replace(/\.svg$/i, '');
       sel.appendChild(opt);
     });
 
-    if ([...sel.options].some(o => o.value === keep)) sel.value = keep;
+    // Une valeur absente de la liste est conservee : sans cela, un dossier
+    // d'assets momentanement illisible ferait retomber le style sur procedural
+    if (keep && ![...sel.options].some(o => o.value === keep)) {
+      const opt = document.createElement('option');
+      opt.value = keep;
+      opt.textContent = assetLabel(keep) + ' (absent)';
+      sel.appendChild(opt);
+    }
+    sel.value = keep;
   });
 
   refreshAssetButtons();
@@ -706,11 +792,14 @@ function fillAssetSelects() {
 // ---------------------------------------------------------------------------
 // Choix visuel d'un asset
 // ---------------------------------------------------------------------------
-const PICK = { pupil: { sel: 'assetPupil', btn: 'btnPupil', label: "Pupille" },
-               brow:  { sel: 'assetBrow',  btn: 'btnBrow',  label: "Sourcil" } };
+const PICK = { pupil:  { sel: 'assetPupil',  btn: 'btnPupil',  label: "Pupille" },
+               brow:   { sel: 'assetBrow',   btn: 'btnBrow',   label: "Sourcil" },
+               teeth:  { sel: 'assetTeeth',  btn: 'btnTeeth',  label: "Dents" },
+               tongue: { sel: 'assetTongue', btn: 'btnTongue', label: "Langue" },
+               uvula:  { sel: 'assetUvula',  btn: 'btnUvula',  label: "Luette" } };
 
 function assetLabel(name) {
-  return name ? name.replace(/^(pupil|brow)_/, '').replace(/\.(svg|png)$/i, '')
+  return name ? name.split('/').pop().replace(/\.(svg|png)$/i, '')
               : '(procedural)';
 }
 
@@ -723,7 +812,9 @@ function refreshAssetButtons() {
 
 function assetPreview(name, slot) {
   const s = style();
-  const color = slot === 'pupil' ? s.pupilCol : s.inkBrow;
+  const color = slot === 'pupil' ? s.pupilCol
+              : slot === 'brow' ? s.inkBrow
+              : s.inkMouth;
   return `<svg viewBox="0 0 100 60">${assetAt(name, 50, 30, 72, color, 0, false)}</svg>`;
 }
 
@@ -746,7 +837,7 @@ function openPicker(slot) {
   };
 
   tile('');
-  Object.keys(ASSETS).filter(n => n.startsWith(slot + '_')).sort().forEach(tile);
+  Object.keys(ASSETS).filter(n => n.startsWith(slot + '/')).sort().forEach(tile);
 
   $('pick-ov').classList.add('open');
 }
@@ -756,6 +847,12 @@ function choosePicker(slot, name) {
   closePicker();
   refreshAssetButtons();
   renderAll();
+}
+
+async function openAssetFolder(slot) {
+  if (!LINKED) return;
+  const base = chk('assetShared', true) ? '_assets' : charPath('assets');
+  await fetch('/open?path=' + encodeURIComponent(base + '/' + slot));
 }
 
 function closePicker() {
@@ -775,7 +872,8 @@ async function importAsset(ev, slot) {
   }
 
   const clean = file.name.replace(/\.(svg|png)$/i, '').replace(/[^A-Za-z0-9_-]+/g, '-');
-  const name = slot + '_' + clean + (isPng ? '.png' : '.svg');
+  const file_ = clean + (isPng ? '.png' : '.svg');
+  const name = slot + '/' + file_;
 
   if (!LINKED) {
     ASSETS[name] = parsed;
@@ -786,9 +884,9 @@ async function importAsset(ev, slot) {
     return;
   }
 
-  const dest = $('assetShared').checked
-    ? '_assets/' + name
-    : charPath('assets/' + name);
+  const dest = chk('assetShared', true)
+    ? '_assets/' + slot + '/' + file_
+    : charPath('assets/' + slot + '/' + file_);
 
   try {
     if (isPng) {
@@ -806,32 +904,50 @@ async function importAsset(ev, slot) {
 }
 
 function style() {
+  const ink  = val('inkColor', '#141414');
+  const head = val('lidColor', '#c9c9cc');
+  const pick = (id) => chk(id) ? head : ink;
+
   return {
-    stroke: num('stroke'),
-    ink: $('inkColor').value,
+    stroke: num('stroke', 3),
+    ink: ink,
     // Un trait a la couleur de la tete disparait visuellement, element par element
-    inkEye: $('headEye').checked ? $('lidColor').value : $('inkColor').value,
-    inkLid: $('headLid').checked ? $('lidColor').value : $('inkColor').value,
-    inkBrow: $('headBrow').checked ? $('lidColor').value : $('inkColor').value,
-    inkMouth: $('headMouth').checked ? $('lidColor').value : $('inkColor').value,
-    sclera: $('scleraColor').value, pupilCol: $('pupilColor').value,
-    mouthCol: $('mouthColor').value,
-    shape: $('eyeShape').value,
-    ew: num('eyeW'), eh: num('eyeH'), gap: num('eyeGap'),
-    pupil: num('pupil'), shine: num('shine'), brows: $('brows').checked,
-    iris: num('iris'), irisCol: $('irisColor').value,
-    browScale: num('browScale'), browGap: num('browGap'), browRise: num('browRise'),
-    lidCol: $('lidColor').value,
-    lips: num('lips'), lipCol: $('lipColor').value,
-    crow: num('crow'), bags: num('bags'),
-    scleraShade: num('scleraShade'), shadePos: num('shadePos'),
-    lashes: num('lashes'), lashN: num('lashN'),
-    bagY: num('bagY'), bagRot: num('bagRot'),
-    wobble: num('wobble'), wobbleScale: num('wobbleScale'), inkVar: num('inkVar'),
-    aPupil: $('assetPupil').value, aPupilK: num('assetPupilScale'),
-    aBrow: $('assetBrow').value, aBrowK: num('assetBrowScale'),
-    aBrowRot: num('assetBrowRot'), aBrowFlip: $('assetBrowFlip').checked,
-    mw: num('mW'), mh: num('mH'), teeth: $('teeth').checked,
+    inkEye: pick('headEye'),
+    inkLid: pick('headLid'),
+    inkBrow: pick('headBrow'),
+    inkMouth: pick('headMouth'),
+
+    sclera: val('scleraColor', '#ffffff'),
+    pupilCol: val('pupilColor', '#141414'),
+    mouthCol: val('mouthColor', '#8c2f39'),
+    lidCol: head,
+    lipCol: val('lipColor', '#c26b6b'),
+
+    shape: val('eyeShape', 'oval'),
+    ew: num('eyeW', 20), eh: num('eyeH', 24), gap: num('eyeGap', 72),
+    pupil: num('pupil', .45), shine: num('shine', .35),
+    iris: num('iris', 0), irisCol: val('irisColor', '#3a7ca5'),
+    scleraShade: num('scleraShade', 0), shadePos: num('shadePos', 1),
+    lashes: num('lashes', 0), lashN: num('lashN', 5),
+    crow: num('crow', 0), bags: num('bags', 0),
+    bagY: num('bagY', 0), bagRot: num('bagRot', 0),
+
+    brows: chk('brows', true),
+    browScale: num('browScale', 1), browGap: num('browGap', 0),
+    browRise: num('browRise', 0),
+
+    mw: num('mW', 30), mh: num('mH', 18), teeth: chk('teeth', true),
+    lipTop: num('lipTop', 0), lipBot: num('lipBot', 0),
+    teethK: num('teethK', 1), tongueK: num('tongueK', 1),
+
+    aPupil: val('assetPupil'), aPupilK: num('assetPupilScale', 1),
+    aBrow: val('assetBrow'), aBrowK: num('assetBrowScale', 1),
+    aBrowRot: num('assetBrowRot', 0), aBrowFlip: chk('assetBrowFlip'),
+    aTeeth: val('assetTeeth'), aTongue: val('assetTongue'),
+    aUvula: val('assetUvula'),
+
+    wobble: num('wobble', 0), wobbleScale: num('wobbleScale', .03),
+    inkVar: num('inkVar', 0),
   };
 }
 
@@ -843,8 +959,10 @@ function syncLabels() {
    ['assetPupilScale','v-assetPupilScale'],['assetBrowScale','v-assetBrowScale'],
    ['assetBrowRot','v-assetBrowRot'],['browScale','v-browScale'],
    ['browGap','v-browGap'],['browRise','v-browRise'],
-   ['lips','v-lips'],['crow','v-crow'],['bags','v-bags'],['shadePos','v-shadePos'],
-   ['lashN','v-lashN'],['bagY','v-bagY'],['bagRot','v-bagRot']]
+   ['crow','v-crow'],['bags','v-bags'],['shadePos','v-shadePos'],
+   ['lashN','v-lashN'],['bagY','v-bagY'],['bagRot','v-bagRot'],
+   ['lipTop','v-lipTop'],['lipBot','v-lipBot'],
+   ['teethK','v-teethK'],['tongueK','v-tongueK']]
    .forEach(([src,dst]) => { const el = $(dst); if (el) el.textContent = $(src).value; });
 }
 
@@ -1090,111 +1208,134 @@ function drawEyes(s, e, b, uid) {
 // ---------------------------------------------------------------------------
 // Dessin de la bouche
 // ---------------------------------------------------------------------------
-// Les levres suivent le trace par construction : chaque contour recoit une
-// passe plus large posee dessous, quel que soit le type de bouche.
-function lipPass(markup, s) {
-  if (!s.lips) return markup;
 
-  const doc = new DOMParser().parseFromString(
-    '<svg xmlns="http://www.w3.org/2000/svg">' + markup + '</svg>', 'image/svg+xml');
-  const svg = doc.documentElement;
-  if (svg.querySelector('parsererror')) return markup;
+// Profil d'ouverture et d'epaisseur : maximal au centre, nul aux commissures
+const M_PROFILE = [.45, .85, 1, .85, .45];
 
-  svg.querySelectorAll('path,line,polyline,ellipse,rect,circle').forEach(el => {
-    const stroke = el.getAttribute('stroke');
-    const width = parseFloat(el.getAttribute('stroke-width')
-      || (el.style && el.style.strokeWidth) || 0);
-    if (!stroke || stroke === 'none' || !width) return;
+// 12 poignees : commissure gauche, 5 hautes, commissure droite, 5 basses.
+// Coordonnees locales, x et y dans [-1, 1], y vers le bas.
+function mouthPoints(m) {
+  if (Array.isArray(m.pts) && m.pts.length === 12)
+    return m.pts.map(p => ({ x: p[0], y: p[1] }));
 
-    const lip = el.cloneNode(false);
-    lip.setAttribute('fill', 'none');
-    lip.setAttribute('stroke', s.lipCol);
-    lip.setAttribute('stroke-width', (width * (1 + s.lips)).toFixed(2));
-    lip.setAttribute('stroke-linecap', 'round');
-    lip.setAttribute('stroke-linejoin', 'round');
-    el.parentNode.insertBefore(lip, el);
-  });
+  const t = m.t || 'curve';
+  const curve = m.curve || 0;
+  const open = m.open || 0;
 
-  return svg.innerHTML;
+  // Les anciens types se traduisent en ouverture haute et basse
+  let ot = open * .9, ob = open * .9;
+  if (t === 'line' || t === 'curve') { ot = 0; ob = 0; }
+  if (t === 'o') { ot = Math.max(.35, open); ob = ot; }
+  if (t === 'grit') { ot = Math.max(.3, open * .7); ob = ot; }
+
+  const cy = -curve * .55;
+  const pts = [{ x: -1, y: cy }];
+
+  for (let i = 0; i < 5; i++) {
+    const x = -1 + (i + 1) * (2 / 6);
+    pts.push({ x, y: cy * (1 - M_PROFILE[i]) - ot * M_PROFILE[i] });
+  }
+  pts.push({ x: 1, y: cy });
+
+  for (let i = 4; i >= 0; i--) {
+    const x = -1 + (i + 1) * (2 / 6);
+    pts.push({ x, y: cy * (1 - M_PROFILE[i]) + ob * M_PROFILE[i] });
+  }
+  return pts;
+}
+
+// Courbe fermee lissee passant par tous les points (Catmull-Rom en cubiques)
+function smoothClosed(pts) {
+  const n = pts.length;
+  const at = i => pts[(i + n) % n];
+  let d = `M ${at(0).x.toFixed(2)} ${at(0).y.toFixed(2)}`;
+
+  for (let i = 0; i < n; i++) {
+    const p0 = at(i - 1), p1 = at(i), p2 = at(i + 1), p3 = at(i + 2);
+    const c1x = p1.x + (p2.x - p0.x) / 6, c1y = p1.y + (p2.y - p0.y) / 6;
+    const c2x = p2.x - (p3.x - p1.x) / 6, c2y = p2.y - (p3.y - p1.y) / 6;
+    d += ` C ${c1x.toFixed(2)} ${c1y.toFixed(2)} ${c2x.toFixed(2)} ${c2y.toFixed(2)}`
+       + ` ${p2.x.toFixed(2)} ${p2.y.toFixed(2)}`;
+  }
+  return d + ' Z';
+}
+
+// Une levre : bande entre le bord de la bouche et un contour decale
+function lipShape(pts, top, amount) {
+  if (!amount) return '';
+
+  const inner = top ? pts.slice(0, 7) : [pts[6], ...pts.slice(7), pts[0]];
+  const outer = inner.map((p, i) => {
+    const k = (i === 0 || i === inner.length - 1) ? 0 : M_PROFILE[i - 1];
+    return { x: p.x, y: p.y + (top ? -1 : 1) * amount * k };
+  }).reverse();
+
+  const line = list => list.map(p => `${p.x.toFixed(2)} ${p.y.toFixed(2)}`).join(' L ');
+  return `M ${line(inner)} L ${line(outer)} Z`;
 }
 
 function drawMouth(s, m) {
   m = m || {};
-  const cx = VB_MOUTH.w/2, cy = VB_MOUTH.h*.5;
+
+  const cx = VB_MOUTH.w / 2, cy0 = VB_MOUTH.h * .5;
   const w = s.mw * (m.w || 1);
   const h = s.mh * (m.h || 1);
-  const curve = m.curve || 0;
-  const open = m.open || 0;
-  const t = m.t || 'line';
   const S = s.stroke;
-  let out = '';
 
-  const wrap = inner =>
-    `<g transform="rotate(${m.tilt || 0} ${cx} ${cy})">${lipPass(inner, s)}</g>`;
+  const pts = mouthPoints(m);
+  const world = pts.map(p => ({ x: cx + p.x * w, y: cy0 + p.y * h }));
 
-  if (t === 'line')
-    return wrap(`<path d="M ${cx-w} ${cy} Q ${cx} ${cy-curve*h*1.2} ${cx+w} ${cy}"
-      fill="none" stroke="${s.ink}" stroke-width="${S*1.2}" stroke-linecap="round"/>`);
+  const uid = 'm' + Math.random().toString(36).slice(2, 8);
+  const path = smoothClosed(world);
+  const sealed = pts.every(p => Math.abs(p.y - pts[0].y) < .04);
 
-  if (t === 'curve')
-    return wrap(`<path d="M ${cx-w} ${cy-curve*h*.35} Q ${cx} ${cy+curve*h*1.15} ${cx+w} ${cy-curve*h*.35}"
-      fill="none" stroke="${s.ink}" stroke-width="${S*1.2}" stroke-linecap="round"/>`);
+  let out = `<defs><clipPath id="${uid}"><path d="${path}"/></clipPath></defs>`;
 
-  if (t === 'wave') {
-    const a = h * .3, seg = w/2;
-    return wrap(`<path d="M ${cx-w} ${cy}
-        q ${seg/2} ${-a} ${seg} 0 q ${seg/2} ${a} ${seg} 0
-        q ${seg/2} ${-a} ${seg} 0 q ${seg/2} ${a} ${seg} 0"
-      fill="none" stroke="${s.ink}" stroke-width="${S*1.2}" stroke-linecap="round"/>`);
-  }
+  if (!sealed) {
+    // Fond de gorge, puis les calques internes decoupes par le contour
+    out += `<path d="${path}" fill="${s.mouthCol}"/>`;
+    out += `<g clip-path="url(#${uid})">`;
 
-  if (t === 'o') {
-    const rx = w * .55, ry = h * (.6 + open);
-    out = `<ellipse cx="${cx}" cy="${cy}" rx="${rx}" ry="${ry}"
-             fill="${s.mouthCol}" stroke="${s.ink}" stroke-width="${S*1.1}"/>`;
-    return wrap(out);
-  }
+    if (s.aUvula && ASSETS[s.aUvula])
+      out += assetAt(s.aUvula, cx, cy0 - h * .55, w * .3, s.mouthCol);
 
-  if (t === 'grit') {
-    const oh = h * (.5 + open);
-    out = `<rect x="${cx-w}" y="${cy-oh/2}" width="${w*2}" height="${oh}" rx="${oh*.15}"
-             fill="${s.mouthCol}" stroke="${s.ink}" stroke-width="${S*1.1}"/>`;
-    if (s.teeth) {
-      out += `<rect x="${cx-w}" y="${cy-oh/2}" width="${w*2}" height="${oh*.42}" fill="#fff"/>`;
-      out += `<rect x="${cx-w}" y="${cy+oh*.08}" width="${w*2}" height="${oh*.42}" fill="#fff"/>`;
-      for (let i = 1; i < 6; i++) {
-        const x = cx - w + (w*2) * i/6;
-        out += `<line x1="${x}" y1="${cy-oh/2}" x2="${x}" y2="${cy+oh/2}"
-                  stroke="${s.ink}" stroke-width="${S*.5}"/>`;
-      }
-      out += `<rect x="${cx-w}" y="${cy-oh/2}" width="${w*2}" height="${oh}" rx="${oh*.15}"
-                fill="none" stroke="${s.ink}" stroke-width="${S*1.1}"/>`;
+    if (s.aTongue && ASSETS[s.aTongue])
+      out += assetAt(s.aTongue, cx, cy0 + h * .55, w * s.tongueK, '#d9636f');
+    else if (m.tongue)
+      out += `<ellipse cx="${cx}" cy="${cy0 + h * .7}" rx="${w * .5}" ry="${h * .5}"
+                fill="#d9636f" stroke="${s.inkMouth}" stroke-width="${S * .5}"/>`;
+
+    if (s.teeth && m.teeth) {
+      if (s.aTeeth && ASSETS[s.aTeeth])
+        out += assetAt(s.aTeeth, cx, cy0 - h * .62, w * 1.6 * s.teethK, '#ffffff');
+      else
+        out += `<rect x="${cx - w}" y="${cy0 - h * 1.1}" width="${w * 2}"
+                  height="${h * .55}" fill="#ffffff"/>`;
     }
-    return wrap(out);
+
+    out += `</g>`;
   }
 
-  // 'open' : bouche ouverte, coins remontant ou descendant selon curve
-  const oh = h * (.6 + open * 1.6);
-  const top = cy - oh/2, bot = cy + oh/2;
-  const cOff = curve * oh * .5;
-  const id = 'mclip' + Math.random().toString(36).slice(2, 8);
+  // Levres : deux formes distinctes, epaisses au centre, fines aux commissures
+  const toWorld = d => d.replace(/(-?[\d.]+) (-?[\d.]+)/g,
+    (_, a, b) => `${(cx + parseFloat(a) * w).toFixed(2)} `
+               + `${(cy0 + parseFloat(b) * h).toFixed(2)}`);
 
-  const path = `M ${cx-w} ${cy-cOff}
-                Q ${cx} ${top - cOff*.2} ${cx+w} ${cy-cOff}
-                Q ${cx} ${bot + cOff*.6} ${cx-w} ${cy-cOff} Z`;
+  const lipUp = lipShape(pts, true, s.lipTop);
+  const lipDn = lipShape(pts, false, s.lipBot);
 
-  out = `<defs><clipPath id="${id}"><path d="${path}"/></clipPath></defs>`;
-  out += `<path d="${path}" fill="${s.mouthCol}"/>`;
-  out += `<g clip-path="url(#${id})">`;
-  if (s.teeth && m.teeth)
-    out += `<rect x="${cx-w}" y="${top-cOff*.2}" width="${w*2}" height="${oh*.3}" fill="#fff"/>`;
-  if (m.tongue)
-    out += `<ellipse cx="${cx}" cy="${bot}" rx="${w*.5}" ry="${oh*.35}"
-              fill="#d9636f" stroke="${s.ink}" stroke-width="${S*.5}"/>`;
-  out += `</g>`;
-  out += `<path d="${path}" fill="none" stroke="${s.ink}" stroke-width="${S*1.1}" stroke-linejoin="round"/>`;
-  return wrap(out);
-}
+  if (lipUp) out += `<path d="${toWorld(lipUp)}" fill="${s.lipCol}"
+                       stroke="${s.inkMouth}" stroke-width="${S * .8}"
+                       stroke-linejoin="round"/>`;
+  if (lipDn) out += `<path d="${toWorld(lipDn)}" fill="${s.lipCol}"
+                       stroke="${s.inkMouth}" stroke-width="${S * .8}"
+                       stroke-linejoin="round"/>`;
+
+  out += `<path d="${path}" fill="none" stroke="${s.inkMouth}"
+            stroke-width="${S * 1.1}" stroke-linejoin="round"/>`;
+
+  return `<g transform="rotate(${m.tilt || 0} ${cx} ${cy0})">${out}</g>`;
+} 
 
 // ---------------------------------------------------------------------------
 // Assemblage
@@ -1451,6 +1592,13 @@ function renderAll() {
   const on = EXPR.filter(x => enabled[x.id]).length;
   $('count').textContent = on + ' / ' + EXPR.length + ' expression(s) selectionnee(s)';
 
+  const { cw, ch } = cellSize();
+  const nOn = exportList().length;
+  const cols = Math.max(1, parseInt($('cols').value) || 8);
+  const el = $('sheetSize');
+  if (el) el.textContent = 'Planche : ' + (cols * cw) + ' x '
+    + (Math.ceil(nOn / cols) * ch) + ' px  (cellule ' + cw + ' x ' + ch + ')';
+
   scheduleSave();
 }
 
@@ -1648,9 +1796,100 @@ function buildFields() {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Poignees de bouche : 12 points deplacables a la souris
+// ---------------------------------------------------------------------------
+let handlesOn = true;
+
+function mouthGeom(s, m) {
+  const offset = ($('partMode').value === 'mouth') ? 0 : VB_EYES.h;
+  return {
+    cx: VB_MOUTH.w / 2,
+    cy: VB_MOUTH.h * .5 + offset,
+    w: s.mw * (m.w || 1),
+    h: s.mh * (m.h || 1),
+  };
+}
+
+// Fige la forme courante en 12 points : tout reglage ulterieur part de la
+function ensurePts(m) {
+  if (!Array.isArray(m.pts) || m.pts.length !== 12) {
+    m.pts = mouthPoints(m).map(p => [+p.x.toFixed(3), +p.y.toFixed(3)]);
+  }
+  return m.pts;
+}
+
+function toggleHandles() {
+  handlesOn = !handlesOn;
+  refreshEditor();
+}
+
+function resetShape() {
+  if (!editing) return;
+  delete editing.m.pts;
+  refreshEditor();
+}
+
+function addHandles(s) {
+  const svg = $('edit-preview').querySelector('svg');
+  if (!svg) return;
+
+  const g = mouthGeom(s, editing.m);
+  const pts = ensurePts(editing.m);
+  const NS = 'http://www.w3.org/2000/svg';
+  const layer = document.createElementNS(NS, 'g');
+
+  pts.forEach((p, i) => {
+    const c = document.createElementNS(NS, 'circle');
+    c.setAttribute('cx', (g.cx + p[0] * g.w).toFixed(2));
+    c.setAttribute('cy', (g.cy + p[1] * g.h).toFixed(2));
+    c.setAttribute('r', 3.4);
+    // Les commissures en plein, les autres en creux
+    c.setAttribute('fill', (i === 0 || i === 6) ? '#e0923d' : '#ffffff');
+    c.setAttribute('stroke', '#e0923d');
+    c.setAttribute('stroke-width', 1.2);
+    c.style.cursor = 'move';
+    c.addEventListener('pointerdown', ev => startDrag(ev, i, svg, g));
+    layer.appendChild(c);
+  });
+
+  svg.appendChild(layer);
+}
+
+function startDrag(ev, index, svg, g) {
+  ev.preventDefault();
+  const pt = svg.createSVGPoint();
+
+  const move = e => {
+    pt.x = e.clientX;
+    pt.y = e.clientY;
+    const loc = pt.matrixTransform(svg.getScreenCTM().inverse());
+
+    const p = editing.m.pts[index];
+    p[0] = +((loc.x - g.cx) / g.w).toFixed(3);
+    p[1] = +((loc.y - g.cy) / g.h).toFixed(3);
+    refreshEditor();
+  };
+
+  const up = () => {
+    window.removeEventListener('pointermove', move);
+    window.removeEventListener('pointerup', up);
+  };
+
+  window.addEventListener('pointermove', move);
+  window.addEventListener('pointerup', up);
+}
+
 function refreshEditor() {
   if (!editing) return;
-  $('edit-preview').innerHTML = svgFor(editing, style(), 'edit');
+  const s = style();
+  $('edit-preview').innerHTML = svgFor(editing, s, 'edit');
+
+  const zone = editZone();
+  $('edit-tools').style.display = (zone === 'eyes') ? 'none' : '';
+  $('btnHandles').textContent = handlesOn ? 'Masquer les poignees' : 'Poignees';
+
+  if (handlesOn && zone !== 'eyes') addHandles(s);
   renderAll();
 }
 
@@ -1878,6 +2117,12 @@ async function applyContext(c) {
   // La couleur de la tete vient du materiau Blender : elle prime sur le style
   if (CTX.head) $('lidColor').value = CTX.head;
 
+  // L'onglet est reutilise : l'adresse doit refleter le contexte reel
+  const q = new URLSearchParams({ robot: CTX.robot, zone: CTX.zone,
+                                  sheet: CTX.sheet, expr: CTX.expr,
+                                  head: CTX.head });
+  history.replaceState(null, '', location.pathname + '?' + q.toString());
+
   onSrcChange();
   booting = false;
 
@@ -1895,6 +2140,80 @@ async function pollContext() {
     ctxSerial = c.serial;
     await applyContext(c);
   } catch (err) { /* serveur arrete */ }
+}
+
+// ---------------------------------------------------------------------------
+// Colonne des personnages
+// La vignette montre la premiere cellule des planches deja exportees : pas de
+// rendu a refaire, l'image sur disque fait foi.
+// ---------------------------------------------------------------------------
+async function buildRobotList() {
+  if (!LINKED) return;
+
+  let names = [];
+  try {
+    const res = await fetch('/robots?t=' + Date.now());
+    if (res.ok) names = (await res.json()).robots || [];
+  } catch (err) { return; }
+
+  const host = $('robot-list');
+  host.innerHTML = '';
+
+  for (const name of names) {
+    const tile = document.createElement('div');
+    tile.className = 'rtile' + (name === CTX.robot ? ' sel' : '');
+    tile.onclick = () => switchRobot(name);
+
+    // Le prefixe des planches varie d'un personnage a l'autre : on lit le
+    // dossier plutot que de deviner le nom du fichier
+    let files = [];
+    try {
+      const res2 = await fetch('/list/' + name + '/expressions?t=' + Date.now());
+      if (res2.ok) files = (await res2.json()).files || [];
+    } catch (err) { /* dossier absent */ }
+
+    for (const zone of ['eyes', 'mouth']) {
+      const cell = document.createElement('div');
+      cell.className = 'rcell';
+      tile.appendChild(cell);
+
+      const meta = files.find(f => f.toLowerCase().endsWith(zone + '.json'));
+      if (!meta) continue;
+
+      try {
+        const res3 = await fetch('/files/' + name + '/expressions/' + meta
+                                 + '?t=' + Date.now());
+        if (!res3.ok) continue;
+
+        const d = await res3.json();
+        cell.style.backgroundImage = 'url(/files/' + name + '/expressions/'
+                                   + d.image + ')';
+        cell.style.backgroundSize = (d.sheet.cols * 100) + '% '
+                                  + (d.sheet.rows * 100) + '%';
+        // Cellule plus lisible que la premiere : yeux ouverts, bouche marquee
+        const wanted = (zone === 'eyes') ? 'surpris' : 'rire';
+        const fr = (d.frames || []).find(f => f.id === wanted) || (d.frames || [])[0];
+        const px = fr && d.sheet.cols > 1 ? (fr.col / (d.sheet.cols - 1)) * 100 : 0;
+        const py = fr && d.sheet.rows > 1 ? (fr.row / (d.sheet.rows - 1)) * 100 : 0;
+        cell.style.backgroundPosition = px + '% ' + py + '%';
+      } catch (err) { /* planche illisible */ }
+    }
+
+    const label = document.createElement('div');
+    label.className = 'rn';
+    label.textContent = name;
+    tile.appendChild(label);
+
+    host.appendChild(tile);
+  }
+}
+
+async function switchRobot(name) {
+  if (name === CTX.robot) return;
+  closeEditor();
+  await applyContext({ robot: name, zone: CTX.zone,
+                       sheet: 'robot_' + CTX.zone + '.json', expr: '', head: '' });
+  await buildRobotList();
 }
 
 async function initLinked() {
@@ -1915,6 +2234,7 @@ async function initLinked() {
   const found = await loadCharacterStyle();
   await loadOverrides();
   await listPresets();
+  await buildRobotList();
   CTX.head = PARAMS.get('head') || '';
   if (CTX.head) $('lidColor').value = CTX.head;
 
@@ -1933,6 +2253,7 @@ async function initLinked() {
   // Les clics suivants sur le crayon mettent cet onglet a jour
   setInterval(pollContext, 1200);
   booting = false;
+  buildRobotList();
   setSaveState('a jour');
 
   // Mise en route d'un personnage neuf : les deux planches sont generees
@@ -2067,12 +2388,14 @@ const STYLE_IDS = ['stroke','inkColor','scleraColor','pupilColor','mouthColor','
                    'iris','irisColor','scleraShade','lashes','wobble','wobbleScale','inkVar',
                    'assetPupil','assetPupilScale','assetBrow','assetBrowScale',
                    'assetBrowRot','assetBrowFlip','browScale','browGap','browRise','lidColor',
-                   'lips','lipColor','crow','bags','shadePos','lashN','bagY','bagRot',
+                   'lipColor','crow','bags','shadePos','lashN','bagY','bagRot',
+                   'lipTop','lipBot','assetTeeth','assetTongue','assetUvula',
+                   'teethK','tongueK',
                    'eyeW','eyeH','eyeGap','pupil','shine','mW','mH','cellW','cols','prefix'];
 
 function styleJSON() {
   const o = {};
-  STYLE_IDS.forEach(id => o[id] = $(id).value);
+  STYLE_IDS.forEach(id => { const el = $(id); if (el) o[id] = el.value; });
   o.brows = $('brows').checked;
   o.teeth = $('teeth').checked;
   o.assetBrowFlip = $('assetBrowFlip').checked;
@@ -2094,7 +2417,10 @@ function loadStyleFile(ev) {
   r.onload = e => {
     try {
       const o = JSON.parse(e.target.result);
-      STYLE_IDS.forEach(id => { if (o[id] !== undefined) $(id).value = o[id]; });
+      STYLE_IDS.forEach(id => {
+        const el = $(id);
+        if (el && o[id] !== undefined) el.value = o[id];
+      });
       if (o.brows !== undefined) $('brows').checked = o.brows;
       if (o.teeth !== undefined) $('teeth').checked = o.teeth;
       if (o.assetBrowFlip !== undefined) $('assetBrowFlip').checked = o.assetBrowFlip;
