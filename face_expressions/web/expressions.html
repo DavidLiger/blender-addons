@@ -383,6 +383,7 @@
           <button class="btn sec" onclick="setAllOn(true)">Tout cocher</button>
           <button class="btn sec" onclick="setAllOn(false)">Tout decocher</button>
         </div>
+        <button class="btn sec" onclick="newExpression()">+ Nouvelle expression</button>
         <p class="hint" style="margin-top:8px">Cliquer une vignette pour l'inclure ou l'exclure de l'export.</p>
         <div class="msg" id="count"></div>
       </div>
@@ -475,6 +476,8 @@
       <div class="edit-foot">
         <button class="btn" onclick="saveOverride()">Enregistrer</button>
         <button class="btn sec" onclick="resetOverride()">Revenir a l'origine</button>
+        <button class="btn sec" id="btnDelExpr" onclick="deleteExpression()"
+                style="display:none">Supprimer cette expression</button>
         <button class="btn sec" onclick="closeEditor()">Fermer</button>
         <div class="msg" id="edit-msg"></div>
       </div>
@@ -1560,7 +1563,7 @@ async function savePreset(forced) {
   if (!raw) return;
 
   const name = raw.replace(/[^A-Za-z0-9_-]+/g, '-') + '.json';
-  const payload = { style: styleJSON(), overrides };
+  const payload = { style: styleJSON(), overrides, extras };
 
   try {
     const res = await fetch('/save', {
@@ -1588,7 +1591,7 @@ function applyPresetData(data) {
     .forEach(id => { if (o[id] !== undefined) $(id).checked = o[id]; });
 
   overrides = data.overrides || {};
-  applyOverrides();
+  installExtras(data.extras || []);
   booting = false;
 }
 
@@ -1623,6 +1626,7 @@ async function doAutoSave() {
   try {
     await serverSave('style.json', JSON.stringify(styleJSON(), null, 2), false);
     await serverSave('overrides.json', JSON.stringify(overrides, null, 1), false);
+    await serverSave('extras.json', JSON.stringify(extras, null, 1), false);
     setSaveState('enregistre');
   } catch (err) {
     setSaveState('erreur : ' + err.message, false);
@@ -1722,6 +1726,83 @@ const F_MOUTH = [
   ['tilt', "Inclinaison", -25, 25, 1, 0],
 ];
 
+// ---------------------------------------------------------------------------
+// Expressions supplementaires
+// Ajoutees aux 49 de base, propres au personnage. Les 49 d'origine ne sont
+// jamais supprimables : on les decoche pour les exclure de l'export.
+// ---------------------------------------------------------------------------
+let extras = [];
+
+function installExtras(list) {
+  for (let i = EXPR.length - 1; i >= 0; i--) {
+    if (EXPR[i].extra) { EXPR.splice(i, 1); BASE.splice(i, 1); }
+  }
+
+  extras = (list || []).filter(d => d && d.id);
+
+  extras.forEach(d => {
+    const item = { id: d.id, n: d.n || d.id, extra: true,
+                   e: { ...(d.e || {}) }, b: { ...(d.b || {}) },
+                   m: JSON.parse(JSON.stringify(d.m || {})) };
+    BASE.push(JSON.parse(JSON.stringify(item)));
+    EXPR.push(item);
+    if (enabled[d.id] === undefined) enabled[d.id] = true;
+  });
+
+  applyOverrides();
+}
+
+async function saveExtras() {
+  if (!LINKED) return;
+  try {
+    await serverSave('extras.json', JSON.stringify(extras, null, 1), false);
+  } catch (err) { /* signale par l'enregistrement automatique */ }
+}
+
+async function loadExtras() {
+  if (!LINKED) { installExtras([]); return; }
+  try {
+    const res = await fetch('/files/' + charPath('extras.json') + '?t=' + Date.now());
+    installExtras(res.ok ? await res.json() : []);
+  } catch (err) {
+    installExtras([]);
+  }
+}
+
+async function newExpression() {
+  const src = editing || EXPR[0];
+  const raw = prompt('Nom de la nouvelle expression :', src.n + ' 2');
+  if (!raw) return;
+
+  const id = raw.toLowerCase().replace(/[^a-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '');
+  if (!id) return;
+  if (EXPR.some(x => x.id === id)) { alert('Ce nom existe deja'); return; }
+
+  extras.push({ id, n: raw, e: { ...src.e }, b: { ...src.b },
+                m: JSON.parse(JSON.stringify(src.m)) });
+  installExtras(extras);
+  await saveExtras();
+
+  renderAll();
+  openEditor(id);
+}
+
+async function deleteExpression() {
+  if (!editing || !editing.extra) return;
+  if (!confirm('Supprimer definitivement ' + editing.n + ' ?')) return;
+
+  const id = editing.id;
+  closeEditor();
+
+  extras = extras.filter(d => d.id !== id);
+  delete overrides[id];
+  delete enabled[id];
+
+  installExtras(extras);
+  await saveExtras();
+  renderAll();
+}
+
 function applyOverrides() {
   EXPR.forEach((x, i) => {
     const src = BASE[i];
@@ -1745,6 +1826,7 @@ function openEditor(id) {
   $('edit-title').textContent = editing.n
     + (overrides[editing.id] ? '  (retouchee)' : '');
   $('edit-msg').textContent = '';
+  $('btnDelExpr').style.display = editing.extra ? '' : 'none';
   buildFields();
   refreshEditor();
   $('edit-ov').classList.add('open');
@@ -2030,6 +2112,22 @@ async function saveOverride() {
   if (Object.keys(entry).length) overrides[editing.id] = entry;
   else delete overrides[editing.id];
 
+  // Une expression ajoutee absorbe ses retouches dans sa propre definition
+  if (editing.extra) {
+    const d = extras.find(x => x.id === editing.id);
+    if (d) {
+      d.e = { ...editing.e }; d.b = { ...editing.b };
+      d.m = JSON.parse(JSON.stringify(editing.m));
+      delete overrides[editing.id];
+      const base = BASE.find(x => x.id === editing.id);
+      if (base) {
+        base.e = { ...d.e }; base.b = { ...d.b };
+        base.m = JSON.parse(JSON.stringify(d.m));
+      }
+    }
+    await saveExtras();
+  }
+
   if (!LINKED) {
     $('edit-msg').textContent = 'Retouche gardee (session seulement)';
     renderAll();
@@ -2225,6 +2323,7 @@ async function applyContext(c) {
   await loadCharacterStyle();
   refreshAssetButtons();
   await loadOverrides();
+  await loadExtras();
 
   // La couleur de la tete vient du materiau Blender : elle prime sur le style
   if (CTX.head) $('lidColor').value = CTX.head;
