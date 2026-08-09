@@ -135,10 +135,18 @@
     margin-top:5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .ptile .none{height:56px;display:flex;align-items:center;justify-content:center;
     background:var(--panel);border-radius:4px;color:var(--muted);font-size:.7rem}
-  .mid{overflow-y:auto;min-height:0;padding:14px;display:flex;
-    flex-direction:column;gap:14px}
+  .mid{overflow-y:auto;min-height:0;padding:14px 14px 0;display:flex;
+    flex-direction:column;gap:14px;position:relative}
+
+  /* Colle au bas de la colonne, quelle que soit la hauteur de la grille,
+     et reste visible pendant que les expressions defilent dessous */
   .bottom{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));
-    gap:14px;align-items:start}
+    gap:14px;align-items:start;
+    position:sticky;bottom:0;z-index:5;margin-top:auto;
+    max-height:46vh;overflow-y:auto;
+    padding:12px 0;background:var(--bg);
+    border-top:1px solid var(--border);
+    box-shadow:0 -8px 16px -8px rgba(0,0,0,.55)}
   .bottom .section{margin-bottom:0}
 
   .segs{display:flex;gap:0;border:1px solid var(--border);border-radius:6px;
