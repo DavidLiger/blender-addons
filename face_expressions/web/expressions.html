@@ -1238,12 +1238,20 @@ function drawEyes(s, e, b, uid) {
                 fill="#5aa9e6" stroke="${s.ink}" stroke-width="${s.stroke*.5}"/>`;
 
     if (s.brows) {
-      const ba = (b.a || 0) * side;
-      const k = (s.browScale || 1) * (b.k !== undefined ? b.k : 1);
-      const by = cy - ry - 12 - (s.browRise || 0) + (b.y || 0);
+      // En mode asymetrique, le sourcil droit lit ses propres valeurs et
+      // retombe sur celles de gauche tant qu'elles ne sont pas definies
+      const right = b.asym && side > 0;
+      const bv = (key, def) => {
+        const v = right && b[key + 'R'] !== undefined ? b[key + 'R'] : b[key];
+        return v !== undefined ? v : def;
+      };
+
+      const ba = bv('a', 0) * side;
+      const k = (s.browScale || 1) * bv('k', 1);
+      const by = cy - ry - 12 - (s.browRise || 0) + bv('y', 0);
       const bw = rx * 1.1 * k;
-      const bAsym = b.asym && side > 0 ? -1 : 1;
-      const cxb = cx + side * ((s.browGap || 0) + (b.gap || 0));
+      const bAsym = 1;
+      const cxb = cx + side * ((s.browGap || 0) + bv('gap', 0));
       if (s.aBrow && ASSETS[s.aBrow]) {
         // L'asset est dessine tel quel d'un cote, en miroir de l'autre
         const mirrored = (side < 0) !== !!s.aBrowFlip;
@@ -1782,13 +1790,15 @@ function toggle(group, key, label) {
   lab.style.color = 'var(--text)';
 
   const input = document.createElement('input');
-  input.type = 'checkbox';
-  input.style.width = 'auto';
-  input.checked = !!target[key];
-  input.onchange = () => {
-    if (input.checked) target[key] = 1; else delete target[key];
-    refreshEditor();
-  };
+    input.type = 'checkbox';
+    input.style.width = 'auto';
+    input.checked = !!target[key];
+    input.onchange = () => {
+      if (input.checked) target[key] = 1; else delete target[key];
+      // asym et glyph changent la liste des reglages affiches
+      buildFields();
+      refreshEditor();
+    };
 
   lab.appendChild(input);
   lab.appendChild(document.createTextNode(' ' + label));
@@ -1855,9 +1865,18 @@ function buildFields() {
     ['wink', 'tears', 'shake', 'asym'].forEach(k =>
       eyes.appendChild(toggle('e', k, k)));
 
-    const brow = mk("Sourcils");
+    const brow = mk(editing.b.asym ? "Sourcil gauche" : "Sourcils");
     F_BROW.forEach(f => brow.appendChild(field('b', ...f)));
     brow.appendChild(toggle('b', 'asym', "asymetrique"));
+
+    if (editing.b.asym) {
+      const right = mk("Sourcil droit");
+      F_BROW.forEach(([key, label, min, max, step, def]) => {
+        // Valeur de gauche par defaut : le droit ne diverge que si on y touche
+        const base = editing.b[key] !== undefined ? editing.b[key] : def;
+        right.appendChild(field('b', key + 'R', label, min, max, step, base));
+      });
+    }
   }
 
   if (zone !== 'eyes') {
