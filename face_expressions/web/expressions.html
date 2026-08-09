@@ -135,6 +135,19 @@
     margin-top:5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .ptile .none{height:56px;display:flex;align-items:center;justify-content:center;
     background:var(--panel);border-radius:4px;color:var(--muted);font-size:.7rem}
+  .mid{overflow-y:auto;min-height:0;padding:14px;display:flex;
+    flex-direction:column;gap:14px}
+  .bottom{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));
+    gap:14px;align-items:start}
+  .bottom .section{margin-bottom:0}
+
+  .segs{display:flex;gap:0;border:1px solid var(--border);border-radius:6px;
+    overflow:hidden}
+  .segs button{background:var(--panel-2);border:0;color:var(--muted);
+    padding:6px 12px;font-size:.8rem;cursor:pointer}
+  .segs button+button{border-left:1px solid var(--border)}
+  .segs button:hover{color:var(--text)}
+  .segs button.on{background:var(--accent);color:#1b1b1d;font-weight:600}
 </style>
 </head>
 <body>
@@ -148,11 +161,16 @@
       <option value="gen">Expressions generees</option>
       <option value="draw">Mes dessins</option>
     </select>
-    <select id="partMode" onchange="renderAll()" style="width:auto">
+    <select id="partMode" style="display:none">
       <option value="combined">Yeux + bouche</option>
       <option value="eyes">Yeux seuls</option>
       <option value="mouth">Bouches seules</option>
     </select>
+    <div class="segs" id="partSegs">
+      <button data-part="eyes" onclick="setPart('eyes')">Yeux</button>
+      <button data-part="mouth" onclick="setPart('mouth')">Bouche</button>
+      <button data-part="combined" onclick="setPart('combined')">Yeux + bouche</button>
+    </div>
   </div>
 </header>
 
@@ -376,7 +394,13 @@
       </div>
     </div>
 
-    <div class="section" id="s-exp">
+  </div>
+
+  <div class="grid-col">
+    <div class="sheet" id="sheet"></div>
+
+    <div class="bottom">
+      <div class="section" id="s-exp">
       <div class="section-header" onclick="tog('s-exp')"><span>Expressions</span><span class="chev">&#9662;</span></div>
       <div class="section-body">
         <div class="row2">
@@ -446,11 +470,7 @@
         <div class="msg" id="exportMsg"></div>
       </div>
     </div>
-
-  </div>
-
-  <div class="grid-col">
-    <div class="sheet" id="sheet"></div>
+    </div>
   </div>
 
 <div class="robots">
@@ -644,11 +664,71 @@ function renderDrawList() {
   });
 }
 
+// ---------------------------------------------------------------------------
+// Interface : mode d'edition, panneaux replies, memorises entre sessions
+// ---------------------------------------------------------------------------
+const UI_KEY = 'expr_ui';
+
+function uiState() {
+  try { return JSON.parse(localStorage.getItem(UI_KEY)) || {}; }
+  catch (err) { return {}; }
+}
+
+function uiSave(patch) {
+  try { localStorage.setItem(UI_KEY, JSON.stringify({ ...uiState(), ...patch })); }
+  catch (err) { /* stockage indisponible */ }
+}
+
+function markSegs() {
+  const mode = $('partMode').value;
+  document.querySelectorAll('#partSegs button').forEach(b => {
+    b.classList.toggle('on', b.dataset.part === mode);
+  });
+}
+
+// Le panneau sans objet dans le mode courant se replie
+function zoneSections() {
+  const mode = $('partMode').value;
+  const set = (id, collapsed) => {
+    const el = $(id);
+    if (el) el.classList.toggle('collapsed', collapsed);
+  };
+  set('s-eyes', mode === 'mouth');
+  set('s-mouth', mode === 'eyes');
+}
+
+function setPart(mode) {
+  $('partMode').value = mode;
+  uiSave({ part: mode });
+  markSegs();
+  zoneSections();
+  renderAll();
+}
+
+function restoreUI() {
+  const st = uiState();
+
+  if (st.part && !LINKED) $('partMode').value = st.part;
+  markSegs();
+
+  // Les panneaux de zone sont pilotes par le mode, pas par la memoire
+  Object.entries(st.sections || {}).forEach(([id, collapsed]) => {
+    const el = $(id);
+    if (el && id !== 's-eyes' && id !== 's-mouth') {
+      el.classList.toggle('collapsed', collapsed);
+    }
+  });
+
+  zoneSections();
+}
+
 function onSrcChange() {
   const draw = srcMode() === 'draw';
   $('partMode').disabled = draw;
   $('cellH-wrap').style.display = draw ? '' : 'none';
   renderDrawList();
+  markSegs();
+  zoneSections();
   renderAll();
 }
 
@@ -2189,7 +2269,14 @@ async function loadOverrides() {
 }
 
 function setAllOn(v) { activeList().forEach(x => enabled[x.id] = v); renderAll(); }
-function tog(id) { $(id).classList.toggle('collapsed'); }
+function tog(id) {
+  const el = $(id);
+  el.classList.toggle('collapsed');
+
+  const sections = uiState().sections || {};
+  sections[id] = el.classList.contains('collapsed');
+  uiSave({ sections });
+}
 
 // ---------------------------------------------------------------------------
 // Rasterisation
@@ -2665,6 +2752,7 @@ function loadStyleFile(ev) {
 }
 
 applyOverrides();
+restoreUI();
 onSrcChange();
 initLinked();
 document.addEventListener('keydown', e => {
