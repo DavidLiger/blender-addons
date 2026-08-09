@@ -580,6 +580,148 @@ class RM_OT_add_to_library(bpy.types.Operator):
         return {'FINISHED'}
 
 
+def import_asset(context, coll, path, empty, category, mirror=True):
+    """Importe un .blend d'asset et le pose sur le repere. Retourne la liste
+    des objets crees, marquage compris."""
+    scene = context.scene
+
+    try:
+        with bpy.data.libraries.load(path, link=False) as (src, dst):
+            dst.objects = list(src.objects)
+    except Exception:
+        return []
+
+    imported = [o for o in dst.objects
+                if o is not None and o.type not in {'CAMERA', 'LIGHT'}]
+    for o in dst.objects:
+        if o is not None and o.type in {'CAMERA', 'LIGHT'}:
+            bpy.data.objects.remove(o)
+
+    created = []
+    for obj in imported:
+        coll.objects.link(obj)
+        obj[K_ROBOT] = scene.rm_robot
+        obj["robot_part"] = category
+        obj["robot_slot"] = empty.get("robot_slot", empty.name)
+        _attach_to_empty(context, obj, empty)
+        created.append(obj)
+
+        if mirror:
+            dup, _err = make_mirror(context, obj, empty.get("robot_slot", ""))
+            if dup is not None:
+                created.append(dup)
+
+    return created
+
+
+class RM_OT_default_rules(bpy.types.Operator):
+    bl_idname = "rm.default_rules"
+    bl_label = "Regles par defaut"
+    bl_description = "Remplit la table avec les correspondances usuelles de la famille"
+
+    def execute(self, context):
+        scene = context.scene
+        scene.rm_rules.clear()
+
+        for slot, cat, mirror in DEFAULT_RULES.get(scene.rm_family, []):
+            rule = scene.rm_rules.add()
+            rule.slot = slot
+            rule.category = cat
+            rule.mirror = mirror
+            rule.use = True
+
+        self.report({'INFO'}, "{} regle(s)".format(len(scene.rm_rules)))
+        return {'FINISHED'}
+
+
+class RM_OT_rule_add(bpy.types.Operator):
+    bl_idname = "rm.rule_add"
+    bl_label = "Ajouter une regle"
+    bl_description = "Ajoute une correspondance repere / categorie"
+
+    def execute(self, context):
+        rule = context.scene.rm_rules.add()
+        rule.slot = 'chest'
+        rule.use = True
+        rule.mirror = False
+        return {'FINISHED'}
+
+
+class RM_OT_rule_remove(bpy.types.Operator):
+    bl_idname = "rm.rule_remove"
+    bl_label = "Retirer"
+    bl_description = "Retire cette correspondance"
+
+    index: bpy.props.IntProperty()
+
+    def execute(self, context):
+        rules = context.scene.rm_rules
+        if 0 <= self.index < len(rules):
+            rules.remove(self.index)
+        return {'FINISHED'}
+
+
+class RM_OT_random_fill(bpy.types.Operator):
+    bl_idname = "rm.random_fill"
+    bl_label = "Generer au hasard"
+    bl_description = ("Pose une piece tiree au sort sur chaque repere de la table. "
+                      "Un nouveau clic remplace le tirage precedent")
+    bl_options = {'REGISTER', 'UNDO'}
+
+    def execute(self, context):
+        import random
+
+        scene = context.scene
+        coll = active_robot_collection(context)
+
+        if coll is None:
+            self.report({'ERROR'}, "Aucun robot actif")
+            return {'CANCELLED'}
+        if not scene.rm_rules:
+            self.report({'ERROR'}, "Table vide : cliquer sur Regles par defaut")
+            return {'CANCELLED'}
+
+        # Le tirage precedent laisse la place au nouveau
+        removed = 0
+        for obj in [o for o in coll.objects if o.get(K_RANDOM)]:
+            bpy.data.objects.remove(obj)
+            removed += 1
+
+        placed, empty_cats = 0, []
+
+        for rule in scene.rm_rules:
+            if not rule.use:
+                continue
+
+            empty = slot_empty(coll, rule.slot)
+            if empty is None:
+                continue
+
+            pool = _assets.get(rule.category, [])
+            if not pool:
+                empty_cats.append(rule.category)
+                continue
+
+            name, path = random.choice(pool)
+            if not os.path.isfile(path):
+                continue
+
+            for obj in import_asset(context, coll, path, empty,
+                                    rule.category, rule.mirror):
+                obj[K_RANDOM] = True
+                placed += 1
+
+        deselect_all(context)
+        msg = "{} piece(s) posee(s)".format(placed)
+        if removed:
+            msg += " - {} remplacee(s)".format(removed)
+        if empty_cats:
+            msg += " - categorie(s) vide(s) : " + ", ".join(sorted(set(empty_cats)))
+
+        self.report({'INFO'}, msg)
+        return {'FINISHED'}
+
+
 class RM_OT_place_asset(bpy.types.Operator):
     bl_idname = "rm.place_asset"
     bl_label = "Placer l'asset"
@@ -1298,11 +1440,45 @@ SCHEMA_LINKS = {
 }
 
 
+K_RANDOM = "robot_random"      # marque une piece posee par le tirage
+
+# Repere -> categorie piochee, et mise en miroir automatique
+DEFAULT_RULES = {
+    'ROBOT': [
+        ('chest', 'BODY', False), ('head', 'HEAD', False),
+        ('shoulder_L', 'HINGE', True), ('elbow_L', 'HINGE', True),
+        ('hip_L', 'HINGE', True), ('knee_L', 'HINGE', True),
+        ('wrist_L', 'HAND', True), ('ankle_L', 'FOOT', True),
+    ],
+    'HUMAN': [
+        ('chest', 'TORSO', False), ('head', 'HEAD', False),
+        ('hips', 'LEGS', False), ('neck', 'HAIR', False),
+        ('elbow_L', 'ARMS', True), ('wrist_L', 'HAND', True),
+        ('ankle_L', 'FOOT', True),
+    ],
+}
+
+
+def slot_items(self, context):
+    return [(s, SLOT_LABEL.get(s, s), "") for s in SLOTS]
+
+
+class RM_Rule(bpy.types.PropertyGroup):
+    slot: bpy.props.EnumProperty(name="Repere", items=slot_items)
+    category: bpy.props.EnumProperty(name="Categorie", items=category_items)
+    mirror: bpy.props.BoolProperty(
+        name="Miroir", default=True,
+        description="Duplique la piece sur le repere oppose")
+    use: bpy.props.BoolProperty(name="Active", default=True)
+
+
 CATEGORY_SLOT = {
     'BODY': 'chest', 'TORSO': 'chest', 'HEAD': 'head', 'HAIR': 'head',
     'ARMS': 'elbow_L', 'HINGE': 'elbow_L', 'HAND': 'wrist_L',
     'LEGS': 'knee_L', 'FOOT': 'ankle_L', 'OTHER': 'chest',
 }
+
+
 
 # Angle auquel les pieces sont montees : les reperes de bras n'ont aucune
 # rotation a cette valeur (90 = I-pose, bras le long du corps)
@@ -2713,6 +2889,30 @@ class RM_PT_panel(bpy.types.Panel):
             else:
                 box.label(text="Categorie vide - relire la bibliotheque", icon='INFO')
 
+        # --- Tirage au sort ---
+        box.separator()
+        row = box.row(align=True)
+        row.label(text="Remplissage automatique", icon='FILE_REFRESH')
+        row.operator("rm.default_rules", text="", icon='LOOP_BACK')
+
+        if scene.rm_rules:
+            table = box.column(align=True)
+
+            for i, rule in enumerate(scene.rm_rules):
+                r = table.row(align=True)
+                r.prop(rule, "use", text="")
+                r.prop(rule, "slot", text="")
+                r.prop(rule, "category", text="")
+                r.prop(rule, "mirror", text="", icon='MOD_MIRROR')
+                r.operator("rm.rule_remove", text="", icon='X').index = i
+
+            box.operator("rm.rule_add", icon='ADD')
+            box.operator("rm.random_fill", icon='FILE_REFRESH')
+        else:
+            r = box.row(align=True)
+            r.operator("rm.rule_add", icon='ADD')
+            r.label(text="ou fleche pour les regles usuelles")
+
         box.separator()
         col = box.column(align=True)
         col.label(text="Ajouter la piece selectionnee :")
@@ -2984,6 +3184,11 @@ classes = (
     RM_OT_face_info,
     RM_OT_save_ready,
     RM_OT_import_rigged,
+    RM_Rule,
+    RM_OT_default_rules,
+    RM_OT_random_fill,
+    RM_OT_rule_add,
+    RM_OT_rule_remove,
 )
 
 @bpy.app.handlers.persistent
@@ -3127,6 +3332,7 @@ def register():
     S.rm_make_rig = bpy.props.BoolProperty(
         name="Creer le control rig", default=True,
         description="Ajoute les controleurs IK/FK via l'addon Mixamo Control Rig")
+    S.rm_rules = bpy.props.CollectionProperty(type=RM_Rule)
 
 
 def unregister():
@@ -3156,7 +3362,7 @@ def unregister():
                  "rm_shoulder_w", "rm_shoulder_drop", "rm_hip_w", "rm_arm_upper",
                  "rm_arm_fore", "rm_arm_angle", "rm_leg_thigh", "rm_leg_shin", "rm_tube_res", "rm_tube_radius", "rm_tube_material",
                  "rm_socket_size", "rm_socket_custom", "rm_socket_name", "rm_category", "rm_robot",
-                 "rm_new_name", "rm_family", "rm_make_rig",):
+                 "rm_new_name", "rm_family", "rm_make_rig", "rm_rules",):
         if hasattr(S, prop):
             delattr(S, prop)
 
