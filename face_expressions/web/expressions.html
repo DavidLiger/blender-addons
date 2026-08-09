@@ -1111,7 +1111,15 @@ function drawEyes(s, e, b, uid) {
 
   [-1, 1].forEach((side, idx) => {
     const cx = VB_EYES.w/2 + side * s.gap/2;
-    const asym = e.asym && side > 0 ? .6 : 1;   // un oeil different de l'autre
+    // En mode asymetrique, l'oeil droit lit ses propres valeurs et retombe
+    // sur celles de gauche tant qu'elles ne sont pas definies
+    const right = e.asym && side > 0;
+    const ev = (key, def) => {
+      const v = right && e[key + 'R'] !== undefined ? e[key + 'R'] : e[key];
+      return v !== undefined ? v : def;
+    };
+
+    const asym = 1;
     const closed = e.wink && side > 0;
 
     if (e.glyph) {
@@ -1124,7 +1132,7 @@ function drawEyes(s, e, b, uid) {
     }
 
     const oy = ry;                       // forme constante
-    const op = open * asym;              // ce qui bouge, c'est la paupiere
+    const op = ev('open', 1);            // ce qui bouge, c'est la paupiere              // ce qui bouge, c'est la paupiere
     const clip = `clip-${uid}-${idx}`;
 
     const grad = `sc-${uid}-${idx}`;
@@ -1145,9 +1153,9 @@ function drawEyes(s, e, b, uid) {
     out += eyeOutline(cx, cy, rx, oy, s.shape).replace('/>', ` fill="${scleraFill}"/>`);
 
     // iris puis pupille
-    const pr = Math.min(rx, ry) * (e.pupil !== undefined ? e.pupil : s.pupil);
-    const pxo = (e.px || 0) * side * rx * .5;
-    const pyo = (e.py || 0) * ry * .6;
+    const pr = Math.min(rx, ry) * ev('pupil', s.pupil);
+    const pxo = ev('px', 0) * side * rx * .5;
+    const pyo = ev('py', 0) * ry * .6;
 
     if (s.iris > 0)
       out += `<circle cx="${cx+pxo}" cy="${cy+pyo}" r="${pr * (1 + s.iris)}"
@@ -1163,7 +1171,7 @@ function drawEyes(s, e, b, uid) {
 
     // Paupieres : elles recouvrent l'oeil sans le deformer. Bord courbe,
     // remplissage a la couleur de la tete, trait d'encre sur l'arete.
-    const tilt = (e.tilt || 0) * side * (e.asym && side > 0 ? -1 : 1);
+    const tilt = ev('tilt', 0) * side;
     const w = rx * 1.7;
 
     const lid = (edgeY, up) => {
@@ -1180,8 +1188,8 @@ function drawEyes(s, e, b, uid) {
     if (op < .995 || tilt)
       out += `<g transform="rotate(${tilt} ${cx} ${cy})">${lid(topY, true)}</g>`;
 
-    if (e.lidBot)
-      out += lid(cy + ry - e.lidBot * 2 * ry, false);
+    const lb = ev('lidBot', 0);
+    if (lb) out += lid(cy + ry - lb * 2 * ry, false);
 
     out += `</g>`;
 
@@ -1932,10 +1940,18 @@ function buildFields() {
   };
 
   if (zone !== 'mouth') {
-    const eyes = mk("Yeux");
+    const eyes = mk(editing.e.asym ? "Oeil gauche" : "Yeux");
     eyes.appendChild(choice('e', 'glyph', "Forme speciale", GLYPHS));
     if (!editing.e.glyph) {
       F_EYES.forEach(f => eyes.appendChild(field('e', ...f)));
+
+      if (editing.e.asym) {
+        const right = mk("Oeil droit");
+        F_EYES.forEach(([key, label, min, max, step, def]) => {
+          const base = editing.e[key] !== undefined ? editing.e[key] : def;
+          right.appendChild(field('e', key + 'R', label, min, max, step, base));
+        });
+      }
     } else {
       const note = document.createElement('div');
       note.className = 'hint';
