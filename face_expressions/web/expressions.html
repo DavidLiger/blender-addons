@@ -2129,18 +2129,19 @@ async function saveOverride() {
   }
 
   if (!LINKED) {
-    $('edit-msg').textContent = 'Retouche gardee (session seulement)';
     renderAll();
+    closeEditor();
     return;
   }
 
   try {
     await serverSave('overrides.json', JSON.stringify(overrides, null, 1), false);
-    $('edit-msg').textContent = 'Enregistre';
+    renderAll();
+    closeEditor();
   } catch (err) {
     $('edit-msg').textContent = 'Erreur : ' + err.message;
+    renderAll();
   }
-  renderAll();
 }
 
 async function resetOverride() {
