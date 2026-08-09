@@ -156,7 +156,8 @@ class _ExprHandler(SimpleHTTPRequestHandler):
         SimpleHTTPRequestHandler.do_GET(self)
 
     def do_POST(self):
-        if urllib.parse.urlparse(self.path).path != "/save":
+        route = urllib.parse.urlparse(self.path).path
+        if route not in ("/save", "/delete"):
             self.send_error(404)
             return
 
@@ -170,6 +171,16 @@ class _ExprHandler(SimpleHTTPRequestHandler):
         target = self._under_root(os.path.join(CREATIONS, data.get("path", "")))
         if target is None:
             self._json({"ok": False, "error": "chemin refuse"}, 403)
+            return
+
+        if route == "/delete":
+            try:
+                if os.path.isfile(target):
+                    os.remove(target)
+            except Exception as e:
+                self._json({"ok": False, "error": str(e)}, 500)
+                return
+            self._json({"ok": True, "path": target})
             return
 
         try:

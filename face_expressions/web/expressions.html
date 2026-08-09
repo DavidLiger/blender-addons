@@ -355,12 +355,24 @@
           <input type="file" id="impUvula" accept=".svg,.png" style="display:none" onchange="importAsset(event,'uvula')">
           <button class="btn sec" onclick="openAssetFolder('uvula')">Dossier</button></div>
 
+        <div class="field"><label>Dents du bas</label>
+          <select id="assetTeethLow" onchange="renderAll()" style="display:none"><option value=""></option></select>
+          <button class="btn sec" id="btnTeethLow" onclick="openPicker('teethLow')">(aucune)</button></div>
+
         <div class="row2">
           <div class="field"><label>Taille dents <span class="val" id="v-teethK"></span></label>
             <input type="range" id="teethK" min="0.2" max="2" step="0.05" value="1" oninput="renderAll()"></div>
+          <div class="field"><label>Ecart dents <span class="val" id="v-teethY"></span></label>
+            <input type="range" id="teethY" min="-0.5" max="0.8" step="0.02" value="0" oninput="renderAll()"></div>
+        </div>
+        <div class="row2">
           <div class="field"><label>Taille langue <span class="val" id="v-tongueK"></span></label>
             <input type="range" id="tongueK" min="0.2" max="2" step="0.05" value="1" oninput="renderAll()"></div>
+          <div class="field"><label>Taille luette <span class="val" id="v-uvulaK"></span></label>
+            <input type="range" id="uvulaK" min="0.05" max="1.5" step="0.05" value="0.3" oninput="renderAll()"></div>
         </div>
+        <div class="field"><label>Hauteur luette <span class="val" id="v-uvulaY"></span></label>
+          <input type="range" id="uvulaY" min="-0.5" max="0.5" step="0.02" value="0" oninput="renderAll()"></div>
       </div>
     </div>
 
@@ -455,6 +467,10 @@
         <button class="btn sec" onclick="toggleHandles()" id="btnHandles">Poignees</button>
         <button class="btn sec" onclick="resetShape()">Forme d'origine</button>
       </div>
+      <label style="display:flex;align-items:center;gap:6px;color:var(--text);
+                    font-size:.78rem;margin-bottom:10px">
+        <input type="checkbox" id="mirrorPts" checked style="width:auto">
+        Miroir gauche / droite</label>
       <div id="edit-fields"></div>
       <div class="edit-foot">
         <button class="btn" onclick="saveOverride()">Enregistrer</button>
@@ -736,7 +752,7 @@ async function loadAssets() {
   const roots = ['_assets', CTX.robot + '/expressions/assets'];
 
   for (const root of roots) {
-    for (const slot of Object.keys(PICK)) {
+    for (const slot of SLOTS) {
       const base = root + '/' + slot;
       let names = [];
       try {
@@ -762,8 +778,9 @@ async function loadAssets() {
 }
 
 function fillAssetSelects() {
-  Object.entries(PICK).forEach(([slot, cfg]) => {
+  Object.entries(PICK).forEach(([key, cfg]) => {
     const id = cfg.sel;
+    const slot = cfg.slot;
     const sel = $(id);
     const keep = sel.value;
     sel.innerHTML = '<option value="">(procedural)</option>';
@@ -792,11 +809,17 @@ function fillAssetSelects() {
 // ---------------------------------------------------------------------------
 // Choix visuel d'un asset
 // ---------------------------------------------------------------------------
-const PICK = { pupil:  { sel: 'assetPupil',  btn: 'btnPupil',  label: "Pupille" },
-               brow:   { sel: 'assetBrow',   btn: 'btnBrow',   label: "Sourcil" },
-               teeth:  { sel: 'assetTeeth',  btn: 'btnTeeth',  label: "Dents" },
-               tongue: { sel: 'assetTongue', btn: 'btnTongue', label: "Langue" },
-               uvula:  { sel: 'assetUvula',  btn: 'btnUvula',  label: "Luette" } };
+// slot = dossier d'assets ; plusieurs controles peuvent partager le meme
+const PICK = {
+  pupil:    { slot: 'pupil',  sel: 'assetPupil',    btn: 'btnPupil',    label: "Pupille" },
+  brow:     { slot: 'brow',   sel: 'assetBrow',     btn: 'btnBrow',     label: "Sourcil" },
+  teeth:    { slot: 'teeth',  sel: 'assetTeeth',    btn: 'btnTeeth',    label: "Dents du haut" },
+  teethLow: { slot: 'teeth',  sel: 'assetTeethLow', btn: 'btnTeethLow', label: "Dents du bas" },
+  tongue:   { slot: 'tongue', sel: 'assetTongue',   btn: 'btnTongue',   label: "Langue" },
+  uvula:    { slot: 'uvula',  sel: 'assetUvula',    btn: 'btnUvula',    label: "Luette" },
+};
+
+const SLOTS = ['pupil', 'brow', 'teeth', 'tongue', 'uvula'];
 
 function assetLabel(name) {
   return name ? name.split('/').pop().replace(/\.(svg|png)$/i, '')
@@ -818,8 +841,9 @@ function assetPreview(name, slot) {
   return `<svg viewBox="0 0 100 60">${assetAt(name, 50, 30, 72, color, 0, false)}</svg>`;
 }
 
-function openPicker(slot) {
-  const cfg = PICK[slot];
+function openPicker(key) {
+  const cfg = PICK[key];
+  const slot = cfg.slot;
   const current = $(cfg.sel).value;
 
   $('pick-title').textContent = cfg.label;
@@ -832,7 +856,39 @@ function openPicker(slot) {
     el.innerHTML = (name ? assetPreview(name, slot)
                          : '<div class="none">procedural</div>')
                  + `<div class="pn">${assetLabel(name)}</div>`;
-    el.onclick = () => choosePicker(slot, name);
+    el.onclick = () => choosePicker(key, name);
+
+    if (name && LINKED) {
+      const del = document.createElement('button');
+      del.className = 'btn sec';
+      del.style.marginTop = '4px';
+      del.textContent = 'Supprimer';
+      del.onclick = async ev => {
+        ev.stopPropagation();
+        if (!confirm('Supprimer ' + assetLabel(name) + ' ?')) return;
+
+        // L'asset peut etre commun ou propre au personnage
+        for (const path of ['_assets/' + name, charPath('assets/' + name)]) {
+          try {
+            await fetch('/delete', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ path }),
+            });
+          } catch (err) { /* absent d'un des deux dossiers */ }
+        }
+
+        // Les controles qui pointaient cet asset repassent en procedural
+        Object.entries(PICK).forEach(([k, c]) => {
+          if ($(c.sel).value === name) choosePicker(k, '');
+        });
+
+        await loadAssets();
+        openPicker(key);
+      };
+      el.appendChild(del);
+    }
+
     grid.appendChild(el);
   };
 
@@ -842,8 +898,8 @@ function openPicker(slot) {
   $('pick-ov').classList.add('open');
 }
 
-function choosePicker(slot, name) {
-  $(PICK[slot].sel).value = name;
+function choosePicker(key, name) {
+  $(PICK[key].sel).value = name;
   closePicker();
   refreshAssetButtons();
   renderAll();
@@ -944,7 +1000,10 @@ function style() {
     aBrow: val('assetBrow'), aBrowK: num('assetBrowScale', 1),
     aBrowRot: num('assetBrowRot', 0), aBrowFlip: chk('assetBrowFlip'),
     aTeeth: val('assetTeeth'), aTongue: val('assetTongue'),
-    aUvula: val('assetUvula'),
+    aUvula: val('assetUvula'), aTeethLow: val('assetTeethLow'),
+    teethK: num('teethK', 1), teethY: num('teethY', 0),
+    tongueK: num('tongueK', 1),
+    uvulaK: num('uvulaK', .3), uvulaY: num('uvulaY', 0),
 
     wobble: num('wobble', 0), wobbleScale: num('wobbleScale', .03),
     inkVar: num('inkVar', 0),
@@ -962,7 +1021,8 @@ function syncLabels() {
    ['crow','v-crow'],['bags','v-bags'],['shadePos','v-shadePos'],
    ['lashN','v-lashN'],['bagY','v-bagY'],['bagRot','v-bagRot'],
    ['lipTop','v-lipTop'],['lipBot','v-lipBot'],
-   ['teethK','v-teethK'],['tongueK','v-tongueK']]
+   ['teethK','v-teethK'],['tongueK','v-tongueK'],
+   ['teethY','v-teethY'],['uvulaK','v-uvulaK'],['uvulaY','v-uvulaY']]
    .forEach(([src,dst]) => { const el = $(dst); if (el) el.textContent = $(src).value; });
 }
 
@@ -1297,18 +1357,30 @@ function drawMouth(s, m) {
     out += `<g clip-path="url(#${uid})">`;
 
     if (s.aUvula && ASSETS[s.aUvula])
-      out += assetAt(s.aUvula, cx, cy0 - h * .55, w * .3, s.mouthCol);
+      out += assetAt(s.aUvula, cx, cy0 - h * (.55 + s.uvulaY),
+                     w * s.uvulaK, s.mouthCol);
 
-    if (s.aTongue && ASSETS[s.aTongue])
-      out += assetAt(s.aTongue, cx, cy0 + h * .55, w * s.tongueK, '#d9636f');
-    else if (m.tongue)
-      out += `<ellipse cx="${cx}" cy="${cy0 + h * .7}" rx="${w * .5}" ry="${h * .5}"
-                fill="#d9636f" stroke="${s.inkMouth}" stroke-width="${S * .5}"/>`;
+    // La langue suit la case de l'expression, asset ou non
+    if (m.tongue) {
+      if (s.aTongue && ASSETS[s.aTongue])
+        out += assetAt(s.aTongue, cx, cy0 + h * .55, w * s.tongueK, '#d9636f');
+      else
+        out += `<ellipse cx="${cx}" cy="${cy0 + h * .7}" rx="${w * .5}" ry="${h * .5}"
+                  fill="#d9636f" stroke="${s.inkMouth}" stroke-width="${S * .5}"/>`;
+    }
 
     if (s.teeth && m.teeth) {
+      const hasAsset = (s.aTeeth && ASSETS[s.aTeeth]) || (s.aTeethLow && ASSETS[s.aTeethLow]);
+
       if (s.aTeeth && ASSETS[s.aTeeth])
-        out += assetAt(s.aTeeth, cx, cy0 - h * .62, w * 1.6 * s.teethK, '#ffffff');
-      else
+        out += assetAt(s.aTeeth, cx, cy0 - h * (.62 + s.teethY),
+                       w * 1.6 * s.teethK, '#ffffff');
+
+      if (s.aTeethLow && ASSETS[s.aTeethLow])
+        out += assetAt(s.aTeethLow, cx, cy0 + h * (.62 + s.teethY),
+                       w * 1.6 * s.teethK, '#ffffff');
+
+      if (!hasAsset)
         out += `<rect x="${cx - w}" y="${cy0 - h * 1.1}" width="${w * 2}"
                   height="${h * .55}" fill="#ffffff"/>`;
     }
@@ -1856,24 +1928,45 @@ function addHandles(s) {
   svg.appendChild(layer);
 }
 
+let dragging = false;
+
 function startDrag(ev, index, svg, g) {
   ev.preventDefault();
-  const pt = svg.createSVGPoint();
+  dragging = true;
 
   const move = e => {
+    // Le SVG est reconstruit a chaque rendu : celui capture au depart est
+    // detache, sa matrice ne vaut plus rien
+    const cur = $('edit-preview').querySelector('svg');
+    const ctm = cur && cur.getScreenCTM();
+    if (!ctm) return;
+
+    const pt = cur.createSVGPoint();
     pt.x = e.clientX;
     pt.y = e.clientY;
-    const loc = pt.matrixTransform(svg.getScreenCTM().inverse());
+    const loc = pt.matrixTransform(ctm.inverse());
 
     const p = editing.m.pts[index];
-    p[0] = +((loc.x - g.cx) / g.w).toFixed(3);
-    p[1] = +((loc.y - g.cy) / g.h).toFixed(3);
+    p[0] = +Math.max(-3, Math.min(3, (loc.x - g.cx) / g.w)).toFixed(3);
+    p[1] = +Math.max(-3, Math.min(3, (loc.y - g.cy) / g.h)).toFixed(3);
+
+    // 0 et 6 sont les commissures ; 1-5 la levre haute de gauche a droite,
+    // 7-11 la basse de droite a gauche
+    const twin = { 0: 6, 6: 0, 1: 5, 5: 1, 2: 4, 4: 2, 7: 11, 11: 7, 8: 10, 10: 8 };
+    if (chk('mirrorPts', true) && twin[index] !== undefined) {
+      const q = editing.m.pts[twin[index]];
+      q[0] = -p[0];
+      q[1] = p[1];
+    }
+
     refreshEditor();
   };
 
   const up = () => {
+    dragging = false;
     window.removeEventListener('pointermove', move);
     window.removeEventListener('pointerup', up);
+    renderAll();
   };
 
   window.addEventListener('pointermove', move);
@@ -1890,7 +1983,7 @@ function refreshEditor() {
   $('btnHandles').textContent = handlesOn ? 'Masquer les poignees' : 'Poignees';
 
   if (handlesOn && zone !== 'eyes') addHandles(s);
-  renderAll();
+  if (!dragging) renderAll();
 }
 
 function diffFrom(base, current) {
@@ -2390,7 +2483,7 @@ const STYLE_IDS = ['stroke','inkColor','scleraColor','pupilColor','mouthColor','
                    'assetBrowRot','assetBrowFlip','browScale','browGap','browRise','lidColor',
                    'lipColor','crow','bags','shadePos','lashN','bagY','bagRot',
                    'lipTop','lipBot','assetTeeth','assetTongue','assetUvula',
-                   'teethK','tongueK',
+                   'teethK','tongueK','assetTeethLow','teethY','uvulaK','uvulaY',
                    'eyeW','eyeH','eyeGap','pupil','shine','mW','mH','cellW','cols','prefix'];
 
 function styleJSON() {
