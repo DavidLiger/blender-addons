@@ -697,6 +697,115 @@ def _multicam_check_output_dir(scene):
     return None
 
 
+KUWA_NODE = "MC_Kuwahara"
+KUWA_OUT = "MC_KuwaharaOut"
+
+
+def _node_get(tree, name, node_type, location):
+    node = tree.nodes.get(name)
+    if node is not None:
+        return node
+
+    node = tree.nodes.new(node_type)
+    node.name = name
+    node.label = name
+    node.location = location
+    return node
+
+
+def _kuwahara_setup(scene):
+    """Branche Kuwahara en parallele du rendu : le compositeur ecrit la
+    version stylisee pendant que l'addon enregistre l'image brute."""
+    scene.use_nodes = True
+    tree = scene.node_tree
+
+    rl = next((n for n in tree.nodes if n.type == 'R_LAYERS'), None)
+    if rl is None:
+        rl = tree.nodes.new('CompositorNodeRLayers')
+        rl.location = (-400, 0)
+
+    comp = next((n for n in tree.nodes if n.type == 'COMPOSITE'), None)
+    if comp is None:
+        comp = tree.nodes.new('CompositorNodeComposite')
+        comp.location = (300, 120)
+    if not comp.inputs['Image'].is_linked:
+        tree.links.new(rl.outputs['Image'], comp.inputs['Image'])
+
+    kuwa = _node_get(tree, KUWA_NODE, 'CompositorNodeKuwahara', (-40, -220))
+    out = _node_get(tree, KUWA_OUT, 'CompositorNodeOutputFile', (300, -220))
+
+    out.format.file_format = 'PNG'
+    out.format.color_mode = 'RGBA'
+    if not out.file_slots:
+        out.file_slots.new("image")
+
+    tree.links.new(rl.outputs['Image'], kuwa.inputs[0])
+    tree.links.new(kuwa.outputs[0], out.inputs[0])
+
+    return kuwa, out
+
+
+def _kuwahara_apply(scene, cam):
+    """Regle le filtre et dirige la sortie vers le dossier de la planche."""
+    if not scene.multicam_kuwahara:
+        node = scene.node_tree.nodes.get(KUWA_OUT) if scene.use_nodes else None
+        if node is not None:
+            node.mute = True
+        return
+
+    kuwa, out = _kuwahara_setup(scene)
+    out.mute = False
+
+    kuwa.variation = scene.multicam_kuwa_mode
+    try:
+        kuwa.inputs['Size'].default_value = scene.multicam_kuwa_size
+    except Exception:
+        kuwa.size = int(scene.multicam_kuwa_size)
+
+    if scene.multicam_kuwa_mode == 'ANISOTROPIC':
+        for attr, value in (("uniformity", scene.multicam_kuwa_uniform),
+                            ("sharpness", scene.multicam_kuwa_sharp),
+                            ("eccentricity", scene.multicam_kuwa_ecc)):
+            try:
+                setattr(kuwa, attr, value)
+            except Exception:
+                pass
+
+    page = _multicam_page_of(cam.name)
+    folder = _multicam_page_dir(scene, page, variant=None)
+    if folder:
+        folder = os.path.join(os.path.dirname(folder), "rendus-Kuwahara")
+        os.makedirs(folder, exist_ok=True)
+        out.base_path = folder
+        out.file_slots[0].path = cam.name + "_"
+
+
+def _kuwahara_rename(scene, cam):
+    """Le noeud File Output suffixe le numero de frame : on remet le nom voulu."""
+    if not scene.multicam_kuwahara or not scene.use_nodes:
+        return
+
+    out = scene.node_tree.nodes.get(KUWA_OUT)
+    if out is None or not out.base_path:
+        return
+
+    folder = bpy.path.abspath(out.base_path)
+    if not os.path.isdir(folder):
+        return
+
+    target = os.path.join(folder, cam.name + ".png")
+    for fname in os.listdir(folder):
+        if not fname.startswith(cam.name + "_") or not fname.endswith(".png"):
+            continue
+        try:
+            if os.path.exists(target):
+                os.remove(target)
+            os.rename(os.path.join(folder, fname), target)
+        except Exception:
+            pass
+        break
+
+
 def _multicam_setup_camera(scene, cam):
     out_dir = _multicam_dir_for(scene, cam)
     if not out_dir:
@@ -721,6 +830,8 @@ def _multicam_setup_camera(scene, cam):
     # donc on desactive l'auto-save de l'operateur de rendu.
     scene.render.use_file_extension = False
     scene.render.filepath = filepath
+
+    _kuwahara_apply(scene, cam)
 
     return filepath
 
@@ -778,6 +889,10 @@ def _multicam_on_render_complete(scene, depsgraph=None):
                 scene.multicam_last_error = "Render Result introuvable pour la sauvegarde"
         except Exception as e:
             scene.multicam_last_error = "Erreur sauvegarde '{}' : {}".format(filepath, str(e))
+
+    cam = state["cameras"][state["index"]] if state["index"] < len(state["cameras"]) else None
+    if cam is not None:
+        _kuwahara_rename(scene, cam)
 
     state["index"] += 1
     scene.multicam_progress_current = state["index"]
@@ -1029,6 +1144,25 @@ class MULTICAM_PT_panel(bpy.types.Panel):
         layout.separator()
 
         # --- Rendu batch ---
+        # --- Sortie Kuwahara ---
+        box = layout.box()
+        box.prop(scene, "multicam_kuwahara")
+
+        if scene.multicam_kuwahara:
+            col = box.column(align=True)
+            col.prop(scene, "multicam_kuwa_mode", expand=True)
+            col.prop(scene, "multicam_kuwa_size")
+
+            if scene.multicam_kuwa_mode == 'ANISOTROPIC':
+                r = col.row(align=True)
+                r.prop(scene, "multicam_kuwa_uniform")
+                r.prop(scene, "multicam_kuwa_sharp")
+                col.prop(scene, "multicam_kuwa_ecc")
+
+            sub = box.row()
+            sub.scale_y = 0.7
+            sub.label(text="Ecrit dans rendus-Kuwahara au meme rendu", icon='INFO')
+
         if scene.multicam_running:
             box = layout.box()
             box.label(text="En cours : {}".format(scene.multicam_current_name), icon='RENDER_STILL')
@@ -1089,6 +1223,23 @@ def register():
     bpy.types.Scene.multicam_strip_root = bpy.props.StringProperty(
         name="Racine du strip", subtype='DIR_PATH', default="",
         description="Dossier contenant planches/ (ex: .../Fury Rex/strip-01)")
+    bpy.types.Scene.multicam_kuwahara = bpy.props.BoolProperty(
+        name="Sortie Kuwahara", default=False,
+        description=("Ecrit en parallele une version picturale dans "
+                     "rendus-Kuwahara, sans rendu supplementaire"))
+    bpy.types.Scene.multicam_kuwa_mode = bpy.props.EnumProperty(
+        name="Mode", default='ANISOTROPIC',
+        items=[('CLASSIC', "Classique", "Plus rapide, aspect plus bloc"),
+               ('ANISOTROPIC', "Anisotrope", "Coups de pinceau orientes")])
+    bpy.types.Scene.multicam_kuwa_size = bpy.props.FloatProperty(
+        name="Taille", default=6.0, min=1.0, max=64.0,
+        description="Environ largeur de l'image divisee par 300")
+    bpy.types.Scene.multicam_kuwa_uniform = bpy.props.FloatProperty(
+        name="Uniformite", default=4.0, min=0.0, max=50.0)
+    bpy.types.Scene.multicam_kuwa_sharp = bpy.props.FloatProperty(
+        name="Nettete", default=0.5, min=0.0, max=1.0)
+    bpy.types.Scene.multicam_kuwa_ecc = bpy.props.FloatProperty(
+        name="Elongation", default=2.0, min=0.0, max=4.0)
     bpy.types.Scene.multicam_pages_hint = bpy.props.StringProperty(
         name="Planches", default="01",
         description="Numeros a creer quand aucune camera n'existe encore")
@@ -1132,6 +1283,12 @@ def unregister():
     del bpy.types.Scene.multicam_strip_root
     del bpy.types.Scene.multicam_auto_paths
     del bpy.types.Scene.multicam_pages_hint
+    del bpy.types.Scene.multicam_kuwahara
+    del bpy.types.Scene.multicam_kuwa_mode
+    del bpy.types.Scene.multicam_kuwa_size
+    del bpy.types.Scene.multicam_kuwa_uniform
+    del bpy.types.Scene.multicam_kuwa_sharp
+    del bpy.types.Scene.multicam_kuwa_ecc
 
     for cls in reversed(classes):
         bpy.utils.unregister_class(cls)
