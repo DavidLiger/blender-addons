@@ -1100,22 +1100,6 @@ function applyConfig(cfg) {
 
   renderRows();
   render();
-
-  if (SERVED) {
-    const box = document.getElementById('fsapi-supported');
-    if (box) box.style.display = 'none';
-    const fb = document.getElementById('fsapi-fallback');
-    if (fb) fb.style.display = 'none';
-
-    // La planche et la variante viennent de Multi-Cam BD
-    const wanted = PARAMS.get('page');
-    if (wanted) localStorage.setItem('gaufrier_last_prefix', wanted);
-
-    const variant = PARAMS.get('variant');
-    if (variant) localStorage.setItem('gaufrier_variant_' + (wanted || ''), variant);
-
-    scanRenderFolder();
-  }
 }
 
 // --- mini wrapper IndexedDB (stocke le handle de dossier) ---
@@ -1471,6 +1455,26 @@ function setRendersStatus(text, cls) {
 
 // --- init au chargement de la page ---
 (function initRenderFolderUI() {
+  console.log('[gaufrier] SERVED =', SERVED, location.href);
+
+  // Servie par Multi-Cam BD : aucun dossier a designer
+  if (SERVED) {
+    document.getElementById('fsapi-supported').style.display = 'none';
+    document.getElementById('fsapi-fallback').style.display = 'none';
+
+    const wanted = PARAMS.get('page');
+    if (wanted) localStorage.setItem('gaufrier_last_prefix', wanted);
+
+    const variant = PARAMS.get('variant');
+    if (variant && wanted) {
+      localStorage.setItem('gaufrier_variant_' + wanted, variant);
+    }
+
+    // Le reste du script n'est pas encore evalue a cet instant
+    setTimeout(scanRenderFolder, 0);
+    return;
+  }
+
   document.getElementById('fsapi-supported').style.display = HAS_FS_API ? '' : 'none';
   document.getElementById('fsapi-fallback').style.display = HAS_FS_API ? 'none' : '';
 
@@ -2172,7 +2176,6 @@ async function saveConfig() {
 
   // Si un dossier de rendus est connecte, on ecrit dedans : la config vit a
   // cote des images, et la planche apparait dans le navigateur de planches.
-  console.log('[gaufrier] SERVED =', SERVED, location.href);
 
   if (SERVED) {
     const existing = planches.find(c => String(c.prefix) === String(config.prefix));

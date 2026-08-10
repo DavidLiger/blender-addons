@@ -241,6 +241,22 @@ class MULTICAM_OT_open_gaufrier(bpy.types.Operator):
             self.report({'ERROR'}, "gaufrier.html absent de {}".format(WEB_DIR))
             return {'CANCELLED'}
 
+        # Quel fichier est reellement servi, et est-il patche ?
+        try:
+            with open(page, "r", encoding="utf-8", errors="ignore") as f:
+                content = f.read()
+        except Exception:
+            content = ""
+
+        print("[multicam] page servie :", page)
+        print("[multicam] taille :", len(content),
+              "- walkServer:", "walkServer" in content,
+              "- SERVED:", "SERVED" in content)
+
+        if "walkServer" not in content:
+            self.report({'WARNING'},
+                        "Le gaufrier servi n'est pas la version patchee : " + page)
+
         pages = _multicam_pages(scene)
         params = {"variant": RENDER_DIRS[_multicam_variant(scene)]}
         if pages:
