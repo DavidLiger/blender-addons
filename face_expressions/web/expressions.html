@@ -1766,6 +1766,14 @@ function renderAll() {
     pen.onclick = ev => { ev.stopPropagation(); openEditor(x.id); };
     cell.appendChild(pen);
 
+    const dup = document.createElement('button');
+    dup.className = 'edit';
+    dup.style.right = '28px';
+    dup.textContent = '\u29C9';
+    dup.title = 'Dupliquer cette expression';
+    dup.onclick = ev => { ev.stopPropagation(); newExpression(x.id); };
+    cell.appendChild(dup);
+
     sheet.appendChild(cell);
   });
 
@@ -1865,8 +1873,8 @@ async function loadExtras() {
   }
 }
 
-async function newExpression() {
-  const src = editing || EXPR[0];
+async function newExpression(fromId) {
+  const src = (fromId && EXPR.find(x => x.id === fromId)) || editing || EXPR[0];
   const raw = prompt('Nom de la nouvelle expression :', src.n + ' 2');
   if (!raw) return;
 
@@ -1884,7 +1892,17 @@ async function newExpression() {
 }
 
 async function deleteExpression() {
-  if (!editing || !editing.extra) return;
+  if (!editing) return;
+
+  // On se fie a la liste, pas au drapeau : il peut manquer si l'expression
+  // a ete rechargee depuis une reference
+  const known = extras.some(d => d.id === editing.id);
+  if (!known) {
+    $('edit-msg').textContent =
+      "Expression d'origine : la decocher pour l'exclure de l'export";
+    return;
+  }
+
   if (!confirm('Supprimer definitivement ' + editing.n + ' ?')) return;
 
   const id = editing.id;
@@ -1922,7 +1940,8 @@ function openEditor(id) {
   $('edit-title').textContent = editing.n
     + (overrides[editing.id] ? '  (retouchee)' : '');
   $('edit-msg').textContent = '';
-  $('btnDelExpr').style.display = editing.extra ? '' : 'none';
+  $('btnDelExpr').style.display =
+    extras.some(d => d.id === editing.id) ? '' : 'none';
   buildFields();
   refreshEditor();
   $('edit-ov').classList.add('open');
