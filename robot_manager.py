@@ -700,7 +700,7 @@ class RBM_OT_duplicate_character(bpy.types.Operator):
             "for group in (bpy.data.collections, bpy.data.objects,",
             "              bpy.data.materials, bpy.data.images):",
             "    for item in group:",
-            "        if old in item.name:",
+            "        if old in item.name and new not in item.name:",
             "            item.name = item.name.replace(old, new)",
             "for obj in bpy.data.objects:",
             "    if obj.get('robot') == old:",
@@ -863,6 +863,66 @@ def merge_duplicates():
     return merged
 
 
+def rename_to_robot(coll, robot):
+    """Aligne les noms internes sur le personnage courant : un ready.blend
+    duplique porte encore ceux de sa source."""
+    old = ""
+    for obj in coll.objects:
+        for mat in (getattr(obj.data, "materials", None) or []):
+            if mat is not None and mat.name.startswith("FACE_"):
+                parts = mat.name.split("_", 2)
+                if len(parts) == 3 and parts[2] != robot:
+                    old = parts[2]
+                    break
+        if old:
+            break
+
+    if not old:
+        return 0
+
+    # Chaque datablock une seule fois : un materiau partage serait renomme
+    # autant de fois qu'il y a d'objets, et le nouveau nom contient l'ancien
+    targets = [coll]
+    seen = set()
+    for obj in coll.objects:
+        targets.append(obj)
+        for mat in (getattr(obj.data, "materials", None) or []):
+            if mat is not None:
+                targets.append(mat)
+
+    count = 0
+    for item in targets:
+        key = id(item)
+        if key in seen:
+            continue
+        seen.add(key)
+
+        if robot in item.name or old not in item.name:
+            continue
+        item.name = item.name.replace(old, robot)
+        count += 1
+
+    for obj in coll.objects:
+        obj[K_ROBOT] = robot
+
+    # Les textures peuvent pointer le dossier de la source
+    folder = os.path.join(robot_dir(robot), "expressions")
+    for obj in coll.objects:
+        for mat in (getattr(obj.data, "materials", None) or []):
+            if mat is None or not mat.use_nodes:
+                continue
+            for node in mat.node_tree.nodes:
+                if node.type != 'TEX_IMAGE' or node.image is None:
+                    continue
+                local = os.path.join(folder, os.path.basename(
+                    bpy.path.abspath(node.image.filepath)))
+                if os.path.isfile(local):
+                    node.image = bpy.data.images.load(local, check_existing=True)
+                    node.image.reload()
+
+    return count
+
+
 class RBM_OT_instantiate(bpy.types.Operator):
     bl_idname = "rbm.instantiate"
     bl_label = "Instancier dans la scene"
@@ -905,6 +965,7 @@ class RBM_OT_instantiate(bpy.types.Operator):
                     rig.select_set(True)
                     context.view_layer.objects.active = rig
 
+                rename_to_robot(source, robot)
                 merge_duplicates()
                 self.report({'INFO'}, "{} instancie depuis {}".format(robot, READY_FILE))
                 return {'FINISHED'}
@@ -1480,6 +1541,7 @@ classes = (
     RBM_OT_delete_character,
     RBM_OT_open_shared_anims,
     RBM_OT_preview_gif,
+    RBM_OT_duplicate_character,
 )
 
 
