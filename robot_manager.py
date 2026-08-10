@@ -596,6 +596,130 @@ SIDEBAR_CODE = "\n".join([
 ])
 
 
+class RBM_OT_duplicate_character(bpy.types.Operator):
+    bl_idname = "rbm.duplicate_character"
+    bl_label = "Dupliquer le personnage"
+    bl_description = ("Copie le dossier du personnage sous un nouveau nom et ouvre "
+                      "son fichier dans une seconde instance de Blender")
+
+    source: bpy.props.StringProperty()
+    name: bpy.props.StringProperty(name="Nouveau nom", default="")
+    with_rig: bpy.props.BoolProperty(
+        name="Copier le rig", default=True,
+        description="prototype, mixamo-rigged et ready.blend")
+    with_expr: bpy.props.BoolProperty(
+        name="Copier les expressions", default=True)
+    with_poses: bpy.props.BoolProperty(
+        name="Copier les postures", default=False)
+
+    def invoke(self, context, event):
+        if not self.name:
+            self.name = self.source + "_2"
+        return context.window_manager.invoke_props_dialog(self, width=360)
+
+    def execute(self, context):
+        import shutil
+
+        root = root_path()
+        if not root:
+            self.report({'ERROR'}, "Racine non definie (preferences de l'addon)")
+            return {'CANCELLED'}
+
+        src_name = self.source
+        new_name = safe_name(self.name)
+        if not new_name or new_name == src_name:
+            self.report({'ERROR'}, "Nom invalide")
+            return {'CANCELLED'}
+
+        src = robot_dir(src_name)
+        dst = os.path.join(root, CREATIONS, new_name)
+
+        if not os.path.isdir(src):
+            self.report({'ERROR'}, "Personnage source introuvable")
+            return {'CANCELLED'}
+        if os.path.exists(dst):
+            self.report({'ERROR'}, "'{}' existe deja".format(new_name))
+            return {'CANCELLED'}
+
+        skip = set()
+        if not self.with_rig:
+            skip |= {"prototype", D_RIGGED}
+        if not self.with_expr:
+            skip |= {"expressions"}
+        if not self.with_poses:
+            skip |= {D_POSE}
+
+        try:
+            shutil.copytree(src, dst,
+                            ignore=lambda d, names: [n for n in names if n in skip])
+        except Exception as e:
+            self.report({'ERROR'}, "Copie impossible : {}".format(e))
+            return {'CANCELLED'}
+
+        # Les fichiers portant l'ancien nom sont renommes
+        for fname in os.listdir(dst):
+            if fname.startswith(src_name + "."):
+                try:
+                    os.rename(os.path.join(dst, fname),
+                              os.path.join(dst, new_name + fname[len(src_name):]))
+                except Exception:
+                    pass
+
+        if not self.with_rig:
+            for leftover in (READY_FILE,):
+                path = os.path.join(dst, leftover)
+                if os.path.isfile(path):
+                    os.remove(path)
+
+        # Fiche du personnage
+        try:
+            cfg = os.path.join(dst, CHARACTER_FILE)
+            data = {}
+            if os.path.isfile(cfg):
+                with open(cfg, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+            data["name"] = new_name
+            with open(cfg, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=1)
+        except Exception:
+            pass
+
+        blend = os.path.join(dst, new_name + ".blend")
+        scan_all(context)
+        context.scene.rbm_robot = new_name
+
+        if not os.path.isfile(blend):
+            self.report({'WARNING'}, "Dossier copie, mais pas de .blend a ouvrir")
+            return {'FINISHED'}
+
+        # Les collections, objets et materiaux portent encore l'ancien nom :
+        # la nouvelle instance les renomme puis enregistre
+        code = "\n".join([
+            "import bpy",
+            "old, new = {}, {}".format(repr(src_name), repr(new_name)),
+            "for group in (bpy.data.collections, bpy.data.objects,",
+            "              bpy.data.materials, bpy.data.images):",
+            "    for item in group:",
+            "        if old in item.name:",
+            "            item.name = item.name.replace(old, new)",
+            "for obj in bpy.data.objects:",
+            "    if obj.get('robot') == old:",
+            "        obj['robot'] = new",
+            "bpy.ops.wm.save_mainfile()",
+            SIDEBAR_CODE,
+        ])
+
+        try:
+            subprocess.Popen([bpy.app.binary_path, blend, "--python-expr", code],
+                             cwd=dst)
+        except Exception as e:
+            self.report({'ERROR'}, "Lancement impossible : {}".format(e))
+            return {'CANCELLED'}
+
+        self.report({'INFO'}, "'{}' duplique en '{}'".format(src_name, new_name))
+        return {'FINISHED'}
+
+
 class RBM_OT_edit_character(bpy.types.Operator):
     bl_idname = "rbm.edit_character"
     bl_label = "Modifier le personnage"
@@ -1236,6 +1360,8 @@ class RBM_PT_panel(bpy.types.Panel):
                               depress=(name == robot)).name = name
                 line.operator("rbm.edit_character", text="",
                               icon='GREASEPENCIL').name = name
+                line.operator("rbm.duplicate_character", text="",
+                              icon='DUPLICATE').source = name
                 if scene.rbm_edit:
                     line.operator("rbm.delete_character", text="",
                                   icon='TRASH').name = name
