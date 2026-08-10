@@ -364,11 +364,60 @@ def _multicam_redraw_areas():
                 area.tag_redraw()
 
 
+# Variante de rendu selon le moteur, et sous-dossiers d'une planche
+RENDER_DIRS = {'CYCLES': "rendus-Cycles", 'EEVEE': "rendus-EVEE"}
+EXTRA_DIRS = ["rendus-Kuwahara"]
+
+
+def _multicam_variant(scene):
+    return 'CYCLES' if scene.render.engine == 'CYCLES' else 'EEVEE'
+
+
+def _multicam_page_dir(scene, page, variant=None):
+    """<racine>/planches/<NN>/rendus-<variante>"""
+    root = bpy.path.abspath(scene.multicam_strip_root or "")
+    if not root or not page:
+        return ""
+
+    return os.path.join(root, "planches", page,
+                        RENDER_DIRS[variant or _multicam_variant(scene)])
+
+
+def _multicam_dir_for(scene, cam):
+    """Dossier de sortie d'une camera : derive de son nom, ou saisi a la main."""
+    if scene.multicam_auto_paths:
+        page = _multicam_page_of(cam.name if cam is not None else "")
+        derived = _multicam_page_dir(scene, page)
+        if derived:
+            return derived
+
+    return _multicam_output_dir_raw(scene)
+
+
 def _multicam_output_dir_raw(scene):
     """Chemin de sortie brut correspondant au moteur de rendu actif."""
     if scene.render.engine == 'CYCLES':
         return scene.multicam_output_cycles
     return scene.multicam_output_eevee
+
+
+def _multicam_check_cameras(scene, cams):
+    """Verifie le dossier de chaque camera cochee. Le dossier de rendu peut
+    manquer, il sera cree ; son parent doit exister."""
+    missing = []
+
+    for cam in cams:
+        raw = _multicam_dir_for(scene, cam)
+        if not raw:
+            missing.append(cam.name + " : pas de dossier")
+            continue
+
+        path = os.path.normpath(bpy.path.abspath(raw))
+        if os.path.isdir(path) or os.path.isdir(os.path.dirname(path)):
+            continue
+        missing.append(path)
+
+    return missing
 
 
 def _multicam_check_output_dir(scene):
@@ -396,14 +445,9 @@ def _multicam_check_output_dir(scene):
 
 
 def _multicam_setup_camera(scene, cam):
-    # Dossier de sortie selon le moteur actif
-    if scene.render.engine == 'CYCLES':
-        out_dir = scene.multicam_output_cycles
-    else:
-        out_dir = scene.multicam_output_eevee
-
+    out_dir = _multicam_dir_for(scene, cam)
     if not out_dir:
-        raise RuntimeError("Dossier de sortie non defini pour le moteur '{}'".format(scene.render.engine))
+        raise RuntimeError("Dossier de sortie introuvable pour '{}'".format(cam.name))
 
     out_dir_abs = bpy.path.abspath(out_dir)
     os.makedirs(out_dir_abs, exist_ok=True)
@@ -534,6 +578,43 @@ class MULTICAM_OT_cancel_render(bpy.types.Operator):
 # ---------------------------------------------------------------------------
 # Operateur : declenche le rendu batch des cameras cochees
 # ---------------------------------------------------------------------------
+class MULTICAM_OT_make_tree(bpy.types.Operator):
+    bl_idname = "multicam.make_tree"
+    bl_label = "Creer l'arborescence"
+    bl_description = ("Cree planches/<NN>/rendus-EVEE, rendus-Cycles et "
+                      "rendus-Kuwahara pour chaque planche detectee")
+
+    def execute(self, context):
+        scene = context.scene
+        root = bpy.path.abspath(scene.multicam_strip_root or "")
+
+        if not root or not os.path.isdir(root):
+            self.report({'ERROR'}, "Racine du strip introuvable")
+            return {'CANCELLED'}
+
+        pages = _multicam_pages(scene)
+        if not pages:
+            self.report({'ERROR'}, "Aucune planche : rafraichir la liste des cameras")
+            return {'CANCELLED'}
+
+        created = 0
+        for page in pages:
+            for sub in list(RENDER_DIRS.values()) + EXTRA_DIRS:
+                path = os.path.join(root, "planches", page, sub)
+                if os.path.isdir(path):
+                    continue
+                try:
+                    os.makedirs(path, exist_ok=True)
+                    created += 1
+                except Exception as e:
+                    self.report({'ERROR'}, "Creation impossible : {}".format(e))
+                    return {'CANCELLED'}
+
+        self.report({'INFO'}, "{} planche(s) - {} dossier(s) cree(s)".format(
+            len(pages), created))
+        return {'FINISHED'}
+
+
 class MULTICAM_OT_render_selected(bpy.types.Operator):
     bl_idname = "multicam.render_selected"
     bl_label = "Render Selected"
@@ -542,11 +623,14 @@ class MULTICAM_OT_render_selected(bpy.types.Operator):
     def execute(self, context):
         scene = context.scene
 
-        # Verification du dossier de sortie AVANT tout rendu
-        path_error = _multicam_check_output_dir(scene)
-        if path_error:
-            scene.multicam_last_error = path_error
-            self.report({'ERROR'}, path_error)
+        # Verification des dossiers AVANT tout rendu
+        cams_check = [bpy.data.objects[i.name] for i in scene.multicam_items
+                      if i.enabled and i.name in bpy.data.objects]
+        missing = _multicam_check_cameras(scene, cams_check)
+        if missing:
+            msg = "Chemin introuvable : " + " | ".join(missing[:3])
+            scene.multicam_last_error = msg
+            self.report({'ERROR'}, msg)
             return {'CANCELLED'}
 
         enabled_items = [item for item in scene.multicam_items if item.enabled]
@@ -602,10 +686,25 @@ class MULTICAM_PT_panel(bpy.types.Panel):
         scene = context.scene
 
         # --- Dossiers de sortie ---
+        # --- Dossiers de sortie ---
         box = layout.box()
-        box.prop(scene, "multicam_output_eevee", text="EEVEE")
-        box.prop(scene, "multicam_output_cycles", text="Cycles")
-        box.prop(scene, "multicam_follow_page")
+        box.prop(scene, "multicam_auto_paths")
+
+        if scene.multicam_auto_paths:
+            box.prop(scene, "multicam_strip_root", text="")
+            box.operator("multicam.make_tree", icon='NEWFOLDER')
+
+            pages = _multicam_pages(scene)
+            if pages:
+                sub = box.column(align=True)
+                sub.scale_y = 0.7
+                sub.label(text="{} planche(s) : {}".format(
+                    len(pages), ", ".join(pages[:8])))
+                sub.label(text=_multicam_page_dir(scene, pages[0]) or "?")
+        else:
+            box.prop(scene, "multicam_output_eevee", text="EEVEE")
+            box.prop(scene, "multicam_output_cycles", text="Cycles")
+            box.prop(scene, "multicam_follow_page")
 
         # Etat du dossier du moteur actif (verifie avant chaque rendu)
         path_error = _multicam_check_output_dir(scene)
@@ -703,6 +802,7 @@ classes = (
     MULTICAM_OT_cancel_render,
     MULTICAM_OT_render_selected,
     MULTICAM_PT_panel,
+    MULTICAM_OT_make_tree,
 )
 
 
@@ -719,6 +819,13 @@ def register():
     bpy.types.Scene.multicam_output_cycles = bpy.props.StringProperty(
         name="Dossier sortie Cycles", subtype='DIR_PATH', default=""
     )
+    bpy.types.Scene.multicam_strip_root = bpy.props.StringProperty(
+        name="Racine du strip", subtype='DIR_PATH', default="",
+        description="Dossier contenant planches/ (ex: .../Fury Rex/strip-01)")
+    bpy.types.Scene.multicam_auto_paths = bpy.props.BoolProperty(
+        name="Chemins automatiques", default=True,
+        description=("Chaque camera ecrit dans planches/<NN>/rendus-<variante>, "
+                     "deduit de son nom"))
     bpy.types.Scene.multicam_follow_page = bpy.props.BoolProperty(
         name="Adapter les chemins a la planche",
         description=("En cliquant sur un numero de planche, remplace le numero de dossier "
@@ -748,6 +855,8 @@ def unregister():
     del bpy.types.Scene.multicam_output_eevee
     del bpy.types.Scene.multicam_active_index
     del bpy.types.Scene.multicam_items
+    del bpy.types.Scene.multicam_strip_root
+    del bpy.types.Scene.multicam_auto_paths
 
     for cls in reversed(classes):
         bpy.utils.unregister_class(cls)
