@@ -815,7 +815,8 @@
     </p>
     <textarea class="export" id="blender-script" readonly></textarea>
     <div class="copy-row">
-      <button class="btn" onclick="copyScript()">Copier le script</button>
+      <button class="btn" id="btn-push" onclick="pushCameras()">Creer les cameras dans Blender</button>
+      <button class="btn sec" onclick="copyScript()">Copier le script</button>
     </div>
     <div class="copied-msg" id="copy-script-msg"></div>
   </div>
@@ -888,6 +889,41 @@ const CONFIG_FIELD_IDS = [
 // ---------------------------------------------------------------------------
 const HAS_FS_API = (typeof window.showDirectoryPicker === 'function');
 const IMG_EXT = /\.(png|jpe?g|webp)$/i;
+
+// Servie par Multi-Cam BD : lecture et ecriture passent par lui
+const PARAMS = new URLSearchParams(location.search);
+const SERVED = location.protocol.startsWith('http');
+
+async function srvList(path) {
+  const res = await fetch('/list/' + path + '?t=' + Date.now());
+  if (!res.ok) return { files: [], dirs: [] };
+  return await res.json();
+}
+
+function srvUrl(path) {
+  return '/files/' + path.split('/').map(encodeURIComponent).join('/');
+}
+
+async function srvSave(path, payload, binary) {
+  const body = binary ? { path, b64: payload } : { path, text: payload };
+  const res = await fetch('/save', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  const data = await res.json();
+  if (!data.ok) throw new Error(data.error || 'echec');
+  return data.path;
+}
+
+function blobToB64(blob) {
+  return new Promise((res, rej) => {
+    const r = new FileReader();
+    r.onload = () => res(r.result);
+    r.onerror = rej;
+    r.readAsDataURL(blob);
+  });
+}
 
 let dirHandle = null;          // FileSystemDirectoryHandle (mode persistant)
 let dirLabel = '';             // nom affiche du dossier
@@ -974,6 +1010,25 @@ async function newPlanche() {
 
   // Si les planches existantes vivent dans un sous-dossier portant leur
   // prefixe (01/, 02/...), on cree le dossier correspondant.
+  if (SERVED) {
+    const dir = 'planches/' + prefix;
+    const fileName = 'gaufrier_config_' + prefix + '.json';
+
+    try {
+      await srvSave(dir + '/' + fileName, JSON.stringify(cfg, null, 2), false);
+      flashMsg('config-msg', 'Planche ' + prefix + ' creee');
+    } catch (err) {
+      flashMsg('config-msg', 'Erreur creation : ' + err.message);
+    }
+
+    planches.push({ ...cfg, __file: fileName, __path: dir, __folder: prefix });
+    planches.sort((a, b) =>
+      String(a.prefix || '').localeCompare(String(b.prefix || ''), undefined,
+                                           { numeric: true }));
+    await selectPlanche(prefix);
+    return;
+  }
+
   let targetDir = dirHandle;
   if (dirHandle) {
     const nested = planches.some(c => c.__folder === String(c.prefix));
@@ -1045,6 +1100,22 @@ function applyConfig(cfg) {
 
   renderRows();
   render();
+
+  if (SERVED) {
+    const box = document.getElementById('fsapi-supported');
+    if (box) box.style.display = 'none';
+    const fb = document.getElementById('fsapi-fallback');
+    if (fb) fb.style.display = 'none';
+
+    // La planche et la variante viennent de Multi-Cam BD
+    const wanted = PARAMS.get('page');
+    if (wanted) localStorage.setItem('gaufrier_last_prefix', wanted);
+
+    const variant = PARAMS.get('variant');
+    if (variant) localStorage.setItem('gaufrier_variant_' + (wanted || ''), variant);
+
+    scanRenderFolder();
+  }
 }
 
 // --- mini wrapper IndexedDB (stocke le handle de dossier) ---
@@ -1126,6 +1197,41 @@ const THUMB_SRC_W = 320;   // largeur de decodage des images pour les miniatures
 
 let allImages = [];   // { base, file, folder, mtime }
 
+// Parcours par le serveur : chaque entree garde son chemin relatif
+async function walkServer(path, depth, out) {
+  if (depth > MAX_DEPTH) return;
+
+  const listing = await srvList(path);
+
+  for (const name of listing.files) {
+    const rel = path ? path + '/' + name : name;
+
+    if (IMG_EXT.test(name)) {
+      if (EXPORT_NAME.test(name)) continue;
+      out.images.push({
+        base: name.replace(IMG_EXT, ''),
+        url: srvUrl(rel),
+        folder: path.replace(/^planches\//, '') || '(racine)',
+        mtime: 0,
+      });
+    } else if (/^gaufrier_config_.*\.json$/i.test(name)) {
+      try {
+        const res = await fetch(srvUrl(rel) + '?t=' + Date.now());
+        if (!res.ok) continue;
+        const cfg = await res.json();
+        cfg.__file = name;
+        cfg.__folder = path.replace(/^planches\//, '') || '(racine)';
+        cfg.__path = path;
+        out.configs.push(cfg);
+      } catch (err) { /* config illisible */ }
+    }
+  }
+
+  for (const dir of listing.dirs) {
+    await walkServer(path ? path + '/' + dir : dir, depth + 1, out);
+  }
+}
+
 async function walkDir(handle, path, depth, out) {
   if (depth > MAX_DEPTH) return;
 
@@ -1202,11 +1308,13 @@ function chosenVariant(cfg) {
 }
 
 async function scanRenderFolder() {
-  if (!dirHandle) return;
+  if (!SERVED && !dirHandle) return;
 
   setRendersStatus('Lecture du dossier en cours...');
   const out = { images: [], configs: [] };
-  await walkDir(dirHandle, '', 0, out);
+
+  if (SERVED) await walkServer('planches', 0, out);
+  else await walkDir(dirHandle, '', 0, out);
 
   allImages = out.images;
   planches = out.configs.sort((a, b) =>
@@ -1241,7 +1349,9 @@ async function buildThumbs() {
     const imgs = imagesForPlanche(cfg).filter(i => i.variant === v);
     for (const i of imgs) {
       try {
-        const bmp = await createImageBitmap(i.file, { resizeWidth: THUMB_SRC_W, resizeQuality: 'low' });
+        const blob = i.url ? await (await fetch(i.url)).blob() : i.file;
+        const bmp = await createImageBitmap(blob, { resizeWidth: THUMB_SRC_W,
+                                                   resizeQuality: 'low' });
         thumbImages[i.base] = { img: bmp, w: bmp.width, h: bmp.height };
       } catch (err) { /* image illisible : ignoree */ }
     }
@@ -1330,20 +1440,26 @@ async function loadFallbackFiles(event) {
 
 // --- decodage pleine resolution en HTMLImageElement ---
 async function registerFiles(entries) {
-  await Promise.all(entries.map(({ base, file }) => new Promise(resolve => {
-    const url = URL.createObjectURL(file);
+  await Promise.all(entries.map(entry => new Promise(resolve => {
+    const url = entry.url || URL.createObjectURL(entry.file);
     const img = new Image();
     img.onload = () => {
-      renderImages[base] = { img, w: img.naturalWidth, h: img.naturalHeight, url };
+      renderImages[entry.base] = { img, w: img.naturalWidth, h: img.naturalHeight,
+                                   url, served: !!entry.url };
       resolve();
     };
-    img.onerror = () => { URL.revokeObjectURL(url); resolve(); };
+    img.onerror = () => {
+      if (!entry.url) URL.revokeObjectURL(url);
+      resolve();
+    };
     img.src = url;
   })));
 }
 
 function clearRenderImages() {
-  Object.values(renderImages).forEach(e => URL.revokeObjectURL(e.url));
+  Object.values(renderImages).forEach(e => {
+    if (!e.served) URL.revokeObjectURL(e.url);
+  });
   renderImages = {};
 }
 
@@ -1807,6 +1923,33 @@ function copyTable() {
   navigator.clipboard.writeText(text).then(() => flashMsg('copy-table-msg', 'Tableau copie'));
 }
 
+async function pushCameras() {
+  if (!SERVED) {
+    flashMsg('copy-script-msg', 'Disponible depuis Blender seulement');
+    return;
+  }
+
+  const L = computeLayout();
+  const frames = L.panels.map(p => ({
+    name: p.name,
+    w: Math.round(p.bw),
+    h: Math.round(p.bh),
+  }));
+
+  try {
+    const res = await fetch('/cameras', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ prefix: L.prefix, frames }),
+    });
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.error || 'echec');
+    flashMsg('copy-script-msg', frames.length + ' camera(s) envoyee(s)');
+  } catch (err) {
+    flashMsg('copy-script-msg', 'Erreur : ' + err.message);
+  }
+}
+
 function copyScript() {
   const ta = document.getElementById('blender-script');
   navigator.clipboard.writeText(ta.value).then(() => flashMsg('copy-script-msg', 'Script copie'));
@@ -1916,6 +2059,20 @@ async function exportPNG(toFolder) {
   const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
   const fileName = currentExportName();
 
+  if (toFolder && SERVED) {
+    const prefix = document.getElementById('prefix').value.trim();
+    const owner = planches.find(c => String(c.prefix) === prefix);
+    const dir = (owner && owner.__path) || ('planches/' + prefix);
+
+    try {
+      await srvSave(dir + '/' + fileName, await blobToB64(blob), true);
+      flashMsg('export-msg', 'Enregistre : ' + fileName);
+    } catch (err) {
+      flashMsg('export-msg', 'Erreur ecriture : ' + err.message);
+    }
+    return;
+  }
+
   if (toFolder && dirHandle) {
     try {
       const prefix = document.getElementById('prefix').value.trim();
@@ -1967,10 +2124,15 @@ async function exportAllPlanches() {
     const dir = cfg.__dir || dirHandle;
 
     try {
-      const fh = await dir.getFileHandle(name, { create: true });
-      const w = await fh.createWritable();
-      await w.write(blob);
-      await w.close();
+      if (SERVED) {
+        const target = (cfg.__path || ('planches/' + cfg.prefix)) + '/' + name;
+        await srvSave(target, await blobToB64(blob), true);
+      } else {
+        const fh = await dir.getFileHandle(name, { create: true });
+        const w = await fh.createWritable();
+        await w.write(blob);
+        await w.close();
+      }
       done++;
     } catch (err) { /* planche ignoree */ }
   }
@@ -2010,10 +2172,30 @@ async function saveConfig() {
 
   // Si un dossier de rendus est connecte, on ecrit dedans : la config vit a
   // cote des images, et la planche apparait dans le navigateur de planches.
+  if (SERVED) {
+    const existing = planches.find(c => String(c.prefix) === String(config.prefix));
+    const dir = (existing && existing.__path) || ('planches/' + config.prefix);
+
+    try {
+      await srvSave(dir + '/' + fileName, json, false);
+
+      const idx = planches.findIndex(c => String(c.prefix) === String(config.prefix));
+      const stored = { ...config, __file: fileName, __path: dir,
+                       __folder: dir.replace(/^planches\//, '') };
+      if (idx >= 0) planches[idx] = stored; else planches.push(stored);
+
+      localStorage.setItem('gaufrier_last_prefix', String(config.prefix || ''));
+      buildPagesList();
+      flashMsg('config-msg', 'Enregistre : ' + fileName);
+      return;
+    } catch (err) {
+      flashMsg('config-msg', 'Erreur ecriture : ' + err.message);
+      return;
+    }
+  }
+
   if (dirHandle) {
     try {
-      // On reecrit la config la ou elle a ete trouvee (dossier de la planche),
-      // sinon a la racine du dossier selectionne.
       const existing = planches.find(c => String(c.prefix) === String(config.prefix));
       const targetDir = (existing && existing.__dir) ? existing.__dir : dirHandle;
       const fileHandle = await targetDir.getFileHandle(fileName, { create: true });

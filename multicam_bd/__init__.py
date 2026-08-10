@@ -29,6 +29,8 @@ SERVER_PORT = 8778
 
 _server = None
 _server_thread = None
+_pending_cameras = []           # rempli par le serveur, consomme par le timer
+_pending_lock = threading.Lock()
 
 
 class _GaufrierHandler(SimpleHTTPRequestHandler):
@@ -95,8 +97,24 @@ class _GaufrierHandler(SimpleHTTPRequestHandler):
         SimpleHTTPRequestHandler.do_GET(self)
 
     def do_POST(self):
-        if urllib.parse.urlparse(self.path).path != "/save":
+        route = urllib.parse.urlparse(self.path).path
+        if route not in ("/save", "/cameras"):
             self.send_error(404)
+            return
+
+        if route == "/cameras":
+            try:
+                size = int(self.headers.get("Content-Length", 0))
+                payload = json.loads(self.rfile.read(size).decode("utf-8"))
+            except Exception as e:
+                self._json({"ok": False, "error": str(e)}, 400)
+                return
+
+            # Blender n'est pas thread-safe : le travail est differe
+            with _pending_lock:
+                _pending_cameras.append(payload)
+
+            self._json({"ok": True, "count": len(payload.get("frames", []))})
             return
 
         try:
@@ -159,6 +177,43 @@ def stop_gaufrier_server():
             pass
     _server = None
     _server_thread = None
+
+
+def _apply_cameras():
+    """Cree ou met a jour les cameras demandees par le gaufrier."""
+    with _pending_lock:
+        jobs = list(_pending_cameras)
+        _pending_cameras.clear()
+
+    for job in jobs:
+        created = 0
+        for frame in job.get("frames", []):
+            name = frame.get("name")
+            if not name:
+                continue
+
+            obj = bpy.data.objects.get(name)
+            if obj is None or obj.type != 'CAMERA':
+                data = bpy.data.cameras.new(name)
+                obj = bpy.data.objects.new(name, data)
+                bpy.context.collection.objects.link(obj)
+                created += 1
+
+            obj["res_x"] = int(frame.get("w", 1000))
+            obj["res_y"] = int(frame.get("h", 1000))
+            if "frame" not in obj:
+                obj["frame"] = 0
+            _multicam_fix_res_bounds(obj)
+
+        try:
+            bpy.ops.multicam.refresh()
+        except Exception:
+            pass
+
+        print("[multicam] {} camera(s) creee(s), {} au total".format(
+            created, len(job.get("frames", []))))
+
+    return 1.0
 
 
 class MULTICAM_OT_open_gaufrier(bpy.types.Operator):
@@ -769,9 +824,14 @@ class MULTICAM_OT_make_tree(bpy.types.Operator):
             self.report({'ERROR'}, "Racine du strip introuvable")
             return {'CANCELLED'}
 
+        # Les planches viennent des cameras si elles existent, sinon de la
+        # saisie : l'arborescence se cree avant de generer quoi que ce soit
         pages = _multicam_pages(scene)
         if not pages:
-            self.report({'ERROR'}, "Aucune planche : rafraichir la liste des cameras")
+            pages = [p.strip() for p in scene.multicam_pages_hint.split(",")
+                     if p.strip()]
+        if not pages:
+            self.report({'ERROR'}, "Indiquer les numeros de planches a creer")
             return {'CANCELLED'}
 
         created = 0
@@ -869,6 +929,9 @@ class MULTICAM_PT_panel(bpy.types.Panel):
 
         if scene.multicam_auto_paths:
             box.prop(scene, "multicam_strip_root", text="")
+            if not _multicam_pages(scene):
+                box.prop(scene, "multicam_pages_hint")
+
             row = box.row(align=True)
             row.operator("multicam.make_tree", icon='NEWFOLDER')
             row.operator("multicam.open_gaufrier", text="", icon='URL')
@@ -989,6 +1052,9 @@ classes = (
 def register():
     for cls in classes:
         bpy.utils.register_class(cls)
+        
+    if not bpy.app.timers.is_registered(_apply_cameras):
+        bpy.app.timers.register(_apply_cameras, first_interval=1.0, persistent=True)
 
     bpy.types.Scene.multicam_items = bpy.props.CollectionProperty(type=MULTICAM_CameraItem)
     bpy.types.Scene.multicam_active_index = bpy.props.IntProperty(default=0)
@@ -1002,6 +1068,9 @@ def register():
     bpy.types.Scene.multicam_strip_root = bpy.props.StringProperty(
         name="Racine du strip", subtype='DIR_PATH', default="",
         description="Dossier contenant planches/ (ex: .../Fury Rex/strip-01)")
+    bpy.types.Scene.multicam_pages_hint = bpy.props.StringProperty(
+        name="Planches", default="01",
+        description="Numeros a creer quand aucune camera n'existe encore")
     bpy.types.Scene.multicam_auto_paths = bpy.props.BoolProperty(
         name="Chemins automatiques", default=True,
         description=("Chaque camera ecrit dans planches/<NN>/rendus-<variante>, "
@@ -1022,6 +1091,9 @@ def register():
 
 
 def unregister():
+    if bpy.app.timers.is_registered(_apply_cameras):
+        bpy.app.timers.unregister(_apply_cameras)
+        
     stop_gaufrier_server()
     _multicam_remove_handlers()
 
@@ -1038,6 +1110,7 @@ def unregister():
     del bpy.types.Scene.multicam_items
     del bpy.types.Scene.multicam_strip_root
     del bpy.types.Scene.multicam_auto_paths
+    del bpy.types.Scene.multicam_pages_hint
 
     for cls in reversed(classes):
         bpy.utils.unregister_class(cls)
