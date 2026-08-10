@@ -697,7 +697,8 @@ def _multicam_check_output_dir(scene):
     return None
 
 
-VL_BG, VL_DECOR, VL_PERSOS = "FOND", "DECOR", "PERSOS"
+VL_DECOR, VL_PERSOS = "DECOR", "PERSOS"
+BG_NODE = "MC_Fond"
 MERGE_NODE = "MC_Merge"
 
 
@@ -715,10 +716,6 @@ def _apply_exclusions(view_layer, mode):
     """mode : 'BG' rien, 'DECOR' tout sauf les persos, 'PERSOS' eux seuls."""
     def walk(lc):
         is_robot = lc.collection.name.startswith("ROBOT_")
-
-        if mode == 'BG':
-            lc.exclude = True
-            return
 
         if mode == 'DECOR':
             lc.exclude = is_robot
@@ -786,15 +783,13 @@ def _setup_view_layers(scene):
     scene.render.film_transparent = True
 
     layers = {}
-    for name, mode in ((VL_BG, 'BG'), (VL_DECOR, 'DECOR'), (VL_PERSOS, 'PERSOS')):
+    for name, mode in ((VL_DECOR, 'DECOR'), (VL_PERSOS, 'PERSOS')):
         vl = scene.view_layers.get(name)
         if vl is None:
             vl = scene.view_layers.new(name)
         layers[name] = vl
         _apply_exclusions(vl, mode)
 
-    # Le calque de fond n'a que le monde a rendre
-    layers[VL_BG].use_freestyle = False
     layers[VL_DECOR].use_freestyle = False
     _freestyle_setup(scene, layers[VL_PERSOS])
 
@@ -812,7 +807,7 @@ def _build_compositor(scene):
     tree = scene.node_tree
 
     sources = {}
-    for i, name in enumerate((VL_BG, VL_DECOR, VL_PERSOS)):
+    for i, name in enumerate((VL_DECOR, VL_PERSOS)):
         node = tree.nodes.get("MC_RL_" + name)
         if node is None:
             node = tree.nodes.new('CompositorNodeRLayers')
@@ -823,10 +818,20 @@ def _build_compositor(scene):
         node.location = (-600, 200 - i * 260)
         sources[name] = node
 
-    over1 = _node_get(tree, "MC_Over1", 'CompositorNodeAlphaOver', (-260, 80))
-    over2 = _node_get(tree, MERGE_NODE, 'CompositorNodeAlphaOver', (-60, 0))
+    # Le monde n'est pas rendu quand le film est transparent : on le remplace
+    # par sa couleur, posee derriere le decor
+    bg = _node_get(tree, BG_NODE, 'CompositorNodeRGB', (-600, -320))
+    color = (0.05, 0.05, 0.05, 1.0)
+    if scene.world is not None and scene.world.use_nodes:
+        node = scene.world.node_tree.nodes.get("Background")
+        if node is not None:
+            color = tuple(node.inputs[0].default_value)
+    bg.outputs[0].default_value = color
 
-    tree.links.new(sources[VL_BG].outputs['Image'], over1.inputs[1])
+    over1 = _node_get(tree, "MC_Over1", 'CompositorNodeAlphaOver', (-260, 80))
+    over2 = _node_get(tree, MERGE_NODE, 'CompositorNodeAlphaOver', (140, 0))
+
+    tree.links.new(bg.outputs[0], over1.inputs[1])
     tree.links.new(sources[VL_DECOR].outputs['Image'], over1.inputs[2])
     tree.links.new(over1.outputs['Image'], over2.inputs[1])
     tree.links.new(sources[VL_PERSOS].outputs['Image'], over2.inputs[2])
@@ -841,11 +846,12 @@ def _build_compositor(scene):
 
 
 def _merged_source(scene):
-    """Sortie a filtrer : la fusion si elle existe, sinon le rendu simple."""
+    """Sortie a filtrer : le decor seul quand les calques sont separes, pour
+    que les personnages gardent leur trait net."""
     if scene.use_nodes:
-        merge = scene.node_tree.nodes.get(MERGE_NODE)
-        if merge is not None:
-            return merge.outputs['Image']
+        over1 = scene.node_tree.nodes.get("MC_Over1")
+        if over1 is not None:
+            return over1.outputs['Image']
 
     rl = next((n for n in scene.node_tree.nodes if n.type == 'R_LAYERS'), None) \
         if scene.use_nodes else None
@@ -896,7 +902,16 @@ def _kuwahara_setup(scene):
 
     source = _merged_source(scene) or rl.outputs['Image']
     tree.links.new(source, kuwa.inputs[0])
-    tree.links.new(kuwa.outputs[0], out.inputs[0])
+
+    # Les personnages sont reposes par-dessus le decor filtre
+    persos = tree.nodes.get("MC_RL_" + VL_PERSOS)
+    if persos is not None:
+        final = _node_get(tree, "MC_KuwaOver", 'CompositorNodeAlphaOver', (280, -320))
+        tree.links.new(kuwa.outputs[0], final.inputs[1])
+        tree.links.new(persos.outputs['Image'], final.inputs[2])
+        tree.links.new(final.outputs['Image'], out.inputs[0])
+    else:
+        tree.links.new(kuwa.outputs[0], out.inputs[0])
 
     return kuwa, out
 
