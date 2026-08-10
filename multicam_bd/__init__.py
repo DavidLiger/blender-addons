@@ -793,10 +793,15 @@ def _kuwahara_rename(scene, cam):
     if not os.path.isdir(folder):
         return
 
+    # Le suffixe de frame est ajoute par Blender, et l'extension peut manquer
+    # puisque use_file_extension est desactive pour le rendu principal
     target = os.path.join(folder, cam.name + ".png")
-    for fname in os.listdir(folder):
-        if not fname.startswith(cam.name + "_") or not fname.endswith(".png"):
+    prefix = cam.name + "_"
+
+    for fname in sorted(os.listdir(folder)):
+        if not fname.startswith(prefix) or fname == cam.name + ".png":
             continue
+
         try:
             if os.path.exists(target):
                 os.remove(target)
