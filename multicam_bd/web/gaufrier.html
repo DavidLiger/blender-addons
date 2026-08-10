@@ -2172,6 +2172,8 @@ async function saveConfig() {
 
   // Si un dossier de rendus est connecte, on ecrit dedans : la config vit a
   // cote des images, et la planche apparait dans le navigateur de planches.
+  console.log('[gaufrier] SERVED =', SERVED, location.href);
+
   if (SERVED) {
     const existing = planches.find(c => String(c.prefix) === String(config.prefix));
     const dir = (existing && existing.__path) || ('planches/' + config.prefix);

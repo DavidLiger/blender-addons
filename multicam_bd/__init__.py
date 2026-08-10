@@ -96,6 +96,11 @@ class _GaufrierHandler(SimpleHTTPRequestHandler):
 
         SimpleHTTPRequestHandler.do_GET(self)
 
+    def end_headers(self):
+        # La page est en developpement : jamais de cache navigateur
+        self.send_header("Cache-Control", "no-store, must-revalidate")
+        SimpleHTTPRequestHandler.end_headers(self)
+
     def do_POST(self):
         route = urllib.parse.urlparse(self.path).path
         if route not in ("/save", "/cameras"):
