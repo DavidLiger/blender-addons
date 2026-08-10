@@ -930,7 +930,9 @@ def _kuwahara_apply(scene, cam):
     page = _multicam_page_of(cam.name)
     folder = _multicam_page_dir(scene, page, variant=None)
     if folder:
-        folder = os.path.join(os.path.dirname(folder), "rendus-Kuwahara")
+        # Un dossier par moteur : sinon EEVEE et Cycles s'ecrasent
+        suffix = "-Cycles" if _multicam_variant(scene) == 'CYCLES' else ""
+        folder = os.path.join(os.path.dirname(folder), "rendus-Kuwahara" + suffix)
         os.makedirs(folder, exist_ok=True)
         out.base_path = folder
         out.file_slots[0].path = cam.name + "_"
