@@ -697,6 +697,161 @@ def _multicam_check_output_dir(scene):
     return None
 
 
+VL_BG, VL_DECOR, VL_PERSOS = "FOND", "DECOR", "PERSOS"
+MERGE_NODE = "MC_Merge"
+
+
+def _robot_colls():
+    return [c for c in bpy.data.collections if c.name.startswith("ROBOT_")]
+
+
+def _has_robot(coll):
+    if coll.name.startswith("ROBOT_"):
+        return True
+    return any(_has_robot(c) for c in coll.children)
+
+
+def _apply_exclusions(view_layer, mode):
+    """mode : 'BG' rien, 'DECOR' tout sauf les persos, 'PERSOS' eux seuls."""
+    def walk(lc):
+        is_robot = lc.collection.name.startswith("ROBOT_")
+
+        if mode == 'BG':
+            lc.exclude = True
+            return
+
+        if mode == 'DECOR':
+            lc.exclude = is_robot
+            if not is_robot:
+                for child in lc.children:
+                    walk(child)
+            return
+
+        # PERSOS : on garde la branche qui mene aux robots, on coupe le reste
+        if is_robot:
+            lc.exclude = False
+            return
+
+        if _has_robot(lc.collection):
+            lc.exclude = False
+            for child in lc.children:
+                walk(child)
+        else:
+            lc.exclude = True
+
+    for child in view_layer.layer_collection.children:
+        walk(child)
+
+
+def _freestyle_setup(scene, view_layer):
+    """Contour sur le calque des personnages, avec tremble d'epaisseur."""
+    scene.render.use_freestyle = True
+    view_layer.use_freestyle = True
+
+    fs = view_layer.freestyle_settings
+    fs.mode = 'EDITOR'
+    fs.crease_angle = 2.443           # 140 degres
+
+    lineset = fs.linesets.get("MC_Lines")
+    if lineset is None:
+        lineset = fs.linesets.new("MC_Lines")
+
+    lineset.select_silhouette = True
+    lineset.select_border = True
+    lineset.select_crease = True
+
+    style = lineset.linestyle
+    style.color = scene.multicam_line_color[:3]
+    style.thickness = scene.multicam_line_thick
+
+    # Les modificateurs sont reconstruits : plus simple que de les retrouver
+    while style.thickness_modifiers:
+        style.thickness_modifiers.remove(style.thickness_modifiers[0])
+
+    if scene.multicam_line_calli:
+        calli = style.thickness_modifiers.new("calli", 'CALLIGRAPHY')
+        calli.orientation = 0.785     # 45 degres
+        calli.thickness_min = scene.multicam_line_thick * 0.35
+        calli.thickness_max = scene.multicam_line_thick * 1.6
+
+    if scene.multicam_line_noise > 0.0:
+        noise = style.thickness_modifiers.new("grain", 'NOISE')
+        noise.amplitude = scene.multicam_line_noise
+        noise.period = scene.multicam_line_period
+        noise.seed = 1
+
+
+def _setup_view_layers(scene):
+    """Cree et configure FOND, DECOR et PERSOS."""
+    scene.render.film_transparent = True
+
+    layers = {}
+    for name, mode in ((VL_BG, 'BG'), (VL_DECOR, 'DECOR'), (VL_PERSOS, 'PERSOS')):
+        vl = scene.view_layers.get(name)
+        if vl is None:
+            vl = scene.view_layers.new(name)
+        layers[name] = vl
+        _apply_exclusions(vl, mode)
+
+    # Le calque de fond n'a que le monde a rendre
+    layers[VL_BG].use_freestyle = False
+    layers[VL_DECOR].use_freestyle = False
+    _freestyle_setup(scene, layers[VL_PERSOS])
+
+    # Un calque par defaut sans role reste inutile mais couteux
+    for vl in scene.view_layers:
+        if vl.name not in layers:
+            vl.use = False
+
+    return layers
+
+
+def _build_compositor(scene):
+    """FOND < DECOR < PERSOS, puis Composite. Renvoie la sortie fusionnee."""
+    scene.use_nodes = True
+    tree = scene.node_tree
+
+    sources = {}
+    for i, name in enumerate((VL_BG, VL_DECOR, VL_PERSOS)):
+        node = tree.nodes.get("MC_RL_" + name)
+        if node is None:
+            node = tree.nodes.new('CompositorNodeRLayers')
+            node.name = "MC_RL_" + name
+        node.label = name
+        node.scene = scene
+        node.layer = name
+        node.location = (-600, 200 - i * 260)
+        sources[name] = node
+
+    over1 = _node_get(tree, "MC_Over1", 'CompositorNodeAlphaOver', (-260, 80))
+    over2 = _node_get(tree, MERGE_NODE, 'CompositorNodeAlphaOver', (-60, 0))
+
+    tree.links.new(sources[VL_BG].outputs['Image'], over1.inputs[1])
+    tree.links.new(sources[VL_DECOR].outputs['Image'], over1.inputs[2])
+    tree.links.new(over1.outputs['Image'], over2.inputs[1])
+    tree.links.new(sources[VL_PERSOS].outputs['Image'], over2.inputs[2])
+
+    comp = next((n for n in tree.nodes if n.type == 'COMPOSITE'), None)
+    if comp is None:
+        comp = tree.nodes.new('CompositorNodeComposite')
+        comp.location = (320, 120)
+    tree.links.new(over2.outputs['Image'], comp.inputs['Image'])
+
+    return over2.outputs['Image']
+
+
+def _merged_source(scene):
+    """Sortie a filtrer : la fusion si elle existe, sinon le rendu simple."""
+    if scene.use_nodes:
+        merge = scene.node_tree.nodes.get(MERGE_NODE)
+        if merge is not None:
+            return merge.outputs['Image']
+
+    rl = next((n for n in scene.node_tree.nodes if n.type == 'R_LAYERS'), None) \
+        if scene.use_nodes else None
+    return rl.outputs['Image'] if rl else None
+
+
 KUWA_NODE = "MC_Kuwahara"
 KUWA_OUT = "MC_KuwaharaOut"
 
@@ -731,15 +886,16 @@ def _kuwahara_setup(scene):
     if not comp.inputs['Image'].is_linked:
         tree.links.new(rl.outputs['Image'], comp.inputs['Image'])
 
-    kuwa = _node_get(tree, KUWA_NODE, 'CompositorNodeKuwahara', (-40, -220))
-    out = _node_get(tree, KUWA_OUT, 'CompositorNodeOutputFile', (300, -220))
+    kuwa = _node_get(tree, KUWA_NODE, 'CompositorNodeKuwahara', (120, -320))
+    out = _node_get(tree, KUWA_OUT, 'CompositorNodeOutputFile', (400, -320))
 
     out.format.file_format = 'PNG'
     out.format.color_mode = 'RGBA'
     if not out.file_slots:
         out.file_slots.new("image")
 
-    tree.links.new(rl.outputs['Image'], kuwa.inputs[0])
+    source = _merged_source(scene) or rl.outputs['Image']
+    tree.links.new(source, kuwa.inputs[0])
     tree.links.new(kuwa.outputs[0], out.inputs[0])
 
     return kuwa, out
@@ -993,6 +1149,31 @@ class MULTICAM_OT_make_tree(bpy.types.Operator):
         return {'FINISHED'}
 
 
+class MULTICAM_OT_setup_layers(bpy.types.Operator):
+    bl_idname = "multicam.setup_layers"
+    bl_label = "Configurer les calques"
+    bl_description = ("Cree FOND, DECOR et PERSOS, y repartit les collections et "
+                      "monte leur superposition dans le compositeur")
+
+    def execute(self, context):
+        scene = context.scene
+
+        robots = _robot_colls()
+        if not robots:
+            self.report({'WARNING'}, "Aucune collection ROBOT_ : le calque PERSOS "
+                                     "sera vide")
+
+        _setup_view_layers(scene)
+        _build_compositor(scene)
+
+        if scene.multicam_kuwahara:
+            _kuwahara_setup(scene)
+
+        self.report({'INFO'}, "3 calques configures - {} collection(s) perso".format(
+            len(robots)))
+        return {'FINISHED'}
+
+
 class MULTICAM_OT_render_selected(bpy.types.Operator):
     bl_idname = "multicam.render_selected"
     bl_label = "Render Selected"
@@ -1150,6 +1331,28 @@ class MULTICAM_PT_panel(bpy.types.Panel):
 
         # --- Rendu batch ---
         # --- Sortie Kuwahara ---
+        # --- Calques et contour ---
+        box = layout.box()
+        box.prop(scene, "multicam_split_layers")
+
+        if scene.multicam_split_layers:
+            box.operator("multicam.setup_layers", icon='RENDERLAYERS')
+
+            col = box.column(align=True)
+            col.label(text="Contour des personnages :")
+            col.prop(scene, "multicam_line_color", text="")
+            col.prop(scene, "multicam_line_thick")
+            col.prop(scene, "multicam_line_calli")
+            r = col.row(align=True)
+            r.prop(scene, "multicam_line_noise")
+            r.prop(scene, "multicam_line_period")
+
+            sub = box.row()
+            sub.scale_y = 0.7
+            sub.label(text="Relancer la configuration apres un changement",
+                      icon='INFO')
+
+        # --- Sortie Kuwahara ---
         box = layout.box()
         box.prop(scene, "multicam_kuwahara")
 
@@ -1206,6 +1409,7 @@ classes = (
     MULTICAM_PT_panel,
     MULTICAM_OT_make_tree,
     MULTICAM_OT_open_gaufrier,
+    MULTICAM_OT_setup_layers,
 )
 
 
@@ -1228,6 +1432,24 @@ def register():
     bpy.types.Scene.multicam_strip_root = bpy.props.StringProperty(
         name="Racine du strip", subtype='DIR_PATH', default="",
         description="Dossier contenant planches/ (ex: .../Fury Rex/strip-01)")
+    bpy.types.Scene.multicam_split_layers = bpy.props.BoolProperty(
+        name="Personnages sur un calque separe", default=False,
+        description=("Rend decor et personnages en deux calques composes "
+                     "ensemble : permet un traitement propre a chacun"))
+    bpy.types.Scene.multicam_line_color = bpy.props.FloatVectorProperty(
+        name="Couleur du trait", subtype='COLOR', size=4,
+        default=(0.0, 0.0, 0.0, 1.0), min=0.0, max=1.0)
+    bpy.types.Scene.multicam_line_thick = bpy.props.FloatProperty(
+        name="Epaisseur", default=3.0, min=0.1, max=40.0)
+    bpy.types.Scene.multicam_line_calli = bpy.props.BoolProperty(
+        name="Plume", default=True,
+        description="Epaisseur variable selon l'orientation, comme une plume")
+    bpy.types.Scene.multicam_line_noise = bpy.props.FloatProperty(
+        name="Tremble", default=1.5, min=0.0, max=20.0,
+        description="Amplitude de la variation d'epaisseur")
+    bpy.types.Scene.multicam_line_period = bpy.props.FloatProperty(
+        name="Grain", default=25.0, min=1.0, max=400.0,
+        description="Longueur d'onde du tremble : petit = nerveux")
     bpy.types.Scene.multicam_kuwahara = bpy.props.BoolProperty(
         name="Sortie Kuwahara", default=False,
         description=("Ecrit en parallele une version picturale dans "
@@ -1294,6 +1516,12 @@ def unregister():
     del bpy.types.Scene.multicam_kuwa_uniform
     del bpy.types.Scene.multicam_kuwa_sharp
     del bpy.types.Scene.multicam_kuwa_ecc
+    del bpy.types.Scene.multicam_split_layers
+    del bpy.types.Scene.multicam_line_color
+    del bpy.types.Scene.multicam_line_thick
+    del bpy.types.Scene.multicam_line_calli
+    del bpy.types.Scene.multicam_line_noise
+    del bpy.types.Scene.multicam_line_period
 
     for cls in reversed(classes):
         bpy.utils.unregister_class(cls)
