@@ -10,8 +10,185 @@ bl_info = {
 
 import bpy
 import os
+import base64
+import json
+import posixpath
+import threading
+import urllib.parse
+import webbrowser
+from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 import re
 
+# ---------------------------------------------------------------------------
+# Serveur local
+# Sert gaufrier.html et le dossier du strip : le navigateur n'a besoin
+# d'aucune permission disque, et n'importe lequel fait l'affaire.
+# ---------------------------------------------------------------------------
+WEB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "web")
+SERVER_PORT = 8778
+
+_server = None
+_server_thread = None
+
+
+class _GaufrierHandler(SimpleHTTPRequestHandler):
+    root = ""                     # racine du strip
+
+    def log_message(self, fmt, *args):
+        pass
+
+    def _under_root(self, relative):
+        base = os.path.normpath(self.root)
+        target = os.path.normpath(os.path.join(base, relative.replace("/", os.sep)))
+        return target if target.startswith(base) else None
+
+    def translate_path(self, path):
+        clean = posixpath.normpath(urllib.parse.urlparse(path).path).lstrip("/")
+        return os.path.join(WEB_DIR, clean.replace("/", os.sep))
+
+    def _json(self, payload, status=200):
+        body = json.dumps(payload).encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_GET(self):
+        parsed = urllib.parse.urlparse(self.path)
+
+        if parsed.path.startswith("/files/"):
+            target = self._under_root(posixpath.normpath(parsed.path[7:]).lstrip("/"))
+            if target is None or not os.path.isfile(target):
+                self.send_error(404)
+                return
+
+            with open(target, "rb") as f:
+                payload = f.read()
+
+            self.send_response(200)
+            self.send_header("Content-Type", self.guess_type(target))
+            self.send_header("Content-Length", str(len(payload)))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(payload)
+            return
+
+        if parsed.path.startswith("/list/"):
+            target = self._under_root(posixpath.normpath(parsed.path[6:]).lstrip("/"))
+            if target is None:
+                self.send_error(403)
+                return
+            if not os.path.isdir(target):
+                self._json({"files": [], "dirs": []})
+                return
+
+            entries = sorted(os.listdir(target))
+            self._json({
+                "files": [f for f in entries
+                          if os.path.isfile(os.path.join(target, f))],
+                "dirs": [d for d in entries
+                         if os.path.isdir(os.path.join(target, d))],
+            })
+            return
+
+        SimpleHTTPRequestHandler.do_GET(self)
+
+    def do_POST(self):
+        if urllib.parse.urlparse(self.path).path != "/save":
+            self.send_error(404)
+            return
+
+        try:
+            size = int(self.headers.get("Content-Length", 0))
+            data = json.loads(self.rfile.read(size).decode("utf-8"))
+        except Exception as e:
+            self._json({"ok": False, "error": str(e)}, 400)
+            return
+
+        target = self._under_root(data.get("path", ""))
+        if target is None:
+            self._json({"ok": False, "error": "chemin refuse"}, 403)
+            return
+
+        try:
+            os.makedirs(os.path.dirname(target), exist_ok=True)
+            if "b64" in data:
+                with open(target, "wb") as f:
+                    f.write(base64.b64decode(data["b64"].split(",")[-1]))
+            else:
+                with open(target, "w", encoding="utf-8") as f:
+                    f.write(data.get("text", ""))
+        except Exception as e:
+            self._json({"ok": False, "error": str(e)}, 500)
+            return
+
+        self._json({"ok": True, "path": target})
+
+
+def start_gaufrier_server(root):
+    global _server, _server_thread
+
+    if _server is not None:
+        _GaufrierHandler.root = root
+        return True, "deja demarre"
+
+    if not root or not os.path.isdir(root):
+        return False, "racine du strip introuvable"
+
+    _GaufrierHandler.root = root
+    try:
+        _server = ThreadingHTTPServer(("127.0.0.1", SERVER_PORT), _GaufrierHandler)
+    except Exception as e:
+        _server = None
+        return False, "port {} indisponible ({})".format(SERVER_PORT, e)
+
+    _server_thread = threading.Thread(target=_server.serve_forever, daemon=True)
+    _server_thread.start()
+    return True, "ok"
+
+
+def stop_gaufrier_server():
+    global _server, _server_thread
+
+    if _server is not None:
+        try:
+            _server.shutdown()
+            _server.server_close()
+        except Exception:
+            pass
+    _server = None
+    _server_thread = None
+
+
+class MULTICAM_OT_open_gaufrier(bpy.types.Operator):
+    bl_idname = "multicam.open_gaufrier"
+    bl_label = "Generateur de gaufrier"
+    bl_description = ("Ouvre le generateur de planches dans le navigateur, "
+                      "sur le dossier du strip courant")
+
+    def execute(self, context):
+        scene = context.scene
+        root = bpy.path.abspath(scene.multicam_strip_root or "")
+
+        ok, msg = start_gaufrier_server(root)
+        if not ok:
+            self.report({'ERROR'}, "Serveur local : {}".format(msg))
+            return {'CANCELLED'}
+
+        page = os.path.join(WEB_DIR, "gaufrier.html")
+        if not os.path.isfile(page):
+            self.report({'ERROR'}, "gaufrier.html absent de {}".format(WEB_DIR))
+            return {'CANCELLED'}
+
+        pages = _multicam_pages(scene)
+        params = {"variant": RENDER_DIRS[_multicam_variant(scene)]}
+        if pages:
+            params["page"] = pages[0]
+
+        webbrowser.open("http://127.0.0.1:{}/gaufrier.html?{}".format(
+            SERVER_PORT, urllib.parse.urlencode(params)))
+        return {'FINISHED'}
 
 # ---------------------------------------------------------------------------
 # PropertyGroup : un element de la liste = une camera
@@ -692,7 +869,9 @@ class MULTICAM_PT_panel(bpy.types.Panel):
 
         if scene.multicam_auto_paths:
             box.prop(scene, "multicam_strip_root", text="")
-            box.operator("multicam.make_tree", icon='NEWFOLDER')
+            row = box.row(align=True)
+            row.operator("multicam.make_tree", icon='NEWFOLDER')
+            row.operator("multicam.open_gaufrier", text="", icon='URL')
 
             pages = _multicam_pages(scene)
             if pages:
@@ -803,6 +982,7 @@ classes = (
     MULTICAM_OT_render_selected,
     MULTICAM_PT_panel,
     MULTICAM_OT_make_tree,
+    MULTICAM_OT_open_gaufrier,
 )
 
 
@@ -842,6 +1022,7 @@ def register():
 
 
 def unregister():
+    stop_gaufrier_server()
     _multicam_remove_handlers()
 
     del bpy.types.Scene.multicam_cancel

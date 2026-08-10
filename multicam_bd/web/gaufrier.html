@@ -1,0 +1,2076 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Generateur de gaufrier</title>
+<style>
+  :root {
+    --bg: #1b1b1d;
+    --panel: #242427;
+    --panel-2: #2c2c30;
+    --border: #3a3a3f;
+    --text: #e6e6e8;
+    --muted: #9a9aa0;
+    --accent: #e0923d;
+    --accent-soft: #4a3420;
+    --ok: #6fcf7d;
+    --warn: #e0923d;
+    --mono: ui-monospace, "SF Mono", "Cascadia Mono", "JetBrains Mono", Consolas, monospace;
+    --sans: -apple-system, "Segoe UI", system-ui, sans-serif;
+  }
+
+  * { box-sizing: border-box; }
+
+  html, body {
+    height: 100%;
+    margin: 0;
+  }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--sans);
+    line-height: 1.4;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  h1 {
+    font-size: 0.95rem;
+    font-weight: 600;
+    margin: 0;
+    letter-spacing: 0.01em;
+    white-space: nowrap;
+  }
+
+  /* ---------------- Barre du haut (fixe) ---------------- */
+  .topbar {
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 10px 16px;
+    background: var(--panel);
+    border-bottom: 1px solid var(--border);
+  }
+
+  .toolbar {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .toolbar .sep {
+    width: 1px;
+    height: 22px;
+    background: var(--border);
+    margin: 0 4px;
+  }
+
+  .icon-btn-lg {
+    width: 34px;
+    height: 34px;
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text);
+    cursor: pointer;
+  }
+
+  .icon-btn-lg:hover {
+    border-color: var(--accent);
+    color: var(--accent);
+  }
+
+  .icon-btn-lg svg {
+    width: 18px;
+    height: 18px;
+  }
+
+  #config-msg {
+    font-size: 0.75rem;
+    color: var(--ok);
+    white-space: nowrap;
+  }
+
+  /* ---------------- Layout principal : 2 colonnes scroll independant ---------------- */
+  .main-layout {
+    flex: 1;
+    min-height: 0;
+    display: grid;
+    grid-template-columns: 380px 1fr 190px;
+  }
+
+  @media (max-width: 1100px) {
+    .main-layout { grid-template-columns: 340px 1fr 150px; }
+  }
+
+  @media (max-width: 860px) {
+    .main-layout {
+      grid-template-columns: 1fr;
+      grid-template-rows: 1fr 1fr;
+    }
+    .pages-col { display: none; }
+  }
+
+  .pages-col {
+    overflow-y: auto;
+    min-height: 0;
+    padding: 12px;
+    border-left: 1px solid var(--border);
+    background: var(--panel);
+  }
+
+  .pages-col h3 {
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--muted);
+    margin: 0 0 10px;
+    font-weight: 600;
+  }
+
+  .page-card {
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 6px;
+    margin-bottom: 10px;
+    cursor: pointer;
+    background: var(--panel-2);
+  }
+
+  .page-card:hover { border-color: var(--accent); }
+
+  .page-card.active {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 1px var(--accent);
+  }
+
+  .page-card canvas {
+    width: 100%;
+    height: auto;
+    display: block;
+    border-radius: 3px;
+    background: #ffffff;
+  }
+
+  .page-card .page-label {
+    font-family: var(--mono);
+    font-size: 0.72rem;
+    color: var(--muted);
+    text-align: center;
+    margin-top: 5px;
+  }
+
+  .page-card.active .page-label { color: var(--accent); }
+
+  .config-col, .preview-col {
+    overflow-y: auto;
+    min-height: 0;
+    padding: 16px;
+  }
+
+  .config-col {
+    border-right: 1px solid var(--border);
+  }
+
+  .preview-col {
+    display: flex;
+    flex-direction: column;
+  }
+
+  /* ---------------- Sections repliables ---------------- */
+  .section {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    margin-bottom: 16px;
+    overflow: hidden;
+  }
+
+  .section-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 14px;
+    cursor: pointer;
+    font-size: 0.78rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--muted);
+    font-weight: 600;
+    user-select: none;
+  }
+
+  .section-header:hover { color: var(--text); }
+
+  .section-header .chevron {
+    display: inline-block;
+    transition: transform 0.15s;
+    font-size: 0.9rem;
+  }
+
+  .section.collapsed .section-header .chevron {
+    transform: rotate(-90deg);
+  }
+
+  .section-body {
+    padding: 0 14px 14px;
+  }
+
+  .section.collapsed .section-body {
+    display: none;
+  }
+
+  /* ---------------- Modales ---------------- */
+  .modal-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.6);
+    display: none;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+    z-index: 100;
+  }
+
+  .modal-overlay.open { display: flex; }
+
+  .modal-box {
+    position: relative;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 18px;
+    width: 100%;
+    max-width: 640px;
+    max-height: 85vh;
+    overflow-y: auto;
+  }
+
+  .modal-box h2 { margin-top: 0; }
+
+  .modal-close {
+    position: absolute;
+    top: 10px;
+    right: 10px;
+    width: 28px;
+    height: 28px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--muted);
+    font-size: 1rem;
+    cursor: pointer;
+  }
+
+  .modal-close:hover {
+    color: var(--text);
+    border-color: var(--accent);
+  }
+
+  .card {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 16px;
+  }
+
+  .card h2 {
+    font-size: 0.78rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--muted);
+    margin: 0 0 12px;
+    font-weight: 600;
+  }
+
+  .field-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+    margin-bottom: 10px;
+  }
+
+  .field {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .field label {
+    font-size: 0.75rem;
+    color: var(--muted);
+  }
+
+  .field input, .field select {
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    color: var(--text);
+    border-radius: 5px;
+    padding: 6px 8px;
+    font-family: var(--mono);
+    font-size: 0.85rem;
+    width: 100%;
+  }
+
+  .field input:focus, .field select:focus {
+    outline: 1px solid var(--accent);
+    border-color: var(--accent);
+  }
+
+  .hint {
+    font-size: 0.7rem;
+    color: var(--muted);
+    font-family: var(--mono);
+  }
+
+  .unit-row {
+    display: grid;
+    grid-template-columns: 1fr 100px;
+    gap: 10px;
+    margin-bottom: 12px;
+  }
+
+  .rows-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .row-card {
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 10px;
+    position: relative;
+  }
+
+  .row-card .row-title {
+    font-size: 0.72rem;
+    color: var(--muted);
+    margin-bottom: 8px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+
+  .row-card .row-fields {
+    display: grid;
+    grid-template-columns: 1fr 70px;
+    gap: 8px;
+    margin-bottom: 8px;
+  }
+
+  .row-card .ratios-field {
+    grid-column: 1 / -1;
+  }
+
+  .icon-btn {
+    background: none;
+    border: 1px solid var(--border);
+    color: var(--muted);
+    border-radius: 4px;
+    width: 22px;
+    height: 22px;
+    line-height: 1;
+    cursor: pointer;
+    font-size: 0.85rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .icon-btn:hover {
+    color: var(--text);
+    border-color: var(--accent);
+  }
+
+  .btn {
+    background: var(--accent-soft);
+    border: 1px solid var(--accent);
+    color: var(--accent);
+    border-radius: 6px;
+    padding: 8px 14px;
+    font-size: 0.85rem;
+    font-weight: 600;
+    cursor: pointer;
+    width: 100%;
+    margin-top: 10px;
+  }
+
+  .btn:hover { background: var(--accent); color: #1b1b1d; }
+
+  .btn-secondary {
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    color: var(--text);
+  }
+
+  .btn-secondary:hover {
+    border-color: var(--accent);
+    color: var(--accent);
+    background: var(--panel-2);
+  }
+
+  .summary {
+    font-family: var(--mono);
+    font-size: 0.8rem;
+    margin-top: 12px;
+    padding: 10px;
+    border-radius: 6px;
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+  }
+
+  .summary.ok { border-color: var(--ok); color: var(--ok); }
+  .summary.warn { border-color: var(--warn); color: var(--warn); }
+
+  .preview-wrap {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    background: #111113;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 16px;
+    flex: 1;
+    min-height: 0;
+  }
+
+  svg.gaufrier {
+    width: 100%;
+    height: 100%;
+    max-width: 560px;
+    object-fit: contain;
+    background: #f4f1ea;
+  }
+
+  .panel-rect {
+    fill: #ffffff;
+    stroke: #888888;
+  }
+
+  .margin-guide {
+    fill: none;
+    stroke: #e03030;
+    stroke-width: 3;
+    pointer-events: none;
+  }
+
+  .dim-label {
+    font-family: var(--mono);
+    fill: #555555;
+    text-anchor: middle;
+    dominant-baseline: middle;
+  }
+
+  .name-label {
+    font-family: var(--mono);
+    fill: #b87a2e;
+    text-anchor: middle;
+    font-weight: 600;
+  }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-family: var(--mono);
+    font-size: 0.8rem;
+  }
+
+  th, td {
+    text-align: left;
+    padding: 6px 8px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  th {
+    color: var(--muted);
+    font-weight: 600;
+    text-transform: uppercase;
+    font-size: 0.68rem;
+    letter-spacing: 0.06em;
+  }
+
+  td.num { text-align: right; }
+
+  textarea.export {
+    width: 100%;
+    min-height: 160px;
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    color: var(--text);
+    font-family: var(--mono);
+    font-size: 0.78rem;
+    border-radius: 6px;
+    padding: 10px;
+    resize: vertical;
+  }
+
+  .copy-row {
+    display: flex;
+    gap: 8px;
+    margin-top: 8px;
+  }
+  .copy-row .btn { margin-top: 0; }
+
+  .copied-msg {
+    font-size: 0.75rem;
+    color: var(--ok);
+    margin-top: 6px;
+    height: 1em;
+  }
+</style>
+</head>
+<body>
+
+<!-- ===================== BARRE DU HAUT (fixe) ===================== -->
+<header class="topbar">
+  <h1>Generateur de gaufrier</h1>
+
+  <div class="toolbar">
+    <span class="copied-msg" id="config-msg"></span>
+
+    <button class="icon-btn-lg" title="Sauvegarder la configuration (.json)" onclick="saveConfig()">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M5 4h11l3 3v13H5z"/>
+        <path d="M8 4v5h7V4"/>
+        <rect x="8" y="13" width="8" height="6"/>
+      </svg>
+    </button>
+
+    <button class="icon-btn-lg" title="Charger une configuration (.json)" onclick="document.getElementById('load-config-input').click()">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M3 6a1 1 0 0 1 1-1h5l2 2h9a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1z"/>
+      </svg>
+    </button>
+    <input type="file" id="load-config-input" accept="application/json" style="display:none" onchange="loadConfig(event)">
+
+    <div class="sep"></div>
+
+    <button class="icon-btn-lg" title="Tableau des cases" onclick="openModal('modal-table')">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="3" y="4" width="18" height="16" rx="1"/>
+        <line x1="3" y1="10" x2="21" y2="10"/>
+        <line x1="3" y1="15" x2="21" y2="15"/>
+        <line x1="9" y1="4" x2="9" y2="20"/>
+        <line x1="15" y1="4" x2="15" y2="20"/>
+      </svg>
+    </button>
+
+    <button class="icon-btn-lg" title="Script Blender (Multi-Cam BD)" onclick="openModal('modal-script')">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+        <polyline points="9 6 4 12 9 18"/>
+        <polyline points="15 6 20 12 15 18"/>
+      </svg>
+    </button>
+
+    <button class="icon-btn-lg" title="Exporter en PNG" onclick="openModal('modal-export')">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M12 4v10"/>
+        <polyline points="7 10 12 15 17 10"/>
+        <path d="M4 18h16"/>
+      </svg>
+    </button>
+  </div>
+</header>
+
+<!-- ===================== LAYOUT PRINCIPAL ===================== -->
+<div class="main-layout">
+
+  <!-- ----------- COLONNE GAUCHE : REGLAGES (scroll independant) ----------- -->
+  <div class="config-col">
+
+    <div class="section" id="section-page">
+      <div class="section-header" onclick="toggleSection('section-page')">
+        <span>Page</span>
+        <span class="chevron">&#9662;</span>
+      </div>
+      <div class="section-body">
+
+        <div class="unit-row">
+          <div class="field">
+            <label>Unite des valeurs ci-dessous</label>
+            <select id="unit" onchange="onUnitChange()">
+              <option value="px">pixels (px)</option>
+              <option value="mm">millimetres (mm)</option>
+            </select>
+          </div>
+          <div class="field">
+            <label>DPI</label>
+            <input type="number" id="dpi" value="300" min="1" oninput="render()">
+          </div>
+        </div>
+
+        <div class="field-row">
+          <div class="field">
+            <label>Largeur page</label>
+            <input type="number" id="pageW" value="3508" oninput="render()">
+            <span class="hint" id="pageW-hint"></span>
+          </div>
+          <div class="field">
+            <label>Hauteur page</label>
+            <input type="number" id="pageH" value="4960" oninput="render()">
+            <span class="hint" id="pageH-hint"></span>
+          </div>
+        </div>
+
+        <div class="field-row">
+          <div class="field">
+            <label>Marge haut</label>
+            <input type="number" id="marginTop" value="150" oninput="render()">
+            <span class="hint" id="marginTop-hint"></span>
+          </div>
+          <div class="field">
+            <label>Marge bas</label>
+            <input type="number" id="marginBottom" value="150" oninput="render()">
+            <span class="hint" id="marginBottom-hint"></span>
+          </div>
+        </div>
+
+        <div class="field-row">
+          <div class="field">
+            <label>Marge gauche</label>
+            <input type="number" id="marginLeft" value="150" oninput="render()">
+            <span class="hint" id="marginLeft-hint"></span>
+          </div>
+          <div class="field">
+            <label>Marge droite</label>
+            <input type="number" id="marginRight" value="150" oninput="render()">
+            <span class="hint" id="marginRight-hint"></span>
+          </div>
+        </div>
+
+        <div class="field-row">
+          <div class="field">
+            <label>Espace inter-cases (gouttiere)</label>
+            <input type="number" id="gutter" value="94" oninput="render()">
+            <span class="hint" id="gutter-hint"></span>
+          </div>
+          <div class="field">
+            <label>Prefixe planche</label>
+            <input type="text" id="prefix" value="01" oninput="render()">
+            <span class="hint">Camera.{prefixe}.A, .B, ...</span>
+          </div>
+        </div>
+
+        <div class="field-row">
+          <div class="field">
+            <label>Epaisseur lignes des cases (px)</label>
+            <input type="number" id="lineWidth" value="4" min="0" step="0.5" oninput="render()">
+            <span class="hint" id="lineWidth-hint"></span>
+          </div>
+        </div>
+
+      </div>
+    </div>
+
+    <div class="section" id="section-rows">
+      <div class="section-header" onclick="toggleSection('section-rows')">
+        <span>Rangees de cases</span>
+        <span class="chevron">&#9662;</span>
+      </div>
+      <div class="section-body">
+
+        <div class="field" style="margin-bottom:12px;">
+          <label>Inclinaisons gouttieres entre rangees (px, separees par virgules)</label>
+          <input type="text" id="rowGutterSkews" value="" placeholder="ex: 100,-80  (1 valeur par gouttiere entre rangees)"
+                 oninput="render()">
+          <span class="hint">Une valeur par gouttiere interne (Nrangees - 1). Le cadre exterieur (haut/bas) ne bouge jamais. Positif = le bout droit de la gouttiere descend.</span>
+        </div>
+
+        <div class="rows-list" id="rows-list"></div>
+        <button class="btn btn-secondary" onclick="addRow()">+ Ajouter une rangee</button>
+        <div class="summary" id="summary"></div>
+
+      </div>
+    </div>
+
+    <div class="section" id="section-renders">
+      <div class="section-header" onclick="toggleSection('section-renders')">
+        <span>Rendus</span>
+        <span class="chevron">&#9662;</span>
+      </div>
+      <div class="section-body">
+
+        <div id="fsapi-supported">
+          <button class="btn btn-secondary" onclick="pickRenderFolder()">Choisir le dossier de rendus</button>
+          <button class="btn btn-secondary" id="btn-reconnect" style="display:none" onclick="reconnectFolder()">
+            Reconnecter le dernier dossier
+          </button>
+          <button class="btn btn-secondary" id="btn-rescan" style="display:none" onclick="scanRenderFolder()">
+            Relire le dossier
+          </button>
+        </div>
+
+        <div id="fsapi-fallback" style="display:none">
+          <p class="hint" style="margin-bottom:6px;">
+            Acces dossier persistant indisponible.<br>
+            <b>Brave</b> bloque cette API : activer <b>brave://flags/#file-system-access-api</b>
+            puis relancer le navigateur, ou ouvrir cette page dans Chrome / Edge.<br>
+            La page doit aussi etre servie via <b>gaufrier.bat</b> (http://localhost), pas en file://.
+          </p>
+          <button class="btn btn-secondary" onclick="document.getElementById('fallback-input').click()">
+            Choisir le dossier (sans memorisation)
+          </button>
+          <input type="file" id="fallback-input" webkitdirectory directory multiple
+                 style="display:none" onchange="loadFallbackFiles(event)">
+        </div>
+
+        <div class="field" id="variant-wrap" style="display:none; margin-top:10px;">
+          <label>Variante de rendu</label>
+          <select id="variantSelect" onchange="onVariantChange()"></select>
+          <span class="hint">Sous-dossier d'images utilise (rendus-EVEE, rendus-Cycles...)</span>
+        </div>
+
+        <div class="field" style="margin-top:10px;">
+          <label style="display:flex; align-items:center; gap:6px; font-size:0.8rem; color: var(--text);">
+            <input type="checkbox" id="showImages" checked style="width:auto;" onchange="render()">
+            Afficher les rendus dans l'apercu
+          </label>
+        </div>
+
+        <div class="summary" id="renders-status">Aucun dossier selectionne.</div>
+
+      </div>
+    </div>
+
+  </div>
+
+  <!-- ----------- COLONNE DROITE : APERCU (toujours visible) ----------- -->
+  <div class="preview-col">
+    <div class="preview-wrap">
+      <svg class="gaufrier" id="preview-svg" viewBox="0 0 3508 4960" xmlns="http://www.w3.org/2000/svg"></svg>
+    </div>
+  </div>
+
+  <!-- ----------- NAVIGATEUR DE PLANCHES ----------- -->
+  <div class="pages-col">
+    <h3>Planches</h3>
+    <button class="btn btn-secondary" style="margin-bottom:10px;" onclick="newPlanche()">
+      + Nouvelle planche
+    </button>
+    <div id="pages-list"></div>
+    <button class="btn btn-secondary" id="btn-export-all" style="display:none; margin-bottom:10px;"
+            onclick="exportAllPlanches()">Exporter toutes les planches</button>
+    <div class="copied-msg" id="export-all-msg"></div>
+    <p class="hint" id="pages-empty">
+      Les planches apparaissent ici quand un dossier contenant des configs
+      (gaufrier_config_*.json) est charge.
+    </p>
+  </div>
+
+</div>
+
+<!-- ===================== MODALES ===================== -->
+
+<div class="modal-overlay" id="modal-table" onclick="if(event.target===this) closeModal('modal-table')">
+  <div class="modal-box">
+    <button class="modal-close" onclick="closeModal('modal-table')">&times;</button>
+    <h2>Tableau des cases</h2>
+    <p class="hint" style="margin-bottom:8px; font-size:0.75rem;">
+      Largeur/hauteur = taille de rendu Blender (boite englobante de la case,
+      meme si elle est oblique). Le PNG gaufrier sert ensuite de masque pour
+      decouper le rendu a la forme exacte de la case dans GIMP.
+    </p>
+    <table id="results-table">
+      <thead>
+        <tr>
+          <th>Nom</th>
+          <th>Largeur px</th>
+          <th>Hauteur px</th>
+          <th>Largeur mm</th>
+          <th>Hauteur mm</th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+
+    <div class="copy-row">
+      <button class="btn btn-secondary" onclick="copyTable()">Copier le tableau</button>
+    </div>
+    <div class="copied-msg" id="copy-table-msg"></div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="modal-script" onclick="if(event.target===this) closeModal('modal-script')">
+  <div class="modal-box">
+    <button class="modal-close" onclick="closeModal('modal-script')">&times;</button>
+    <h2>Script Blender (Multi-Cam BD)</h2>
+    <p class="hint" style="margin-bottom:8px; font-size:0.75rem;">
+      A coller dans Scripting &gt; Text Editor puis Run Script. Cree les cameras
+      manquantes (a repositionner) et met a jour res_x / res_y sur les existantes,
+      avec les memes bornes que le bouton "Definir resolution" de l'addon.
+    </p>
+    <textarea class="export" id="blender-script" readonly></textarea>
+    <div class="copy-row">
+      <button class="btn" onclick="copyScript()">Copier le script</button>
+    </div>
+    <div class="copied-msg" id="copy-script-msg"></div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="modal-export" onclick="if(event.target===this) closeModal('modal-export')">
+  <div class="modal-box">
+    <button class="modal-close" onclick="closeModal('modal-export')">&times;</button>
+    <h2>Exporter en PNG</h2>
+
+    <div class="field" style="margin-bottom:12px;">
+      <label>Contenu de l'export</label>
+      <select id="exportPreset" onchange="updateExportName()">
+        <option value="vide">Gaufrier vide (contours seuls)</option>
+        <option value="pleine">Planche remplie (rendus + contours)</option>
+        <option value="rendus">Rendus seuls (sans contours)</option>
+      </select>
+    </div>
+
+    <div class="field" style="margin-bottom:12px;">
+      <label style="display:flex; align-items:center; gap:6px; font-size:0.85rem; color: var(--text);">
+        <input type="checkbox" id="exportWhiteBg" style="width:auto;" onchange="updateExportName()">
+        Fond blanc derriere les cases (sinon transparent)
+      </label>
+    </div>
+
+    <div class="field" style="margin-bottom:12px;">
+      <label style="display:flex; align-items:center; gap:6px; font-size:0.85rem; color: var(--text);">
+        <input type="checkbox" id="exportMargin" style="width:auto;" onchange="updateExportName()">
+        Inclure le repere de marge (rouge)
+      </label>
+    </div>
+
+    <div class="summary" id="export-name"></div>
+
+    <button class="btn" onclick="exportPNG(false)">Telecharger le PNG</button>
+    <button class="btn btn-secondary" id="btn-export-folder" style="display:none" onclick="exportPNG(true)">
+      Enregistrer dans le dossier de rendus
+    </button>
+    <div class="copied-msg" id="export-msg"></div>
+
+    <p class="hint" style="margin-top:6px;">
+      PNG a la taille reelle de la page, fond transparent. Les rendus sont
+      decoupes a la forme exacte de chaque case (y compris obliques).
+      Chaque type d'export a son propre nom de fichier - pas d'ecrasement entre eux.
+    </p>
+  </div>
+</div>
+
+<script>
+// ---------------------------------------------------------------------------
+// Etat des rangees
+// ---------------------------------------------------------------------------
+let rows = [
+  { h: 1491, n: 1, ratios: "", colSkews: "" },
+  { h: 1491, n: 2, ratios: "", colSkews: "" },
+  { h: 1490, n: 1, ratios: "", colSkews: "" },
+];
+
+// Champs de l'interface sauvegardes dans le JSON de configuration
+const CONFIG_FIELD_IDS = [
+  'unit', 'dpi', 'pageW', 'pageH',
+  'marginTop', 'marginBottom', 'marginLeft', 'marginRight',
+  'gutter', 'prefix', 'lineWidth', 'rowGutterSkews',
+];
+
+
+// ---------------------------------------------------------------------------
+// Dossier de rendus : File System Access API + memorisation dans IndexedDB
+// ---------------------------------------------------------------------------
+const HAS_FS_API = (typeof window.showDirectoryPicker === 'function');
+const IMG_EXT = /\.(png|jpe?g|webp)$/i;
+
+let dirHandle = null;          // FileSystemDirectoryHandle (mode persistant)
+let dirLabel = '';             // nom affiche du dossier
+let renderImages = {};         // "Camera.01.A" -> { img: HTMLImageElement, url: string }
+let planches = [];             // configurations trouvees dans le dossier
+let thumbImages = {};          // miniatures basse resolution, toutes planches
+
+// ---------------------------------------------------------------------------
+// Navigateur de planches : miniatures generees a partir des configs du dossier
+// ---------------------------------------------------------------------------
+const THUMB_W = 150;
+
+function buildPagesList() {
+  const list = document.getElementById('pages-list');
+  const empty = document.getElementById('pages-empty');
+  list.innerHTML = '';
+
+  empty.style.display = planches.length ? 'none' : '';
+  document.getElementById('btn-export-all').style.display = planches.length ? '' : 'none';
+  if (!planches.length) return;
+
+  const current = document.getElementById('prefix').value.trim();
+
+  planches.forEach(cfg => {
+    const prefix = String(cfg.prefix || '');
+
+    const card = document.createElement('div');
+    card.className = 'page-card' + (prefix === current ? ' active' : '');
+    card.onclick = () => selectPlanche(prefix);
+
+    const L = computeLayoutFromConfig(cfg);
+    const scale = THUMB_W / (L.pageWPx || 1);
+
+    const canvas = document.createElement('canvas');
+    canvas.width = THUMB_W;
+    canvas.height = Math.max(1, Math.round(L.pageHPx * scale));
+
+    drawPlanche(canvas.getContext('2d'), L, {
+      images: true, lines: true, margin: false, white: true,
+      scale: scale, imageMap: thumbImages,
+    });
+
+    const label = document.createElement('div');
+    label.className = 'page-label';
+    const done = L.panels.filter(p => thumbImages[p.name]).length;
+    label.textContent = prefix + '  (' + done + '/' + L.panels.length + ')';
+
+    card.appendChild(canvas);
+    card.appendChild(label);
+    list.appendChild(card);
+  });
+}
+
+async function selectPlanche(prefix) {
+  const cfg = planches.find(c => String(c.prefix) === String(prefix));
+  if (!cfg) return;
+
+  applyConfig(cfg);              // champs + rangees + re-rendu
+  await loadPlancheImages(cfg);  // images pleine resolution de CETTE planche
+  render();
+  buildPagesList();
+}
+
+// Prochain prefixe libre, en conservant le format (01 -> 02, 1 -> 2)
+function nextPrefix() {
+  const current = document.getElementById('prefix').value.trim();
+  const nums = planches
+    .map(c => String(c.prefix || ''))
+    .concat([current])
+    .filter(p => /^\d+$/.test(p))
+    .map(Number);
+
+  const max = nums.length ? Math.max(...nums) : 0;
+  const width = /^\d+$/.test(current) ? current.length : 2;
+  return String(max + 1).padStart(width, '0');
+}
+
+// Cree une planche : reprend les reglages courants (format, marges, gouttiere,
+// rangees) avec un nouveau prefixe, donc de nouveaux noms de cases.
+async function newPlanche() {
+  const prefix = nextPrefix();
+  const cfg = readConfigFromDOM();
+  cfg.prefix = prefix;
+
+  // Si les planches existantes vivent dans un sous-dossier portant leur
+  // prefixe (01/, 02/...), on cree le dossier correspondant.
+  let targetDir = dirHandle;
+  if (dirHandle) {
+    const nested = planches.some(c => c.__folder === String(c.prefix));
+    try {
+      targetDir = nested
+        ? await dirHandle.getDirectoryHandle(prefix, { create: true })
+        : dirHandle;
+    } catch (err) {
+      targetDir = dirHandle;
+    }
+  }
+
+  const fileName = 'gaufrier_config_' + prefix + '.json';
+  const stored = {
+    ...cfg,
+    __file: fileName,
+    __dir: targetDir,
+    __folder: (dirHandle && targetDir !== dirHandle) ? prefix : '(racine)',
+  };
+
+  if (dirHandle) {
+    try {
+      const fh = await targetDir.getFileHandle(fileName, { create: true });
+      const w = await fh.createWritable();
+      await w.write(new Blob([JSON.stringify(cfg, null, 2)], { type: 'application/json' }));
+      await w.close();
+      flashMsg('config-msg', 'Planche ' + prefix + ' creee');
+    } catch (err) {
+      flashMsg('config-msg', 'Erreur creation : ' + err.message);
+    }
+  } else {
+    flashMsg('config-msg', 'Planche ' + prefix + ' - pense a sauvegarder la config');
+  }
+
+  planches.push(stored);
+  planches.sort((a, b) =>
+    String(a.prefix || '').localeCompare(String(b.prefix || ''), undefined, { numeric: true }));
+
+  await selectPlanche(prefix);
+}
+
+// Met en evidence la planche correspondant au prefixe courant, sans
+// regenerer toutes les miniatures (appele a chaque re-rendu).
+function markActivePage() {
+  const current = document.getElementById('prefix').value.trim();
+  const cards = document.querySelectorAll('#pages-list .page-card');
+  planches.forEach((cfg, i) => {
+    if (!cards[i]) return;
+    cards[i].classList.toggle('active', String(cfg.prefix) === current);
+  });
+}
+
+// Applique une configuration a l'interface (champs + rangees) puis re-rend.
+function applyConfig(cfg) {
+  CONFIG_FIELD_IDS.forEach(id => {
+    if (cfg[id] !== undefined) document.getElementById(id).value = cfg[id];
+  });
+
+  if (Array.isArray(cfg.rows)) {
+    rows = cfg.rows.map(r => ({
+      h: r.h !== undefined ? r.h : 500,
+      n: r.n !== undefined ? r.n : 1,
+      ratios: r.ratios || '',
+      colSkews: r.colSkews || '',
+    }));
+  }
+
+  localStorage.setItem('gaufrier_last_prefix', String(cfg.prefix || ''));
+
+  renderRows();
+  render();
+}
+
+// --- mini wrapper IndexedDB (stocke le handle de dossier) ---
+function idbOpen() {
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open('gaufrier', 1);
+    req.onupgradeneeded = () => req.result.createObjectStore('handles');
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+async function idbSet(key, value) {
+  const db = await idbOpen();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction('handles', 'readwrite');
+    tx.objectStore('handles').put(value, key);
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  });
+}
+
+async function idbGet(key) {
+  const db = await idbOpen();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction('handles', 'readonly');
+    const req = tx.objectStore('handles').get(key);
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+// --- selection / reconnexion du dossier ---
+async function pickRenderFolder() {
+  try {
+    dirHandle = await window.showDirectoryPicker({ id: 'gaufrier-rendus', mode: 'readwrite' });
+    dirLabel = dirHandle.name;
+    await idbSet('renderDir', dirHandle);
+    await scanRenderFolder();
+  } catch (err) {
+    if (err && err.name !== 'AbortError') {
+      setRendersStatus('Erreur : ' + err.message, 'warn');
+    }
+  }
+}
+
+async function reconnectFolder() {
+  try {
+    const handle = await idbGet('renderDir');
+    if (!handle) return;
+
+    let perm = await handle.queryPermission({ mode: 'readwrite' });
+    if (perm !== 'granted') {
+      perm = await handle.requestPermission({ mode: 'readwrite' });
+    }
+    if (perm !== 'granted') {
+      setRendersStatus('Autorisation refusee sur le dossier.', 'warn');
+      return;
+    }
+
+    dirHandle = handle;
+    dirLabel = handle.name;
+    await scanRenderFolder();
+  } catch (err) {
+    setRendersStatus('Reconnexion impossible : ' + err.message, 'warn');
+  }
+}
+
+// --- lecture recursive du dossier (arborescence libre) ---
+// Structure supportee, par exemple :
+//   planches/
+//     01/  gaufrier_config_01.json
+//          rendus-Cycles/  Camera.01.A.png ...
+//          rendus-EVEE/    Camera.01.A.png ...
+//          modified_by_GIMP/ ...
+const MAX_DEPTH = 4;
+const EXPORT_NAME = /_(gaufrier-vide|planche|planche-sans-cadre)(_|\.)/i;
+const THUMB_SRC_W = 320;   // largeur de decodage des images pour les miniatures
+
+let allImages = [];   // { base, file, folder, mtime }
+
+async function walkDir(handle, path, depth, out) {
+  if (depth > MAX_DEPTH) return;
+
+  for await (const entry of handle.values()) {
+    if (entry.kind === 'directory') {
+      await walkDir(entry, path ? path + '/' + entry.name : entry.name, depth + 1, out);
+      continue;
+    }
+
+    if (IMG_EXT.test(entry.name)) {
+      if (EXPORT_NAME.test(entry.name)) continue;   // planches deja exportees
+      const file = await entry.getFile();
+      out.images.push({
+        base: entry.name.replace(IMG_EXT, ''),
+        file: file,
+        folder: path || '(racine)',
+        mtime: file.lastModified || 0,
+      });
+    } else if (/^gaufrier_config_.*\.json$/i.test(entry.name)) {
+      try {
+        const cfg = JSON.parse(await (await entry.getFile()).text());
+        cfg.__file = entry.name;
+        cfg.__dir = handle;
+        cfg.__folder = path || '(racine)';
+        out.configs.push(cfg);
+      } catch (err) { /* config illisible : ignoree */ }
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Variantes de rendu : chaque planche a ses propres sous-dossiers d'images
+// (rendus-Cycles, rendus-EVEE, modified_by_GIMP...), memorises separement.
+// ---------------------------------------------------------------------------
+function baseFolderOf(cfg) {
+  return cfg.__folder === '(racine)' ? '' : cfg.__folder;
+}
+
+function variantNameFor(img, base) {
+  const f = img.folder === '(racine)' ? '' : img.folder;
+  if (base === '') return f || '(racine)';
+  if (f === base) return '(racine)';
+  return f.slice(base.length + 1);
+}
+
+function imagesForPlanche(cfg) {
+  const base = baseFolderOf(cfg);
+  return allImages
+    .filter(i => {
+      const f = i.folder === '(racine)' ? '' : i.folder;
+      return base === '' ? true : (f === base || f.startsWith(base + '/'));
+    })
+    .map(i => ({ ...i, variant: variantNameFor(i, base) }));
+}
+
+function variantsFor(cfg) {
+  return [...new Set(imagesForPlanche(cfg).map(i => i.variant))].sort();
+}
+
+// Choix par defaut : memorise > dossier contenant "cycles" > fichier le plus recent
+function chosenVariant(cfg) {
+  const vs = variantsFor(cfg);
+  if (!vs.length) return null;
+
+  const stored = localStorage.getItem('gaufrier_variant_' + cfg.prefix);
+  if (vs.includes(stored)) return stored;
+
+  const cycles = vs.find(v => /cycles/i.test(v));
+  if (cycles) return cycles;
+
+  let best = vs[0], t = -1;
+  imagesForPlanche(cfg).forEach(i => { if (i.mtime > t) { t = i.mtime; best = i.variant; } });
+  return best;
+}
+
+async function scanRenderFolder() {
+  if (!dirHandle) return;
+
+  setRendersStatus('Lecture du dossier en cours...');
+  const out = { images: [], configs: [] };
+  await walkDir(dirHandle, '', 0, out);
+
+  allImages = out.images;
+  planches = out.configs.sort((a, b) =>
+    String(a.prefix || '').localeCompare(String(b.prefix || ''), undefined, { numeric: true }));
+
+  document.getElementById('btn-rescan').style.display = '';
+  document.getElementById('btn-export-folder').style.display = '';
+
+  setRendersStatus('Preparation des miniatures...');
+  await buildThumbs();
+
+  const last = localStorage.getItem('gaufrier_last_prefix');
+  const target = planches.find(c => String(c.prefix) === last) || planches[0];
+
+  if (target) {
+    await selectPlanche(target.prefix);
+  } else {
+    render();
+    buildPagesList();
+  }
+}
+
+// --- miniatures : decodage basse resolution de toutes les planches ---
+async function buildThumbs() {
+  Object.values(thumbImages).forEach(e => { if (e.img.close) e.img.close(); });
+  thumbImages = {};
+
+  for (const cfg of planches) {
+    const v = chosenVariant(cfg);
+    if (!v) continue;
+
+    const imgs = imagesForPlanche(cfg).filter(i => i.variant === v);
+    for (const i of imgs) {
+      try {
+        const bmp = await createImageBitmap(i.file, { resizeWidth: THUMB_SRC_W, resizeQuality: 'low' });
+        thumbImages[i.base] = { img: bmp, w: bmp.width, h: bmp.height };
+      } catch (err) { /* image illisible : ignoree */ }
+    }
+  }
+}
+
+// --- images pleine resolution de la planche affichee ---
+async function loadPlancheImages(cfg) {
+  clearRenderImages();
+  const v = chosenVariant(cfg);
+  if (!v) { buildVariantSelect(cfg, null); return; }
+
+  buildVariantSelect(cfg, v);
+  await registerFiles(imagesForPlanche(cfg).filter(i => i.variant === v));
+}
+
+function buildVariantSelect(cfg, chosen) {
+  const wrap = document.getElementById('variant-wrap');
+  const sel = document.getElementById('variantSelect');
+  const vs = cfg ? variantsFor(cfg) : [];
+
+  wrap.style.display = vs.length > 1 ? '' : 'none';
+  sel.innerHTML = '';
+  vs.forEach(v => {
+    const opt = document.createElement('option');
+    opt.value = v;
+    opt.textContent = v;
+    if (v === chosen) opt.selected = true;
+    sel.appendChild(opt);
+  });
+}
+
+// Changement manuel de variante : memorise pour CETTE planche uniquement
+async function onVariantChange() {
+  const prefix = document.getElementById('prefix').value.trim();
+  const cfg = planches.find(c => String(c.prefix) === prefix);
+  if (!cfg) return;
+
+  localStorage.setItem('gaufrier_variant_' + prefix, document.getElementById('variantSelect').value);
+
+  await loadPlancheImages(cfg);
+  await buildThumbs();
+  render();
+  buildPagesList();
+}
+
+// --- fallback sans persistance (input webkitdirectory) ---
+async function loadFallbackFiles(event) {
+  const files = [...event.target.files];
+  const out = { images: [], configs: [] };
+
+  for (const f of files) {
+    const rel = f.webkitRelativePath || f.name;
+    const parts = rel.split('/');
+    const folder = parts.length > 1 ? (parts.slice(1, -1).join('/') || '(racine)') : '(racine)';
+
+    if (IMG_EXT.test(f.name)) {
+      if (EXPORT_NAME.test(f.name)) continue;
+      out.images.push({ base: f.name.replace(IMG_EXT, ''), file: f, folder, mtime: f.lastModified || 0 });
+    } else if (/^gaufrier_config_.*\.json$/i.test(f.name)) {
+      try {
+        const cfg = JSON.parse(await f.text());
+        cfg.__file = f.name;
+        cfg.__folder = folder;
+        out.configs.push(cfg);
+      } catch (err) { /* ignoree */ }
+    }
+  }
+
+  dirLabel = files.length && files[0].webkitRelativePath
+    ? files[0].webkitRelativePath.split('/')[0]
+    : 'dossier';
+
+  allImages = out.images;
+  planches = out.configs.sort((a, b) =>
+    String(a.prefix || '').localeCompare(String(b.prefix || ''), undefined, { numeric: true }));
+
+  await buildThumbs();
+
+  const last = localStorage.getItem('gaufrier_last_prefix');
+  const target = planches.find(c => String(c.prefix) === last) || planches[0];
+  if (target) { await selectPlanche(target.prefix); } else { render(); buildPagesList(); }
+
+  event.target.value = '';
+}
+
+// --- decodage pleine resolution en HTMLImageElement ---
+async function registerFiles(entries) {
+  await Promise.all(entries.map(({ base, file }) => new Promise(resolve => {
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      renderImages[base] = { img, w: img.naturalWidth, h: img.naturalHeight, url };
+      resolve();
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); resolve(); };
+    img.src = url;
+  })));
+}
+
+function clearRenderImages() {
+  Object.values(renderImages).forEach(e => URL.revokeObjectURL(e.url));
+  renderImages = {};
+}
+
+function setRendersStatus(text, cls) {
+  const el = document.getElementById('renders-status');
+  el.className = 'summary' + (cls ? ' ' + cls : '');
+  el.textContent = text;
+}
+
+// --- init au chargement de la page ---
+(function initRenderFolderUI() {
+  document.getElementById('fsapi-supported').style.display = HAS_FS_API ? '' : 'none';
+  document.getElementById('fsapi-fallback').style.display = HAS_FS_API ? 'none' : '';
+
+  if (!HAS_FS_API) return;
+
+  idbGet('renderDir').then(handle => {
+    if (handle) {
+      document.getElementById('btn-reconnect').style.display = '';
+      setRendersStatus('Dossier memorise : ' + handle.name + ' - cliquer sur Reconnecter.');
+    }
+  }).catch(() => {});
+})();
+
+// ---------------------------------------------------------------------------
+// Helpers conversion mm <-> px
+// ---------------------------------------------------------------------------
+function mmToPx(mm, dpi) { return mm / 25.4 * dpi; }
+function pxToMm(px, dpi) { return px * 25.4 / dpi; }
+
+function toPx(value, unit, dpi) {
+  return unit === 'mm' ? mmToPx(value, dpi) : value;
+}
+
+function letterFor(index) {
+  let s = '';
+  let i = index + 1;
+  while (i > 0) {
+    const rem = (i - 1) % 26;
+    s = String.fromCharCode(65 + rem) + s;
+    i = Math.floor((i - 1) / 26);
+  }
+  return s;
+}
+
+function fmt(n, decimals) {
+  return n.toFixed(decimals !== undefined ? decimals : 0);
+}
+
+function pointsAttr(corners) {
+  return corners.map(c => fmt(c[0]) + ',' + fmt(c[1])).join(' ');
+}
+
+// ---------------------------------------------------------------------------
+// Construction de la liste de rangees (UI)
+// ---------------------------------------------------------------------------
+function addRow() {
+  rows.push({ h: 500, n: 1, ratios: "", colSkews: "" });
+  renderRows();
+  render();
+}
+
+function removeRow(i) {
+  rows.splice(i, 1);
+  renderRows();
+  render();
+}
+
+function renderRows() {
+  const unit = document.getElementById('unit').value;
+  const list = document.getElementById('rows-list');
+  list.innerHTML = '';
+
+  rows.forEach((row, i) => {
+    const card = document.createElement('div');
+    card.className = 'row-card';
+
+    card.innerHTML = `
+      <div class="row-title">
+        <span>Rangee ${i + 1}</span>
+        <button class="icon-btn" title="Supprimer cette rangee" onclick="removeRow(${i})">&times;</button>
+      </div>
+      <div class="row-fields">
+        <div class="field">
+          <label>Hauteur (${unit})</label>
+          <input type="number" value="${row.h}" oninput="rows[${i}].h = parseFloat(this.value)||0; render()">
+        </div>
+        <div class="field">
+          <label>Nb cases</label>
+          <input type="number" min="1" value="${row.n}" oninput="rows[${i}].n = Math.max(1, parseInt(this.value)||1); render()">
+        </div>
+      </div>
+      <div class="field ratios-field">
+        <label>Largeurs relatives (optionnel, ex: 1,2,1)</label>
+        <input type="text" value="${row.ratios}" placeholder="laisser vide = largeurs egales"
+               oninput="rows[${i}].ratios = this.value; render()">
+      </div>
+      <div class="field ratios-field">
+        <label>Inclinaisons gouttieres internes (px, separees par virgules)</label>
+        <input type="text" value="${row.colSkews || ''}" placeholder="ex: -60,90 (1 valeur par gouttiere entre cases)"
+               oninput="rows[${i}].colSkews = this.value; render()">
+        <span class="hint">Une valeur par gouttiere interne (Ncases - 1). Bords gauche/droit de la rangee fixes. Positif = le bas de la gouttiere se decale vers la droite.</span>
+      </div>
+    `;
+
+    list.appendChild(card);
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Rendu principal
+// ---------------------------------------------------------------------------
+function onUnitChange() {
+  renderRows();
+  render();
+}
+
+function parseRatios(str, n) {
+  let vals = str.split(',')
+    .map(s => parseFloat(s.trim()))
+    .filter(v => !isNaN(v) && v > 0);
+
+  if (vals.length === 0) {
+    vals = new Array(n).fill(1);
+  } else if (vals.length < n) {
+    while (vals.length < n) vals.push(vals[vals.length - 1]);
+  } else if (vals.length > n) {
+    vals = vals.slice(0, n);
+  }
+  return vals;
+}
+
+// Lit l'etat courant de l'interface sous forme d'objet de configuration.
+function readConfigFromDOM() {
+  const cfg = { rows: rows.map(r => ({ ...r })) };
+  CONFIG_FIELD_IDS.forEach(id => { cfg[id] = document.getElementById(id).value; });
+  return cfg;
+}
+
+// Met a jour les indications de conversion mm <-> px sous les champs.
+function updateUnitHints(cfg) {
+  const unit = cfg.unit;
+  const dpi = parseFloat(cfg.dpi) || 300;
+  const num = v => parseFloat(v) || 0;
+
+  ['pageW', 'pageH', 'marginTop', 'marginBottom', 'marginLeft', 'marginRight', 'gutter']
+    .forEach(id => {
+      const el = document.getElementById(id + '-hint');
+      if (!el) return;
+      const val = num(cfg[id]);
+      el.textContent = (unit === 'mm')
+        ? '\u2248 ' + fmt(mmToPx(val, dpi)) + ' px'
+        : '\u2248 ' + fmt(pxToMm(val, dpi), 1) + ' mm';
+    });
+
+  const lw = num(cfg.lineWidth);
+  const lwHint = document.getElementById('lineWidth-hint');
+  if (lwHint) lwHint.textContent = '\u2248 ' + fmt(pxToMm(lw, dpi), 2) + ' mm';
+}
+
+// Calcul du gaufrier a partir d'une configuration (fonction pure : ne lit pas
+// le DOM). Permet de calculer la mise en page d'une planche qui n'est pas
+// celle actuellement affichee (miniatures du navigateur de planches).
+function computeLayoutFromConfig(cfg) {
+  const num = v => parseFloat(v) || 0;
+
+  const unit = cfg.unit || 'px';
+  const dpi = parseFloat(cfg.dpi) || 300;
+  const cfgRows = Array.isArray(cfg.rows) ? cfg.rows : [];
+
+  const pageWPx = toPx(num(cfg.pageW), unit, dpi);
+  const pageHPx = toPx(num(cfg.pageH), unit, dpi);
+  const marginTopPx = toPx(num(cfg.marginTop), unit, dpi);
+  const marginBottomPx = toPx(num(cfg.marginBottom), unit, dpi);
+  const marginLeftPx = toPx(num(cfg.marginLeft), unit, dpi);
+  const marginRightPx = toPx(num(cfg.marginRight), unit, dpi);
+  const gutterPx = toPx(num(cfg.gutter), unit, dpi);
+  const prefix = (cfg.prefix || '01').toString().trim() || '01';
+  const lineWidthPx = num(cfg.lineWidth);
+
+  const zoneWPx = pageWPx - marginLeftPx - marginRightPx;
+  const zoneHPx = pageHPx - marginTopPx - marginBottomPx;
+  const safeZoneW = zoneWPx || 1;
+
+  const nRows = cfgRows.length;
+
+  // Inclinaisons des gouttieres entre rangees : une valeur par gouttiere
+  // interne (Nrangees - 1). Le cadre exterieur (haut/bas) ne bouge jamais.
+  function parseSkews(str, count) {
+    const vals = (str || '').split(',')
+      .map(s => parseFloat(s.trim()))
+      .filter(s => !isNaN(s));
+    const out = [];
+    for (let k = 0; k < count; k++) out.push(vals[k] !== undefined ? vals[k] : 0);
+    return out;
+  }
+
+  const rowGutterSkews = parseSkews(cfg.rowGutterSkews, Math.max(0, nRows - 1));
+
+  const rowsHeightSumPx = cfgRows.reduce((acc, r) => acc + toPx(r.h, unit, dpi), 0);
+  const gutterTotalVPx = Math.max(0, nRows - 1) * gutterPx;
+  const remainingPx = zoneHPx - rowsHeightSumPx - gutterTotalVPx;
+
+  // --- Calcul des cases ---
+  const panels = [];
+  let yCursor = marginTopPx;
+  let globalIndex = 0;
+
+  cfgRows.forEach((row, i) => {
+    const rowHPx = toPx(row.h, unit, dpi);
+    const n = row.n;
+    const ratios = parseRatios(row.ratios, n);
+    const ratioSum = ratios.reduce((a, b) => a + b, 0);
+    const gutterTotalHPx = Math.max(0, n - 1) * gutterPx;
+    const availableWPx = zoneWPx - gutterTotalHPx;
+
+    // Inclinaisons des gouttieres internes a cette rangee : une valeur par
+    // gouttiere (Ncases - 1). Bords gauche/droit de la rangee ne bougent jamais.
+    const colSkews = parseSkews(row.colSkews, Math.max(0, n - 1));
+
+    const rowTop = yCursor;
+    let xCursor = marginLeftPx;
+
+    for (let j = 0; j < n; j++) {
+      const wPx = availableWPx * (ratios[j] / ratioSum);
+
+      panels.push({
+        name: 'Camera.' + prefix + '.' + letterFor(globalIndex),
+        x: xCursor,
+        y: rowTop,
+        w: wPx,
+        h: rowHPx,
+        rowIndex: i,
+        colIndex: j,
+        nInRow: n,
+        rowTop: rowTop,
+        rowH: rowHPx,
+        colSkews: colSkews,
+      });
+
+      xCursor += wPx + gutterPx;
+      globalIndex++;
+    }
+
+    yCursor += rowHPx + gutterPx;
+  });
+
+  // --- Coins (deformes) de chaque case ---
+  // Purement visuel : x/y/w/h (donc res_x/res_y de base) restent inchanges.
+  // Chaque gouttiere interne a sa propre inclinaison ; le cadre exterieur
+  // (marges) ne bouge jamais (offset = 0 sur les bords de la zone).
+  function rowTopOffset(i, x) {
+    if (i === 0) return 0;
+    const skew = rowGutterSkews[i - 1] || 0;
+    return skew * (x - marginLeftPx) / safeZoneW;
+  }
+  function rowBottomOffset(i, x) {
+    if (i === nRows - 1) return 0;
+    const skew = rowGutterSkews[i] || 0;
+    return skew * (x - marginLeftPx) / safeZoneW;
+  }
+  function colLeftOffset(p, y) {
+    if (p.colIndex === 0) return 0;
+    const skew = p.colSkews[p.colIndex - 1] || 0;
+    return skew * (y - p.rowTop) / (p.rowH || 1);
+  }
+  function colRightOffset(p, y) {
+    if (p.colIndex === p.nInRow - 1) return 0;
+    const skew = p.colSkews[p.colIndex] || 0;
+    return skew * (y - p.rowTop) / (p.rowH || 1);
+  }
+
+  panels.forEach(p => {
+    const top = p.y;
+    const bottom = p.y + p.h;
+    const left = p.x;
+    const right = p.x + p.w;
+
+    p.corners = [
+      [left + colLeftOffset(p, top), top + rowTopOffset(p.rowIndex, left)],            // haut-gauche
+      [right + colRightOffset(p, top), top + rowTopOffset(p.rowIndex, right)],         // haut-droit
+      [right + colRightOffset(p, bottom), bottom + rowBottomOffset(p.rowIndex, right)],// bas-droit
+      [left + colLeftOffset(p, bottom), bottom + rowBottomOffset(p.rowIndex, left)],   // bas-gauche
+    ];
+
+    p.cx = (p.corners[0][0] + p.corners[1][0] + p.corners[2][0] + p.corners[3][0]) / 4;
+    p.cy = (p.corners[0][1] + p.corners[1][1] + p.corners[2][1] + p.corners[3][1]) / 4;
+
+    // Boite englobante (axis-aligned) du parallelogramme/trapeze :
+    // c'est la taille de rendu Blender necessaire pour couvrir toute la case
+    // oblique (le PNG gaufrier servira ensuite de masque de decoupe dans GIMP).
+    const xs = p.corners.map(c => c[0]);
+    const ys = p.corners.map(c => c[1]);
+    p.bw = Math.max(...xs) - Math.min(...xs);
+    p.bh = Math.max(...ys) - Math.min(...ys);
+  });
+
+  return {
+    unit, dpi, prefix,
+    pageWPx, pageHPx,
+    marginTopPx, marginBottomPx, marginLeftPx, marginRightPx,
+    gutterPx, lineWidthPx,
+    zoneWPx, zoneHPx, remainingPx,
+    panels,
+  };
+}
+
+// Version « interface » : lit les champs, met a jour les hints, puis calcule.
+function computeLayout() {
+  const cfg = readConfigFromDOM();
+  updateUnitHints(cfg);
+  return computeLayoutFromConfig(cfg);
+}
+
+function render() {
+  const L = computeLayout();
+  const {
+    pageWPx, pageHPx, marginTopPx, marginLeftPx,
+    zoneWPx, zoneHPx, remainingPx, panels, lineWidthPx, dpi,
+  } = L;
+
+  // --- Resume / espace restant ---
+  const summary = document.getElementById('summary');
+  const remMm = pxToMm(remainingPx, dpi);
+  if (Math.abs(remainingPx) < 1.5) {
+    summary.className = 'summary ok';
+    summary.textContent = 'Zone interieure : ' + fmt(zoneWPx) + ' x ' + fmt(zoneHPx) + ' px - hauteurs des rangees OK (reste ' + fmt(remainingPx) + ' px)';
+  } else {
+    summary.className = 'summary warn';
+    const sign = remainingPx > 0 ? 'a repartir' : 'en trop (a retirer)';
+    summary.textContent = 'Zone interieure : ' + fmt(zoneWPx) + ' x ' + fmt(zoneHPx) + ' px - '
+      + Math.abs(fmt(remainingPx)) + ' px (' + fmt(Math.abs(remMm), 1) + ' mm) ' + sign + ' sur les hauteurs de rangees';
+  }
+
+  // --- Apercu SVG ---
+  const svg = document.getElementById('preview-svg');
+  svg.setAttribute('viewBox', '0 0 ' + fmt(pageWPx) + ' ' + fmt(pageHPx));
+
+  const fontSize = Math.max(pageWPx / 38, 24);
+  const nameFontSize = fontSize * 0.85;
+
+  let svgContent = '';
+  const showImages = document.getElementById('showImages').checked;
+
+  panels.forEach((p, i) => {
+    const entry = renderImages[p.name];
+
+    // Image du rendu, decoupee a la forme exacte de la case
+    if (showImages && entry) {
+      const bx = Math.min(...p.corners.map(c => c[0]));
+      const by = Math.min(...p.corners.map(c => c[1]));
+      const clipId = 'clip-case-' + i;
+
+      svgContent += '<clipPath id="' + clipId + '"><polygon points="' + pointsAttr(p.corners) + '" /></clipPath>';
+      svgContent += '<image clip-path="url(#' + clipId + ')" href="' + entry.url + '"'
+        + ' x="' + fmt(bx) + '" y="' + fmt(by) + '" width="' + fmt(p.bw) + '" height="' + fmt(p.bh)
+        + '" preserveAspectRatio="xMidYMid slice" />';
+    }
+
+    svgContent += '<polygon class="panel-rect" points="' + pointsAttr(p.corners)
+      + '" style="stroke-width:' + fmt(lineWidthPx, 2)
+      + (showImages && entry ? ';fill:none' : '') + '" />';
+
+    const cx = p.cx;
+    const cy = p.cy;
+
+    // Annotations masquees sur les cases qui ont deja leur rendu
+    if (showImages && entry) return;
+
+    svgContent += '<text class="name-label" x="' + fmt(cx) + '" y="' + fmt(cy - fontSize * 0.9)
+      + '" font-size="' + fmt(nameFontSize) + '">' + p.name + '</text>';
+
+    svgContent += '<text class="dim-label" x="' + fmt(cx) + '" y="' + fmt(cy + fontSize * 0.4)
+      + '" font-size="' + fmt(fontSize) + '">' + fmt(p.bw) + ' x ' + fmt(p.bh) + '</text>';
+  });
+
+  // Cadre marge en rouge dessinee PAR-DESSUS les cases (annotation uniquement,
+  // non incluse dans le PNG exporte) : permet de voir immediatement si une case
+  // deborde dans la marge.
+  const marginStroke = Math.max(lineWidthPx * 1.5, pageWPx / 800);
+  svgContent += '<rect class="margin-guide" x="' + fmt(marginLeftPx) + '" y="' + fmt(marginTopPx)
+    + '" width="' + fmt(zoneWPx) + '" height="' + fmt(zoneHPx)
+    + '" style="stroke-width:' + fmt(marginStroke, 1) + '" />';
+
+  svg.innerHTML = svgContent;
+
+  // --- Statut des rendus charges ---
+  updateExportName();
+  markActivePage();
+  const loadedCount = panels.filter(p => renderImages[p.name]).length;
+  const missing = panels.filter(p => !renderImages[p.name]).map(p => p.name);
+  const orphans = Object.keys(renderImages).filter(k => !panels.some(p => p.name === k));
+
+  if (!dirLabel) {
+    setRendersStatus('Aucun dossier selectionne.');
+  } else if (loadedCount === panels.length && orphans.length === 0) {
+    setRendersStatus(dirLabel + ' : ' + loadedCount + '/' + panels.length + ' case(s) - toutes les images sont la.', 'ok');
+  } else {
+    let msg = dirLabel + ' : ' + loadedCount + '/' + panels.length + ' case(s)';
+    if (missing.length) msg += ' - manquant : ' + missing.join(', ');
+    if (orphans.length) msg += ' - fichier(s) sans case : ' + orphans.join(', ');
+    setRendersStatus(msg, 'warn');
+  }
+
+  // --- Tableau des resultats ---
+  const tbody = document.querySelector('#results-table tbody');
+  tbody.innerHTML = '';
+  panels.forEach(p => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = '<td>' + p.name + '</td>'
+      + '<td class="num">' + fmt(p.bw) + '</td>'
+      + '<td class="num">' + fmt(p.bh) + '</td>'
+      + '<td class="num">' + fmt(pxToMm(p.bw, dpi), 1) + '</td>'
+      + '<td class="num">' + fmt(pxToMm(p.bh, dpi), 1) + '</td>';
+    tbody.appendChild(tr);
+  });
+
+  // --- Script Blender ---
+  let script = 'import bpy\n\n';
+  script += '# Genere par le generateur de gaufrier - planche ' + L.prefix + '\n';
+  script += 'panels = {\n';
+  panels.forEach(p => {
+    script += '    "' + p.name + '": (' + fmt(p.bw) + ', ' + fmt(p.bh) + '),\n';
+  });
+  script += '}\n\n';
+  script += 'for name, (res_x, res_y) in panels.items():\n';
+  script += '    obj = bpy.data.objects.get(name)\n';
+  script += '    if obj is None or obj.type != \'CAMERA\':\n';
+  script += '        cam_data = bpy.data.cameras.new(name)\n';
+  script += '        obj = bpy.data.objects.new(name, cam_data)\n';
+  script += '        bpy.context.collection.objects.link(obj)\n';
+  script += '        print("Camera creee :", name, "- a positionner manuellement")\n\n';
+  script += '    obj["res_x"] = res_x\n';
+  script += '    obj["res_y"] = res_y\n\n';
+  script += '    for key in ("res_x", "res_y"):\n';
+  script += '        try:\n';
+  script += '            obj.id_properties_ui(key).update(min=1, max=20000)\n';
+  script += '        except Exception:\n';
+  script += '            pass\n\n';
+  script += 'print("Termine :", len(panels), "camera(s) mises a jour")\n';
+
+  document.getElementById('blender-script').value = script;
+}
+
+// ---------------------------------------------------------------------------
+// Copie dans le presse-papier
+// ---------------------------------------------------------------------------
+function flashMsg(id, msg) {
+  const el = document.getElementById(id);
+  el.textContent = msg;
+  setTimeout(() => { el.textContent = ''; }, 1800);
+}
+
+function copyTable() {
+  const dpi = parseFloat(document.getElementById('dpi').value) || 300;
+  let text = 'Nom\tLargeur px\tHauteur px\tLargeur mm\tHauteur mm\n';
+  document.querySelectorAll('#results-table tbody tr').forEach(tr => {
+    const cells = [...tr.children].map(td => td.textContent);
+    text += cells.join('\t') + '\n';
+  });
+  navigator.clipboard.writeText(text).then(() => flashMsg('copy-table-msg', 'Tableau copie'));
+}
+
+function copyScript() {
+  const ta = document.getElementById('blender-script');
+  navigator.clipboard.writeText(ta.value).then(() => flashMsg('copy-script-msg', 'Script copie'));
+}
+
+// ---------------------------------------------------------------------------
+// Export PNG - taille reelle de la page, fond transparent
+// Dessin direct sur canvas (permet de composer les rendus decoupes par case).
+// Chaque preset a son propre nom de fichier : les exports ne s'ecrasent pas.
+// ---------------------------------------------------------------------------
+const EXPORT_PRESETS = {
+  vide:   { images: false, lines: true,  suffix: '_gaufrier-vide' },
+  pleine: { images: true,  lines: true,  suffix: '_planche' },
+  rendus: { images: true,  lines: false, suffix: '_planche-sans-cadre' },
+};
+
+function currentExportName() {
+  const prefix = (document.getElementById('prefix').value || '01').trim();
+  const key = document.getElementById('exportPreset').value;
+  const withMargin = document.getElementById('exportMargin').checked;
+  const withWhite = document.getElementById('exportWhiteBg').checked;
+  return prefix + EXPORT_PRESETS[key].suffix
+    + (withWhite ? '_fond-blanc' : '')
+    + (withMargin ? '_marge' : '') + '.png';
+}
+
+function updateExportName() {
+  const el = document.getElementById('export-name');
+  if (el) el.textContent = 'Fichier : ' + currentExportName();
+}
+
+// Dessin d'une planche sur un canvas quelconque.
+// opts : { images, lines, margin, white, scale }
+function drawPlanche(ctx, L, opts) {
+  const s = opts.scale || 1;
+  const { pageWPx, pageHPx, marginLeftPx, marginTopPx, zoneWPx, zoneHPx, lineWidthPx, panels } = L;
+
+  function tracePath(corners) {
+    ctx.beginPath();
+    ctx.moveTo(corners[0][0] * s, corners[0][1] * s);
+    for (let i = 1; i < corners.length; i++) ctx.lineTo(corners[i][0] * s, corners[i][1] * s);
+    ctx.closePath();
+  }
+
+  if (opts.white) {
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, pageWPx * s, pageHPx * s);
+  }
+
+  if (opts.images) {
+    const source = opts.imageMap || renderImages;
+    panels.forEach(p => {
+      const entry = source[p.name];
+      if (!entry) return;
+
+      const bx = Math.min(...p.corners.map(c => c[0]));
+      const by = Math.min(...p.corners.map(c => c[1]));
+
+      // equivalent de object-fit: cover sur la boite englobante
+      const cover = Math.max(p.bw / entry.w, p.bh / entry.h);
+      const dw = entry.w * cover;
+      const dh = entry.h * cover;
+      const dx = bx + (p.bw - dw) / 2;
+      const dy = by + (p.bh - dh) / 2;
+
+      ctx.save();
+      tracePath(p.corners);
+      ctx.clip();
+      ctx.drawImage(entry.img, dx * s, dy * s, dw * s, dh * s);
+      ctx.restore();
+    });
+  }
+
+  if (opts.lines) {
+    ctx.strokeStyle = '#000000';
+    ctx.lineWidth = Math.max(lineWidthPx * s, 0.5);
+    ctx.lineJoin = 'miter';
+    panels.forEach(p => { tracePath(p.corners); ctx.stroke(); });
+  }
+
+  if (opts.margin) {
+    ctx.strokeStyle = '#e03030';
+    ctx.lineWidth = Math.max(lineWidthPx * 1.5 * s, 1);
+    ctx.strokeRect(marginLeftPx * s, marginTopPx * s, zoneWPx * s, zoneHPx * s);
+  }
+}
+
+async function exportPNG(toFolder) {
+  const L = computeLayout();
+  const preset = EXPORT_PRESETS[document.getElementById('exportPreset').value];
+
+  const w = Math.max(1, Math.round(L.pageWPx));
+  const h = Math.max(1, Math.round(L.pageHPx));
+
+  const canvas = document.createElement('canvas');
+  canvas.width = w;
+  canvas.height = h;
+
+  drawPlanche(canvas.getContext('2d'), L, {
+    images: preset.images,
+    lines: preset.lines,
+    margin: document.getElementById('exportMargin').checked,
+    white: document.getElementById('exportWhiteBg').checked,
+    scale: 1,
+  });
+
+  const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
+  const fileName = currentExportName();
+
+  if (toFolder && dirHandle) {
+    try {
+      const prefix = document.getElementById('prefix').value.trim();
+      const owner = planches.find(c => String(c.prefix) === prefix);
+      const targetDir = (owner && owner.__dir) ? owner.__dir : dirHandle;
+      const fileHandle = await targetDir.getFileHandle(fileName, { create: true });
+      const writable = await fileHandle.createWritable();
+      await writable.write(blob);
+      await writable.close();
+      flashMsg('export-msg', 'Enregistre : ' + fileName);
+    } catch (err) {
+      flashMsg('export-msg', 'Erreur ecriture : ' + err.message);
+    }
+    return;
+  }
+
+  const link = document.createElement('a');
+  link.download = fileName;
+  link.href = URL.createObjectURL(blob);
+  link.click();
+  setTimeout(() => URL.revokeObjectURL(link.href), 1000);
+  flashMsg('export-msg', 'Telecharge : ' + fileName);
+}
+
+// Export de toutes les planches (rendus + contours + fond blanc) dans le
+// dossier de chaque planche. Utilise la pleine resolution : chaque planche est
+// rechargee tour a tour, puis on revient sur celle qui etait affichee.
+async function exportAllPlanches() {
+  if (!dirHandle) { flashMsg('export-all-msg', 'Aucun dossier connecte'); return; }
+
+  const current = document.getElementById('prefix').value.trim();
+  let done = 0;
+
+  for (const cfg of planches) {
+    flashMsg('export-all-msg', 'Planche ' + cfg.prefix + '...');
+    await selectPlanche(cfg.prefix);
+
+    const L = computeLayout();
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.max(1, Math.round(L.pageWPx));
+    canvas.height = Math.max(1, Math.round(L.pageHPx));
+
+    drawPlanche(canvas.getContext('2d'), L, {
+      images: true, lines: true, margin: false, white: true, scale: 1,
+    });
+
+    const blob = await new Promise(r => canvas.toBlob(r, 'image/png'));
+    const name = cfg.prefix + '_planche_fond-blanc.png';
+    const dir = cfg.__dir || dirHandle;
+
+    try {
+      const fh = await dir.getFileHandle(name, { create: true });
+      const w = await fh.createWritable();
+      await w.write(blob);
+      await w.close();
+      done++;
+    } catch (err) { /* planche ignoree */ }
+  }
+
+  if (current) await selectPlanche(current);
+  flashMsg('export-all-msg', done + ' planche(s) exportee(s)');
+}
+
+// ---------------------------------------------------------------------------
+// Sections repliables / modales
+// ---------------------------------------------------------------------------
+function toggleSection(id) {
+  document.getElementById(id).classList.toggle('collapsed');
+}
+
+function openModal(id) {
+  document.getElementById(id).classList.add('open');
+}
+
+function closeModal(id) {
+  document.getElementById(id).classList.remove('open');
+}
+
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') {
+    document.querySelectorAll('.modal-overlay.open').forEach(m => m.classList.remove('open'));
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Sauvegarde / chargement de configuration (.json)
+// ---------------------------------------------------------------------------
+async function saveConfig() {
+  const config = readConfigFromDOM();
+  const fileName = 'gaufrier_config_' + (config.prefix || '01') + '.json';
+  const json = JSON.stringify(config, null, 2);
+
+  // Si un dossier de rendus est connecte, on ecrit dedans : la config vit a
+  // cote des images, et la planche apparait dans le navigateur de planches.
+  if (dirHandle) {
+    try {
+      // On reecrit la config la ou elle a ete trouvee (dossier de la planche),
+      // sinon a la racine du dossier selectionne.
+      const existing = planches.find(c => String(c.prefix) === String(config.prefix));
+      const targetDir = (existing && existing.__dir) ? existing.__dir : dirHandle;
+      const fileHandle = await targetDir.getFileHandle(fileName, { create: true });
+      const writable = await fileHandle.createWritable();
+      await writable.write(new Blob([json], { type: 'application/json' }));
+      await writable.close();
+
+      const idx = planches.findIndex(c => String(c.prefix) === String(config.prefix));
+      const stored = { ...config, __file: fileName, __dir: targetDir,
+                       __folder: existing ? existing.__folder : '(racine)' };
+      if (idx >= 0) planches[idx] = stored; else planches.push(stored);
+      planches.sort((a, b) =>
+        String(a.prefix || '').localeCompare(String(b.prefix || ''), undefined, { numeric: true }));
+
+      localStorage.setItem('gaufrier_last_prefix', String(config.prefix || ''));
+      buildPagesList();
+      flashMsg('config-msg', 'Enregistre dans le dossier : ' + fileName);
+      return;
+    } catch (err) {
+      flashMsg('config-msg', 'Erreur ecriture : ' + err.message);
+      return;
+    }
+  }
+
+  const link = document.createElement('a');
+  link.download = fileName;
+  link.href = URL.createObjectURL(new Blob([json], { type: 'application/json' }));
+  link.click();
+  flashMsg('config-msg', 'Configuration telechargee');
+}
+
+function loadConfig(event) {
+  const file = event.target.files[0];
+  if (!file) return;
+
+  const reader = new FileReader();
+  reader.onload = function (e) {
+    try {
+      applyConfig(JSON.parse(e.target.result));
+      buildPagesList();
+      flashMsg('config-msg', 'Configuration chargee');
+    } catch (err) {
+      flashMsg('config-msg', 'Erreur : fichier invalide');
+    }
+  };
+  reader.readAsText(file);
+
+  // reset l'input pour pouvoir recharger le meme fichier plusieurs fois
+  event.target.value = '';
+}
+
+// ---------------------------------------------------------------------------
+// Init
+// ---------------------------------------------------------------------------
+renderRows();
+render();
+</script>
+
+</body>
+</html>
