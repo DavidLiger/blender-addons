@@ -536,6 +536,8 @@
     color:var(--muted);font-size:.62rem;cursor:help;margin-left:5px;
     vertical-align:middle;flex-shrink:0}
   .tip:hover{color:var(--accent);border-color:var(--accent)}
+.preview-wrap{overflow:auto}
+  #preview-svg{transform-origin:0 0;transition:none}
 </style>
 </head>
 <body>
@@ -2308,6 +2310,44 @@ function loadConfig(event) {
 // ---------------------------------------------------------------------------
 // Init
 // ---------------------------------------------------------------------------
+// --- zoom molette sur l'apercu ---
+let previewZoom = 1;
+
+(function initPreviewZoom() {
+  const wrap = document.querySelector('.preview-wrap');
+  const svg = document.getElementById('preview-svg');
+  if (!wrap || !svg) return;
+
+  const apply = () => {
+    svg.style.transform = 'scale(' + previewZoom + ')';
+    svg.style.width = (100 * previewZoom) + '%';
+  };
+
+  wrap.addEventListener('wheel', ev => {
+    if (ev.ctrlKey) return;              // laisse le zoom navigateur
+    ev.preventDefault();
+
+    // Le point sous le curseur reste sous le curseur
+    const rect = wrap.getBoundingClientRect();
+    const px = (wrap.scrollLeft + ev.clientX - rect.left) / previewZoom;
+    const py = (wrap.scrollTop + ev.clientY - rect.top) / previewZoom;
+
+    const step = ev.deltaY < 0 ? 1.15 : 1 / 1.15;
+    previewZoom = Math.max(0.2, Math.min(12, previewZoom * step));
+    apply();
+
+    wrap.scrollLeft = px * previewZoom - (ev.clientX - rect.left);
+    wrap.scrollTop = py * previewZoom - (ev.clientY - rect.top);
+  }, { passive: false });
+
+  // Double-clic : retour a l'ajustement
+  wrap.addEventListener('dblclick', () => {
+    previewZoom = 1;
+    apply();
+    wrap.scrollTo(0, 0);
+  });
+})();
+
 renderRows();
 render();
 </script>

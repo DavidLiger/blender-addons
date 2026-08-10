@@ -968,6 +968,27 @@ def _kuwahara_setup(scene):
     return kuwa, out
 
 
+def _refresh_bg(scene):
+    """Le film est transparent pour composer les calques : le fond doit donc
+    etre reconstitue au compositeur, a la couleur du monde."""
+    if not scene.multicam_split_layers or not scene.use_nodes:
+        return
+
+    bg = scene.node_tree.nodes.get(BG_NODE)
+    if bg is None:
+        return
+
+    color = (0.05, 0.05, 0.05, 1.0)
+    world = scene.world
+    if world is not None and world.use_nodes:
+        node = world.node_tree.nodes.get("Background")
+        if node is not None:
+            c = node.inputs[0].default_value
+            color = (c[0], c[1], c[2], 1.0)
+
+    bg.outputs[0].default_value = color
+
+
 def _kuwahara_apply(scene, cam):
     """Regle le filtre et dirige la sortie vers le dossier de la planche."""
     if not scene.multicam_kuwahara:
@@ -1072,6 +1093,7 @@ def _multicam_setup_camera(scene, cam):
     scene.render.use_file_extension = False
     scene.render.filepath = filepath
 
+    _refresh_bg(scene)
     _kuwahara_apply(scene, cam)
 
     return filepath
