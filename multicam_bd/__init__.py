@@ -968,10 +968,87 @@ def _kuwahara_setup(scene):
     return kuwa, out
 
 
+@bpy.app.handlers.persistent
+def _refresh_bg_handler(scene, *args):
+    _refresh_bg(scene)
+
+
+BW_NODE = "MC_BW"
+BW_CONTRAST = "MC_BWContrast"
+BW_OUT = "MC_NBOut"
+
+
+def _bw_setup(scene):
+    """Version desaturee, derivee de la sortie Kuwahara quand elle est active."""
+    scene.use_nodes = True
+    tree = scene.node_tree
+
+    source = None
+    if scene.multicam_kuwahara:
+        node = tree.nodes.get("MC_KuwaOver") or tree.nodes.get(KUWA_NODE)
+        if node is not None:
+            source = node.outputs['Image']
+    if source is None:
+        node = tree.nodes.get(MERGE_NODE)
+        source = node.outputs['Image'] if node is not None else _merged_source(scene)
+    if source is None:
+        return None
+
+    sat = _node_get(tree, BW_NODE, 'CompositorNodeHueSat', (120, -640))
+    con = _node_get(tree, BW_CONTRAST, 'CompositorNodeBrightContrast', (280, -640))
+    out = _node_get(tree, BW_OUT, 'CompositorNodeOutputFile', (460, -640))
+
+    out.format.file_format = 'PNG'
+    out.format.color_mode = 'RGBA'
+    if not out.file_slots:
+        out.file_slots.new("image")
+
+    try:
+        sat.inputs['Saturation'].default_value = 0.0
+    except Exception:
+        sat.color_saturation = 0.0
+
+    tree.links.new(source, sat.inputs[0])
+    tree.links.new(sat.outputs[0], con.inputs[0])
+    tree.links.new(con.outputs[0], out.inputs[0])
+
+    return out
+
+
+def _bw_apply(scene, cam):
+    """Ecrit la version noir et blanc dans rendus-NB, au meme rendu."""
+    if not scene.multicam_bw:
+        node = scene.node_tree.nodes.get(BW_OUT) if scene.use_nodes else None
+        if node is not None:
+            node.mute = True
+        return
+
+    out = _bw_setup(scene)
+    if out is None:
+        return
+    out.mute = False
+
+    con = scene.node_tree.nodes.get(BW_CONTRAST)
+    if con is not None:
+        try:
+            con.inputs['Contrast'].default_value = scene.multicam_bw_contrast
+        except Exception:
+            pass
+
+    page = _multicam_page_of(cam.name)
+    folder = _multicam_page_dir(scene, page, variant=None)
+    if folder:
+        suffix = "-Cycles" if _multicam_variant(scene) == 'CYCLES' else ""
+        folder = os.path.join(os.path.dirname(folder), "rendus-NB" + suffix)
+        os.makedirs(folder, exist_ok=True)
+        out.base_path = folder
+        out.file_slots[0].path = cam.name + "_"
+
+
 def _refresh_bg(scene):
     """Le film est transparent pour composer les calques : le fond doit donc
     etre reconstitue au compositeur, a la couleur du monde."""
-    if not scene.multicam_split_layers or not scene.use_nodes:
+    if not scene.use_nodes or scene.node_tree is None:
         return
 
     bg = scene.node_tree.nodes.get(BG_NODE)
@@ -1038,12 +1115,17 @@ def _kuwahara_apply(scene, cam):
 
 
 def _kuwahara_rename(scene, cam):
+    _output_rename(scene, cam, KUWA_OUT, scene.multicam_kuwahara)
+    _output_rename(scene, cam, BW_OUT, scene.multicam_bw)
+
+
+def _output_rename(scene, cam, node_name, enabled):
     """Le noeud File Output suffixe le numero de frame : on remet le nom voulu."""
-    if not scene.multicam_kuwahara or not scene.use_nodes:
+    if not enabled or not scene.use_nodes:
         return
 
-    out = scene.node_tree.nodes.get(KUWA_OUT)
-    if out is None or not out.base_path:
+    out = scene.node_tree.nodes.get(node_name)
+    if out is None or not out.base_path or out.mute:
         return
 
     folder = bpy.path.abspath(out.base_path)
@@ -1095,6 +1177,7 @@ def _multicam_setup_camera(scene, cam):
 
     _refresh_bg(scene)
     _kuwahara_apply(scene, cam)
+    _bw_apply(scene, cam)
 
     return filepath
 
@@ -1515,6 +1598,16 @@ class MULTICAM_PT_panel(bpy.types.Panel):
             sub.scale_y = 0.7
             sub.label(text="Ecrit dans rendus-Kuwahara au meme rendu", icon='INFO')
 
+        # --- Sortie noir et blanc ---
+        box = layout.box()
+        box.prop(scene, "multicam_bw")
+
+        if scene.multicam_bw:
+            box.prop(scene, "multicam_bw_contrast")
+            sub = box.row()
+            sub.scale_y = 0.7
+            sub.label(text="Ecrit dans rendus-NB au meme rendu", icon='INFO')
+
         if scene.multicam_running:
             box = layout.box()
             box.label(text="En cours : {}".format(scene.multicam_current_name), icon='RENDER_STILL')
@@ -1564,6 +1657,9 @@ def register():
         
     if not bpy.app.timers.is_registered(_apply_cameras):
         bpy.app.timers.register(_apply_cameras, first_interval=1.0, persistent=True)
+
+    if _refresh_bg_handler not in bpy.app.handlers.render_init:
+        bpy.app.handlers.render_init.append(_refresh_bg_handler)
 
     bpy.types.Scene.multicam_items = bpy.props.CollectionProperty(type=MULTICAM_CameraItem)
     bpy.types.Scene.multicam_active_index = bpy.props.IntProperty(default=0)
@@ -1616,6 +1712,13 @@ def register():
         name="Nettete", default=0.5, min=0.0, max=1.0)
     bpy.types.Scene.multicam_kuwa_ecc = bpy.props.FloatProperty(
         name="Elongation", default=2.0, min=0.0, max=4.0)
+    bpy.types.Scene.multicam_bw = bpy.props.BoolProperty(
+        name="Sortie noir et blanc", default=False,
+        description=("Ecrit en parallele une version desaturee dans "
+                     "rendus-NB, sans rendu supplementaire"))
+    bpy.types.Scene.multicam_bw_contrast = bpy.props.FloatProperty(
+        name="Contraste", default=0.0, min=-50.0, max=50.0,
+        description="Compense l'aplatissement des tons apres desaturation")
     bpy.types.Scene.multicam_pages_hint = bpy.props.StringProperty(
         name="Planches", default="01",
         description="Numeros a creer quand aucune camera n'existe encore")
@@ -1641,6 +1744,9 @@ def register():
 def unregister():
     if bpy.app.timers.is_registered(_apply_cameras):
         bpy.app.timers.unregister(_apply_cameras)
+
+    if _refresh_bg_handler in bpy.app.handlers.render_init:
+        bpy.app.handlers.render_init.remove(_refresh_bg_handler)
         
     stop_gaufrier_server()
     _multicam_remove_handlers()
@@ -1672,6 +1778,8 @@ def unregister():
     del bpy.types.Scene.multicam_line_noise
     del bpy.types.Scene.multicam_line_period
     del bpy.types.Scene.multicam_kuwa_denoise
+    del bpy.types.Scene.multicam_bw_contrast
+    del bpy.types.Scene.multicam_bw
 
     for cls in reversed(classes):
         bpy.utils.unregister_class(cls)
