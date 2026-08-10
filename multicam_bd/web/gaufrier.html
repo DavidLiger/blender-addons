@@ -531,6 +531,11 @@
     margin-top: 6px;
     height: 1em;
   }
+.tip{display:inline-flex;align-items:center;justify-content:center;
+    width:15px;height:15px;border-radius:50%;border:1px solid var(--border);
+    color:var(--muted);font-size:.62rem;cursor:help;margin-left:5px;
+    vertical-align:middle;flex-shrink:0}
+  .tip:hover{color:var(--accent);border-color:var(--accent)}
 </style>
 </head>
 <body>
@@ -684,8 +689,9 @@
       <div class="section-body">
 
         <div class="field" style="margin-bottom:12px;">
-          <label>Inclinaisons gouttieres entre rangees (px, separees par virgules)</label>
-          <input type="text" id="rowGutterSkews" value="" placeholder="ex: 100,-80  (1 valeur par gouttiere entre rangees)"
+          <label>Inclinaisons gouttieres entre rangees (px)
+            <span class="tip" title="Une valeur par gouttiere interne (Nrangees - 1), separees par des virgules. Le cadre exterieur (haut/bas) ne bouge jamais. Positif = le bout droit de la gouttiere descend.">?</span></label>
+          <input type="text" id="rowGutterSkews" value="" placeholder="ex: 100,-80"
                  oninput="render()">
           <span class="hint">Une valeur par gouttiere interne (Nrangees - 1). Le cadre exterieur (haut/bas) ne bouge jamais. Positif = le bout droit de la gouttiere descend.</span>
         </div>
@@ -982,9 +988,11 @@ async function selectPlanche(prefix) {
   if (!cfg) return;
 
   applyConfig(cfg);              // champs + rangees + re-rendu
-  await loadPlancheImages(cfg);  // images pleine resolution de CETTE planche
+  await loadPlancheImages(cfg);  // images de CETTE planche, dossier compris
   render();
   buildPagesList();
+
+  cfgQuiet = false;              // les modifications suivantes sont enregistrees
 }
 
 // Prochain prefixe libre, en conservant le format (01 -> 02, 1 -> 2)
@@ -1083,6 +1091,7 @@ function markActivePage() {
 
 // Applique une configuration a l'interface (champs + rangees) puis re-rend.
 function applyConfig(cfg) {
+  cfgQuiet = true;
   CONFIG_FIELD_IDS.forEach(id => {
     if (cfg[id] !== undefined) document.getElementById(id).value = cfg[id];
   });
@@ -1179,7 +1188,8 @@ const MAX_DEPTH = 4;
 const EXPORT_NAME = /_(gaufrier-vide|planche|planche-sans-cadre)(_|\.)/i;
 const THUMB_SRC_W = 320;   // largeur de decodage des images pour les miniatures
 
-let allImages = [];   // { base, file, folder, mtime }
+let allImages = [];   // { base, url, folder, mtime }
+let allDirs = [];     // chemins relatifs des sous-dossiers rencontres
 
 // Parcours par le serveur : chaque entree garde son chemin relatif
 async function walkServer(path, depth, out) {
@@ -1212,7 +1222,9 @@ async function walkServer(path, depth, out) {
   }
 
   for (const dir of listing.dirs) {
-    await walkServer(path ? path + '/' + dir : dir, depth + 1, out);
+    const rel = path ? path + '/' + dir : dir;
+    out.dirs.push(rel.replace(/^planches\//, ''));
+    await walkServer(rel, depth + 1, out);
   }
 }
 
@@ -1272,7 +1284,22 @@ function imagesForPlanche(cfg) {
 }
 
 function variantsFor(cfg) {
-  return [...new Set(imagesForPlanche(cfg).map(i => i.variant))].sort();
+  const base = baseFolderOf(cfg);
+  const names = new Set(imagesForPlanche(cfg).map(i => i.variant));
+
+  // Les dossiers vides comptent aussi : ils sont proposes au choix
+  allDirs.forEach(d => {
+    if (base === '' ? !d.includes('/') : d.startsWith(base + '/')) {
+      const rest = base === '' ? d : d.slice(base.length + 1);
+      if (rest && !rest.includes('/')) names.add(rest);
+    }
+  });
+
+  return [...names].sort();
+}
+
+function variantHasImages(cfg, name) {
+  return imagesForPlanche(cfg).some(i => i.variant === name);
 }
 
 // Choix par defaut : memorise > dossier contenant "cycles" > fichier le plus recent
@@ -1282,6 +1309,13 @@ function chosenVariant(cfg) {
 
   const stored = localStorage.getItem('gaufrier_variant_' + cfg.prefix);
   if (vs.includes(stored)) return stored;
+
+  // Variante demandee par Blender, si elle a des images pour cette planche
+  const asked = PARAMS.get('variant');
+  if (asked && vs.includes(asked) && variantHasImages(cfg, asked)) return asked;
+
+  const filled = vs.find(v => variantHasImages(cfg, v));
+  if (filled) return filled;
 
   const cycles = vs.find(v => /cycles/i.test(v));
   if (cycles) return cycles;
@@ -1295,12 +1329,13 @@ async function scanRenderFolder() {
   if (!SERVED && !dirHandle) return;
 
   setRendersStatus('Lecture du dossier en cours...');
-  const out = { images: [], configs: [] };
+  const out = { images: [], configs: [], dirs: [] };
 
   if (SERVED) await walkServer('planches', 0, out);
   else await walkDir(dirHandle, '', 0, out);
 
   allImages = out.images;
+  allDirs = out.dirs;
   planches = out.configs.sort((a, b) =>
     String(a.prefix || '').localeCompare(String(b.prefix || ''), undefined, { numeric: true }));
 
@@ -1357,12 +1392,13 @@ function buildVariantSelect(cfg, chosen) {
   const sel = document.getElementById('variantSelect');
   const vs = cfg ? variantsFor(cfg) : [];
 
-  wrap.style.display = vs.length > 1 ? '' : 'none';
+  wrap.style.display = vs.length ? '' : 'none';
   sel.innerHTML = '';
   vs.forEach(v => {
     const opt = document.createElement('option');
     opt.value = v;
-    opt.textContent = v;
+    // Un dossier sans image reste proposable : il se remplira au prochain rendu
+    opt.textContent = v + (variantHasImages(cfg, v) ? '' : '  (vide)');
     if (v === chosen) opt.selected = true;
     sel.appendChild(opt);
   });
@@ -1562,10 +1598,10 @@ function renderRows() {
                oninput="rows[${i}].ratios = this.value; render()">
       </div>
       <div class="field ratios-field">
-        <label>Inclinaisons gouttieres internes (px, separees par virgules)</label>
-        <input type="text" value="${row.colSkews || ''}" placeholder="ex: -60,90 (1 valeur par gouttiere entre cases)"
+        <label>Inclinaisons gouttieres internes (px)
+          <span class="tip" title="Une valeur par gouttiere interne (Ncases - 1), separees par des virgules. Les bords gauche et droit de la rangee restent fixes. Positif = le bas de la gouttiere se decale vers la droite.">?</span></label>
+        <input type="text" value="${row.colSkews || ''}" placeholder="ex: -60,90"
                oninput="rows[${i}].colSkews = this.value; render()">
-        <span class="hint">Une valeur par gouttiere interne (Ncases - 1). Bords gauche/droit de la rangee fixes. Positif = le bas de la gouttiere se decale vers la droite.</span>
       </div>
     `;
 
@@ -1778,6 +1814,21 @@ function computeLayout() {
   return computeLayoutFromConfig(cfg);
 }
 
+// ---------------------------------------------------------------------------
+// Enregistrement automatique de la planche courante
+// ---------------------------------------------------------------------------
+let cfgQuiet = true;
+let cfgTimer = null;
+
+function scheduleConfigSave() {
+  if (cfgQuiet || !SERVED) return;
+
+  clearTimeout(cfgTimer);
+  cfgTimer = setTimeout(() => {
+    saveConfig().catch(() => {});
+  }, 800);
+}
+
 function render() {
   const L = computeLayout();
   const {
@@ -1906,6 +1957,8 @@ function render() {
   script += 'print("Termine :", len(panels), "camera(s) mises a jour")\n';
 
   document.getElementById('blender-script').value = script;
+
+  scheduleConfigSave();
 }
 
 // ---------------------------------------------------------------------------
