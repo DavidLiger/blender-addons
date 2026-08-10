@@ -706,35 +706,60 @@ def _robot_colls():
     return [c for c in bpy.data.collections if c.name.startswith("ROBOT_")]
 
 
+def _only_lights(coll):
+    """Collection ne contenant que de l'eclairage : presente sur tous les calques."""
+    if not coll.objects and not coll.children:
+        return False
+    if any(o.type not in {'LIGHT', 'EMPTY'} for o in coll.objects):
+        return False
+    return all(_only_lights(c) for c in coll.children)
+
+
 def _has_robot(coll):
     if coll.name.startswith("ROBOT_"):
         return True
     return any(_has_robot(c) for c in coll.children)
 
 
-def _apply_exclusions(view_layer, mode):
-    """mode : 'BG' rien, 'DECOR' tout sauf les persos, 'PERSOS' eux seuls."""
+def _apply_exclusions(view_layer, mode, cycles=False):
+    """mode : 'DECOR' tout sauf les persos, 'PERSOS' eux seuls.
+    Ce qui n'est pas dessine reste present pour les ombres portees."""
     def walk(lc):
         is_robot = lc.collection.name.startswith("ROBOT_")
 
         if mode == 'DECOR':
-            lc.exclude = is_robot
-            if not is_robot:
-                for child in lc.children:
-                    walk(child)
+            # Tout est rendu, persos compris : c'est ainsi que leurs ombres
+            # apparaissent. Leur image sera recouverte par le calque PERSOS.
+            lc.exclude = False
+            lc.indirect_only = False
+            lc.holdout = False
+            for child in lc.children:
+                walk(child)
             return
 
         # PERSOS : on garde la branche qui mene aux robots, on coupe le reste
         if is_robot:
             lc.exclude = False
+            lc.indirect_only = False
+            lc.holdout = False
+            return
+
+        # L'eclairage doit rester present sur les deux calques
+        if _only_lights(lc.collection):
+            lc.exclude = False
             return
 
         if _has_robot(lc.collection):
             lc.exclude = False
+            lc.indirect_only = False
             for child in lc.children:
                 walk(child)
         else:
-            lc.exclude = True
+            # Le decor n'est pas dessine mais masque les persos derriere lui :
+            # un poteau au premier plan les cache correctement
+            lc.exclude = False
+            lc.indirect_only = False
+            lc.holdout = True
 
     for child in view_layer.layer_collection.children:
         walk(child)
@@ -778,9 +803,36 @@ def _freestyle_setup(scene, view_layer):
         noise.seed = 1
 
 
+def _tidy_master(scene):
+    """Les objets poses a la racine ne peuvent pas etre exclus d'un calque :
+    on les range dans des collections dediees."""
+    master = scene.collection
+    loose = [o for o in master.objects]
+    if not loose:
+        return 0
+
+    def bucket(name):
+        coll = bpy.data.collections.get(name)
+        if coll is None:
+            coll = bpy.data.collections.new(name)
+        if coll.name not in {c.name for c in master.children}:
+            master.children.link(coll)
+        return coll
+
+    moved = 0
+    for obj in loose:
+        target = bucket("MC_Lights" if obj.type == 'LIGHT' else "MC_Decor")
+        master.objects.unlink(obj)
+        target.objects.link(obj)
+        moved += 1
+
+    return moved
+
+
 def _setup_view_layers(scene):
-    """Cree et configure FOND, DECOR et PERSOS."""
+    """Cree et configure DECOR et PERSOS."""
     scene.render.film_transparent = True
+    _tidy_master(scene)
 
     layers = {}
     for name, mode in ((VL_DECOR, 'DECOR'), (VL_PERSOS, 'PERSOS')):
@@ -788,7 +840,7 @@ def _setup_view_layers(scene):
         if vl is None:
             vl = scene.view_layers.new(name)
         layers[name] = vl
-        _apply_exclusions(vl, mode)
+        _apply_exclusions(vl, mode, cycles=(scene.render.engine == 'CYCLES'))
 
     layers[VL_DECOR].use_freestyle = False
     _freestyle_setup(scene, layers[VL_PERSOS])
@@ -926,6 +978,17 @@ def _kuwahara_apply(scene, cam):
 
     kuwa, out = _kuwahara_setup(scene)
     out.mute = False
+
+    # Le filtre amplifie le grain : un rendu bruite donnerait des taches
+    if scene.multicam_kuwa_denoise and scene.render.engine == 'CYCLES':
+        try:
+            scene.cycles.use_denoising = True
+            scene.cycles.denoiser = 'OPENIMAGEDENOISE'
+            scene.cycles.denoising_use_gpu = True
+            for vl in scene.view_layers:
+                vl.cycles.use_denoising = True
+        except Exception:
+            pass
 
     kuwa.variation = scene.multicam_kuwa_mode
     try:
@@ -1166,6 +1229,25 @@ class MULTICAM_OT_make_tree(bpy.types.Operator):
         return {'FINISHED'}
 
 
+class MULTICAM_OT_clean_colls(bpy.types.Operator):
+    bl_idname = "multicam.clean_colls"
+    bl_label = "Nettoyer les collections vides"
+    bl_description = "Supprime les collections ROBOT_ ne contenant plus rien"
+
+    def execute(self, context):
+        removed = 0
+        for coll in list(bpy.data.collections):
+            if not coll.name.startswith("ROBOT_"):
+                continue
+            if coll.objects or coll.children:
+                continue
+            bpy.data.collections.remove(coll)
+            removed += 1
+
+        self.report({'INFO'}, "{} collection(s) supprimee(s)".format(removed))
+        return {'FINISHED'}
+
+
 class MULTICAM_OT_setup_layers(bpy.types.Operator):
     bl_idname = "multicam.setup_layers"
     bl_label = "Configurer les calques"
@@ -1180,14 +1262,30 @@ class MULTICAM_OT_setup_layers(bpy.types.Operator):
             self.report({'WARNING'}, "Aucune collection ROBOT_ : le calque PERSOS "
                                      "sera vide")
 
+        moved = _tidy_master(scene)
         _setup_view_layers(scene)
         _build_compositor(scene)
 
         if scene.multicam_kuwahara:
             _kuwahara_setup(scene)
 
-        self.report({'INFO'}, "3 calques configures - {} collection(s) perso".format(
-            len(robots)))
+        # Un maillage non marque dans une collection ROBOT_ est du decor egare
+        strays = []
+        for coll in robots:
+            for obj in coll.objects:
+                if obj.type == 'MESH' and not obj.get("robot"):
+                    strays.append(obj.name)
+
+        if strays:
+            self.report({'WARNING'},
+                        "Dans une collection ROBOT_ mais pas marque perso : "
+                        + ", ".join(strays[:4])
+                        + (" ..." if len(strays) > 4 else ""))
+
+        msg = "2 calques - {} collection(s) perso".format(len(robots))
+        if moved:
+            msg += " - {} objet(s) ranges dans MC_Decor / MC_Lights".format(moved)
+        self.report({'INFO'}, msg)
         return {'FINISHED'}
 
 
@@ -1353,7 +1451,9 @@ class MULTICAM_PT_panel(bpy.types.Panel):
         box.prop(scene, "multicam_split_layers")
 
         if scene.multicam_split_layers:
-            box.operator("multicam.setup_layers", icon='RENDERLAYERS')
+            row = box.row(align=True)
+            row.operator("multicam.setup_layers", icon='RENDERLAYERS')
+            row.operator("multicam.clean_colls", text="", icon='TRASH')
 
             col = box.column(align=True)
             col.label(text="Contour des personnages :")
@@ -1375,6 +1475,11 @@ class MULTICAM_PT_panel(bpy.types.Panel):
 
         if scene.multicam_kuwahara:
             col = box.column(align=True)
+
+            row = col.row()
+            row.enabled = (scene.render.engine == 'CYCLES')
+            row.prop(scene, "multicam_kuwa_denoise")
+
             col.prop(scene, "multicam_kuwa_mode", expand=True)
             col.prop(scene, "multicam_kuwa_size")
 
@@ -1427,6 +1532,7 @@ classes = (
     MULTICAM_OT_make_tree,
     MULTICAM_OT_open_gaufrier,
     MULTICAM_OT_setup_layers,
+    MULTICAM_OT_clean_colls,
 )
 
 
@@ -1471,6 +1577,10 @@ def register():
         name="Sortie Kuwahara", default=False,
         description=("Ecrit en parallele une version picturale dans "
                      "rendus-Kuwahara, sans rendu supplementaire"))
+    bpy.types.Scene.multicam_kuwa_denoise = bpy.props.BoolProperty(
+        name="Debruiter (OpenImageDenoise)", default=True,
+        description=("Indispensable avec Kuwahara : le filtre amplifie le grain. "
+                     "Cycles uniquement"))
     bpy.types.Scene.multicam_kuwa_mode = bpy.props.EnumProperty(
         name="Mode", default='ANISOTROPIC',
         items=[('CLASSIC', "Classique", "Plus rapide, aspect plus bloc"),
@@ -1539,6 +1649,7 @@ def unregister():
     del bpy.types.Scene.multicam_line_calli
     del bpy.types.Scene.multicam_line_noise
     del bpy.types.Scene.multicam_line_period
+    del bpy.types.Scene.multicam_kuwa_denoise
 
     for cls in reversed(classes):
         bpy.utils.unregister_class(cls)
