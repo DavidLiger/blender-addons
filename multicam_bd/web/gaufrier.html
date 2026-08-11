@@ -1813,9 +1813,10 @@ function computeLayoutFromConfig(cfg) {
 
     for (let j = 0; j < list.length - 1; j++) {
       const x = list[j].x + list[j].w + gutterPx / 2;
+      const xb = x + (list[0].colSkews[j] || 0);
       guides.push({ kind: 'col', row: i, index: j,
-                    x1: x, y1: rowTop,
-                    x2: x + (list[0].colSkews[j] || 0), y2: rowTop + rowH });
+                    x1: x, y1: rowTop + rowTopOffset(i, x),
+                    x2: xb, y2: rowTop + rowH + rowBottomOffset(i, xb) });
     }
   });
 
@@ -1825,11 +1826,19 @@ function computeLayoutFromConfig(cfg) {
     const left = p.x;
     const right = p.x + p.w;
 
+    // L'inclinaison de l'interrangee se lit a l'abscisse reelle du coin, une
+    // fois l'oblique de colonne appliquee : sinon deux cases voisines ne
+    // tombent plus sur la meme ligne de gouttiere.
+    const xTL = left + colLeftOffset(p, top);
+    const xTR = right + colRightOffset(p, top);
+    const xBR = right + colRightOffset(p, bottom);
+    const xBL = left + colLeftOffset(p, bottom);
+
     p.corners = [
-      [left + colLeftOffset(p, top), top + rowTopOffset(p.rowIndex, left)],            // haut-gauche
-      [right + colRightOffset(p, top), top + rowTopOffset(p.rowIndex, right)],         // haut-droit
-      [right + colRightOffset(p, bottom), bottom + rowBottomOffset(p.rowIndex, right)],// bas-droit
-      [left + colLeftOffset(p, bottom), bottom + rowBottomOffset(p.rowIndex, left)],   // bas-gauche
+      [xTL, top + rowTopOffset(p.rowIndex, xTL)],        // haut-gauche
+      [xTR, top + rowTopOffset(p.rowIndex, xTR)],        // haut-droit
+      [xBR, bottom + rowBottomOffset(p.rowIndex, xBR)],  // bas-droit
+      [xBL, bottom + rowBottomOffset(p.rowIndex, xBL)],  // bas-gauche
     ];
 
     p.cx = (p.corners[0][0] + p.corners[1][0] + p.corners[2][0] + p.corners[3][0]) / 4;
@@ -1850,7 +1859,7 @@ function computeLayoutFromConfig(cfg) {
     marginTopPx, marginBottomPx, marginLeftPx, marginRightPx,
     gutterPx, lineWidthPx,
     zoneWPx, zoneHPx, remainingPx,
-    panels,
+    panels, guides,
   };
 }
 
@@ -1907,6 +1916,9 @@ function startGuideDrag(ev, g, role) {
   const start = { ...g };
   const rowsCopy = JSON.parse(JSON.stringify(rows));
   const skewStart = document.getElementById('rowGutterSkews').value;
+  // Fige les largeurs : les relire a chaque mousemove ferait cumuler le
+  // deplacement et la poignee partirait au bout en un seul geste
+  const widthsStart = (g.kind === 'col') ? currentWidths(g.row) : null;
 
   const toLocal = e => {
     const ctm = svg.getScreenCTM();
@@ -1936,16 +1948,27 @@ function startGuideDrag(ev, g, role) {
         rows[g.index].h = Math.round(a);
         rows[g.index + 1].h = Math.round(b);
         renderRows();
-      } else {
-        const delta = (role === 'b') ? dy : -dy;
+      } else if (role === 'b') {
         document.getElementById('rowGutterSkews').value =
-          setSkew(skewStart, g.index, (parseSkewAt(skewStart, g.index)) + delta);
+          setSkew(skewStart, g.index, parseSkewAt(skewStart, g.index) + dy);
+      } else {
+        // La gouttiere entiere glisse, l'oblique compense pour que
+        // l'extremite droite reste ou elle est
+        const d = fromPx(dy, unit, dpi);
+        const a = rowsCopy[g.index].h + d;
+        const b = rowsCopy[g.index + 1].h - d;
+        if (a < 20 || b < 20) return;
+        rows[g.index].h = Math.round(a);
+        rows[g.index + 1].h = Math.round(b);
+        document.getElementById('rowGutterSkews').value =
+          setSkew(skewStart, g.index, parseSkewAt(skewStart, g.index) - dy);
+        renderRows();
       }
     } else {
       const row = rows[g.row];
       if (role === 'move') {
         // Report de largeur entre les deux cases voisines
-        const widths = currentWidths(g.row);
+        const widths = widthsStart.slice();
         const total = widths.reduce((s, w) => s + w, 0) || 1;
         const a = widths[g.index] + dx;
         const b = widths[g.index + 1] - dx;
@@ -1954,10 +1977,22 @@ function startGuideDrag(ev, g, role) {
         widths[g.index + 1] = b;
         row.ratios = widths.map(w => (w / total * 100).toFixed(2)).join(',');
         renderRows();
-      } else {
-        const delta = (role === 'b') ? dx : -dx;
+      } else if (role === 'b') {
         row.colSkews = setSkew(rowsCopy[g.row].colSkews, g.index,
-                               parseSkewAt(rowsCopy[g.row].colSkews, g.index) + delta);
+                               parseSkewAt(rowsCopy[g.row].colSkews, g.index) + dx);
+        renderRows();
+      } else {
+        // Meme principe qu'en rangee : l'intercase glisse, l'oblique compense
+        const widths = widthsStart.slice();
+        const total = widths.reduce((s, w) => s + w, 0) || 1;
+        const a = widths[g.index] + dx;
+        const b = widths[g.index + 1] - dx;
+        if (a < 30 || b < 30) return;
+        widths[g.index] = a;
+        widths[g.index + 1] = b;
+        row.ratios = widths.map(w => (w / total * 100).toFixed(2)).join(',');
+        row.colSkews = setSkew(rowsCopy[g.row].colSkews, g.index,
+                               parseSkewAt(rowsCopy[g.row].colSkews, g.index) - dx);
         renderRows();
       }
     }
@@ -1989,7 +2024,7 @@ function render() {
   const L = computeLayout();
   const {
     pageWPx, pageHPx, marginTopPx, marginLeftPx,
-    zoneWPx, zoneHPx, remainingPx, panels, lineWidthPx, dpi,
+    zoneWPx, zoneHPx, remainingPx, panels, lineWidthPx, dpi, guides,
   } = L;
 
   // --- Resume / espace restant ---
