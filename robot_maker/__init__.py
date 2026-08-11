@@ -32,6 +32,25 @@ TUBE_PREFIX = "TUBE_"
 K_ROBOT = "robot"          # nom du robot auquel l'objet appartient
 K_SOCKET = "robot_socket"  # marque un empty de connexion
 K_TUBE = "robot_tube"      # marque un tube de liaison
+
+# Credits : posee sur l'objet, l'origine voyage avec lui dans le .blend
+K_SRC_NAME = "src_name"          # titre du modele sur sa page d'origine
+K_SRC_AUTHOR = "src_author"
+K_SRC_LICENSE = "src_license"
+K_SRC_URL = "src_url"
+K_SRC_ORIGINAL = "src_original"  # creation maison : aucun credit a rendre
+
+SKETCHFAB_LICENSES = [
+    ('CC-BY-4.0', "CC BY 4.0", "Attribution"),
+    ('CC-BY-SA-4.0', "CC BY-SA 4.0", "Attribution, partage identique"),
+    ('CC-BY-ND-4.0', "CC BY-ND 4.0", "Attribution, sans modification"),
+    ('CC-BY-NC-4.0', "CC BY-NC 4.0", "Attribution, non commercial"),
+    ('CC-BY-NC-SA-4.0', "CC BY-NC-SA 4.0", "Non commercial, partage identique"),
+    ('CC-BY-NC-ND-4.0', "CC BY-NC-ND 4.0", "Non commercial, sans modification"),
+    ('CC0', "CC0 (domaine public)", "Aucune attribution requise"),
+    ('STANDARD', "Sketchfab Standard", "Licence payante du store"),
+    ('EDITORIAL', "Editorial", "Usage editorial uniquement"),
+]
 FACE_SLOTS = [('eyes', "Yeux"), ('mouth', "Bouche")]
 READY_FILE = "ready.blend"
 D_RIGGED = "mixamo-rigged"
@@ -506,6 +525,153 @@ def _deferred_scan():
     return None        # ne se replanifie pas
 
 
+def _credit_index(context):
+    """Fiches JSON de la bibliotheque, indexees par nom d'asset. C'est le
+    rattrapage des objets importes avant l'ajout des cles de credit."""
+    index = {}
+    root = root_path(context)
+    if not root:
+        return index
+
+    for folder, _dirs, files in os.walk(os.path.join(root, LIBRARY)):
+        for f in files:
+            if not f.lower().endswith(".json"):
+                continue
+            try:
+                with open(os.path.join(folder, f), "r", encoding="utf-8") as fh:
+                    data = json.load(fh)
+            except Exception:
+                continue
+            key = str(data.get("asset") or os.path.splitext(f)[0])
+            index[key.lower()] = data
+    return index
+
+
+def _credit_of(obj, index):
+    """Cles posees sur l'objet ; a defaut, rattrapage par le nom de l'asset."""
+    if K_SRC_AUTHOR in obj:
+        if obj.get(K_SRC_ORIGINAL):
+            return None
+        data = {k: str(obj.get(v, "")) for k, v in
+                (("src_name", K_SRC_NAME), ("author", K_SRC_AUTHOR),
+                 ("license", K_SRC_LICENSE), ("url", K_SRC_URL))}
+        return data
+
+    # Blender suffixe les doublons : Chaise.003 -> chaise
+    data = index.get(re.sub(r"\.\d+$", "", obj.name).lower())
+    if data is None or data.get("original"):
+        return None
+    return {k: str(data.get(k, "")) for k in
+            ("src_name", "author", "license", "url")}
+
+
+def _scan_blend_credits(path, index, found, unknown):
+    """Lie les objets du .blend le temps de lire leurs cles, puis detache."""
+    before = set(bpy.data.libraries)
+    try:
+        with bpy.data.libraries.load(path, link=True) as (src, dst):
+            dst.objects = list(src.objects)
+    except Exception as e:
+        unknown.append("{} : illisible ({})".format(os.path.basename(path), e))
+        return
+
+    libs = [l for l in bpy.data.libraries if l not in before]
+
+    for obj in bpy.data.objects:
+        if obj.library not in libs or obj.type != 'MESH':
+            continue
+        credit = _credit_of(obj, index)
+        if credit is None:
+            if K_SRC_AUTHOR not in obj:
+                unknown.append("{} : {}".format(os.path.basename(path), obj.name))
+            continue
+        found[(credit["author"], credit["src_name"],
+               credit["license"], credit["url"])] = credit
+
+    for lib in libs:
+        try:
+            bpy.data.libraries.remove(lib)
+        except Exception:
+            pass
+
+
+class RM_OT_build_credits(bpy.types.Operator):
+    bl_idname = "rm.build_credits"
+    bl_label = "Generer les credits"
+    bl_description = ("Parcourt les .blend des dossiers listes et ecrit le "
+                      "fichier de credits des assets utilises.\n\n"
+                      "ATTENTION : lie temporairement chaque .blend dans le "
+                      "fichier courant. Travailler dans une scene vide et ne "
+                      "pas sauvegarder juste apres. Blender se fige pendant "
+                      "toute la duree du scan")
+
+    def execute(self, context):
+        scene = context.scene
+        list_path = bpy.path.abspath(scene.rm_credits_list)
+        out_path = bpy.path.abspath(scene.rm_credits_out)
+
+        if not os.path.isfile(list_path):
+            self.report({'ERROR'}, "Liste de dossiers introuvable")
+            return {'CANCELLED'}
+        if not out_path:
+            self.report({'ERROR'}, "Fichier de sortie non defini")
+            return {'CANCELLED'}
+
+        root = root_path(context) or ""
+        folders = []
+        try:
+            with open(list_path, "r", encoding="utf-8") as fh:
+                for line in fh:
+                    line = line.strip()
+                    if line and not line.startswith("#"):
+                        folders.append(line if os.path.isabs(line)
+                                       else os.path.join(root, line))
+        except Exception as e:
+            self.report({'ERROR'}, "Liste illisible : {}".format(e))
+            return {'CANCELLED'}
+
+        index = _credit_index(context)
+        found, unknown, blends = {}, [], 0
+
+        for folder in folders:
+            if not os.path.isdir(folder):
+                unknown.append("dossier absent : " + folder)
+                continue
+            for cur, _dirs, files in os.walk(folder):
+                for f in sorted(files):
+                    if f.lower().endswith(".blend"):
+                        _scan_blend_credits(os.path.join(cur, f), index,
+                                            found, unknown)
+                        blends += 1
+
+        lines = ["# Credits", ""]
+        for c in sorted(found.values(), key=lambda d: (d["author"].lower(),
+                                                       d["src_name"].lower())):
+            line = "- {} par {}".format(c["src_name"] or "(sans titre)",
+                                        c["author"] or "(auteur inconnu)")
+            if c["license"]:
+                line += " - " + c["license"]
+            if c["url"]:
+                line += " - " + c["url"]
+            lines.append(line)
+
+        if unknown:
+            lines += ["", "# A verifier (aucune origine trouvee)", ""]
+            lines += ["- " + u for u in unknown[:300]]
+
+        try:
+            os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
+            with open(out_path, "w", encoding="utf-8") as fh:
+                fh.write("\n".join(lines) + "\n")
+        except Exception as e:
+            self.report({'ERROR'}, "Ecriture impossible : {}".format(e))
+            return {'CANCELLED'}
+
+        self.report({'INFO'}, "{} credit(s), {} fichier(s), {} a verifier"
+                    .format(len(found), blends, len(unknown)))
+        return {'FINISHED'}
+
+
 class RM_OT_scan_library(bpy.types.Operator):
     bl_idname = "rm.scan_library"
     bl_label = "Relire la bibliotheque"
@@ -539,6 +705,13 @@ class RM_OT_add_to_library(bpy.types.Operator):
             self.report({'ERROR'}, "Selectionner la piece (mesh) a enregistrer")
             return {'CANCELLED'}
 
+        src_name = scene.rm_src_name.strip()
+        src_author = scene.rm_src_author.strip()
+        if not scene.rm_src_original and not (src_name and src_author):
+            self.report({'ERROR'},
+                        "Nom original et auteur requis (ou cocher Creation originale)")
+            return {'CANCELLED'}
+
         name = re.sub(r"[^A-Za-z0-9_-]+", "_", scene.rm_asset_name.strip())
         if not name:
             name = re.sub(r"[^A-Za-z0-9_-]+", "_", obj.name)
@@ -564,6 +737,22 @@ class RM_OT_add_to_library(bpy.types.Operator):
         for key in (K_ROBOT, K_SOCKET, K_TUBE, "robot_part", "robot_slot"):
             if key in tmp:
                 del tmp[key]
+
+        # Ecrit sur la copie : les cles partent dans le .blend de l'asset et
+        # reviennent avec lui a chaque import, sans fichier annexe a suivre
+        credit = {
+            "asset": name,
+            "original": bool(scene.rm_src_original),
+            "src_name": "" if scene.rm_src_original else src_name,
+            "author": "David" if scene.rm_src_original else src_author,
+            "license": "" if scene.rm_src_original else scene.rm_src_license,
+            "url": "" if scene.rm_src_original else scene.rm_src_url.strip(),
+        }
+        tmp[K_SRC_ORIGINAL] = credit["original"]
+        tmp[K_SRC_NAME] = credit["src_name"]
+        tmp[K_SRC_AUTHOR] = credit["author"]
+        tmp[K_SRC_LICENSE] = credit["license"]
+        tmp[K_SRC_URL] = credit["url"]
 
         if scene.rm_asset_freeze:
             # Rotation et echelle passees dans la geometrie : l'asset arrive
@@ -602,6 +791,14 @@ class RM_OT_add_to_library(bpy.types.Operator):
         if error:
             self.report({'ERROR'}, "Enregistrement impossible : {}".format(error))
             return {'CANCELLED'}
+
+        # Double lisible sans ouvrir le .blend : sert d'index de bibliotheque
+        try:
+            with open(os.path.join(folder, name + ".json"), "w",
+                      encoding="utf-8") as f:
+                json.dump(credit, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            self.report({'WARNING'}, "Fiche de credits non ecrite : {}".format(e))
 
         scan_library(context)
         msg = "'{}' ajoute a {}/{}".format(
@@ -2980,7 +3177,39 @@ class RM_PT_panel(bpy.types.Panel):
         r.prop(scene, "rm_asset_overwrite")
         col.prop(scene, "rm_asset_freeze")
         col.prop(scene, "rm_thumb_size")
+
+        # --- Credits (politique Sketchfab) ---
+        cred = col.box()
+        cred.prop(scene, "rm_src_original")
+        if not scene.rm_src_original:
+            cred.prop(scene, "rm_src_name")
+            cred.prop(scene, "rm_src_author")
+            cred.prop(scene, "rm_src_license")
+            cred.prop(scene, "rm_src_url")
+
         col.operator("rm.add_to_library", icon='EXPORT')
+
+        # --- Placement ---
+        # --- Credits ---
+        box = layout.box()
+        box.label(text="Credits", icon='TEXT')
+        box.prop(scene, "rm_credits_list")
+        box.prop(scene, "rm_credits_out")
+
+        # alert = True : Blender dessine la colonne en rouge
+        warn = box.column(align=True)
+        warn.alert = True
+        warn.label(text="A lire avant de generer :", icon='ERROR')
+        warn.label(text="Le scan lie chaque .blend dans le")
+        warn.label(text="fichier courant, puis le detache.")
+        warn.label(text="Travailler dans une scene vide,")
+        warn.label(text="jamais dans un decor en cours.")
+        warn.label(text="Ne pas sauvegarder juste apres.")
+        warn.label(text="Blender se fige pendant le scan :")
+        warn.label(text="environ 1 s par .blend, sans")
+        warn.label(text="barre de progression.")
+
+        box.operator("rm.build_credits", icon='FILE_TEXT')
 
         # --- Placement ---
         box = layout.box()
@@ -3211,6 +3440,7 @@ classes = (
     RM_OT_open_expression_maker,
     RM_OT_scan_library,
     RM_OT_add_to_library,
+    RM_OT_build_credits,
     RM_OT_place_asset,
     RM_OT_delete_asset,
     RM_OT_update_mirrors,
@@ -3319,6 +3549,28 @@ def register():
         name="Figer la transformation", default=True,
         description=("Passe la rotation et l'echelle dans la geometrie : l'asset revient "
                      "exactement a la taille voulue au reimport"))
+    S.rm_src_original = bpy.props.BoolProperty(
+        name="Creation originale", default=False,
+        description="Modele fait maison : aucun credit exterieur a rendre")
+    S.rm_src_name = bpy.props.StringProperty(
+        name="Nom original", default="",
+        description="Titre du modele sur sa page d'origine, avant renommage")
+    S.rm_src_author = bpy.props.StringProperty(
+        name="Auteur", default="",
+        description="Auteur credite sur la page d'origine")
+    S.rm_src_license = bpy.props.EnumProperty(
+        name="Licence", items=SKETCHFAB_LICENSES, default='CC-BY-4.0')
+    S.rm_src_url = bpy.props.StringProperty(
+        name="URL", default="",
+        description="Lien vers la page du modele, exige par les licences CC")
+
+    S.rm_credits_list = bpy.props.StringProperty(
+        name="Liste de dossiers", subtype='FILE_PATH', default="",
+        description=("Fichier texte, un dossier par ligne. Chemin relatif a la "
+                     "racine ROBOTS ou absolu. Les lignes # sont ignorees"))
+    S.rm_credits_out = bpy.props.StringProperty(
+        name="Fichier de credits", subtype='FILE_PATH', default="//credits.md")
+
     S.rm_target_socket = bpy.props.StringProperty(
         name="Repere vise", default="",
         description="Dernier repere utilise, conserve entre deux placements")
@@ -3414,7 +3666,10 @@ def unregister():
     S = bpy.types.Scene
     for prop in ("rm_mirror", "rm_mirror_axis", "rm_asset_edit", "rm_asset_search", "rm_asset_page", "rm_asset_per_page",
                  "rm_asset_columns", "rm_thumb_size", "rm_asset", "rm_asset_name", "rm_asset_overwrite",
-                 "rm_asset_freeze", "rm_target_socket",
+                 "rm_asset_freeze", "rm_credits_list", "rm_credits_out",
+                 "rm_src_name", "rm_src_author",
+                 "rm_src_license", "rm_src_url", "rm_src_original",
+                 "rm_target_socket",
                  "rm_place_on_click", "rm_asset_scale", "rm_show_names", "rm_zoom_on_select", "rm_tube_caps",
                  "rm_slot", "rm_snap_bbox", "rm_torso", "rm_neck", "rm_head_gap",
                  "rm_shoulder_w", "rm_shoulder_drop", "rm_hip_w", "rm_arm_upper",
