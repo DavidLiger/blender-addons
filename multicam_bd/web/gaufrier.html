@@ -70,6 +70,19 @@
     margin: 0 4px;
   }
 
+  .toolbar .btn-top {
+    height: 34px;
+    padding: 0 12px;
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text);
+    font-size: 0.78rem;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+  .toolbar .btn-top:hover { border-color: #e0923d; }
+
   .icon-btn-lg {
     width: 34px;
     height: 34px;
@@ -590,6 +603,12 @@
         <path d="M4 18h16"/>
       </svg>
     </button>
+
+    <div class="sep"></div>
+
+    <button class="btn-top" id="btn-push" onclick="pushCameras()">Creer les cameras dans Blender</button>
+    <button class="btn-top" id="btn-edit-gaufrier" onclick="unlockEditing()"
+            style="display:none">Modifier le gaufrier</button>
   </div>
 </header>
 
@@ -826,7 +845,6 @@
     </p>
     <textarea class="export" id="blender-script" readonly></textarea>
     <div class="copy-row">
-      <button class="btn" id="btn-push" onclick="pushCameras()">Creer les cameras dans Blender</button>
       <button class="btn sec" onclick="copyScript()">Copier le script</button>
     </div>
     <div class="copied-msg" id="copy-script-msg"></div>
@@ -1111,6 +1129,10 @@ function applyConfig(cfg) {
   }
 
   localStorage.setItem('gaufrier_last_prefix', String(cfg.prefix || ''));
+
+  camerasBuilt = !!cfg.camerasBuilt;
+  editing = !camerasBuilt;
+  syncLockUI();
 
   renderRows();
   render();
@@ -1655,10 +1677,41 @@ function parseRatios(str, n) {
   return vals;
 }
 
-// Lit l'etat courant de l'interface sous forme d'objet de configuration.
+// Une planche dont les cameras ont ete produites est verrouillee : les
+// poignees disparaissent pour eviter de deformer un gaufrier deja tourne.
+// Le drapeau vit dans le JSON de planche et survit au rechargement.
+let camerasBuilt = false;
+let editing = true;
+
+function lockEditing() {
+  editing = false;
+  syncLockUI();
+  render();
+}
+
+function unlockEditing() {
+  editing = true;
+  syncLockUI();
+  render();
+}
+
+function syncLockUI() {
+  const cb = document.getElementById('editGuides');
+  if (cb) { cb.checked = editing; cb.disabled = !editing; }
+
+  const push = document.getElementById('btn-push');
+  if (push) push.textContent = camerasBuilt
+    ? 'Mettre a jour les cameras'
+    : 'Creer les cameras dans Blender';
+
+  const edit = document.getElementById('btn-edit-gaufrier');
+  if (edit) edit.style.display = (camerasBuilt && !editing) ? '' : 'none';
+}
+
 function readConfigFromDOM() {
   const cfg = { rows: rows.map(r => ({ ...r })) };
   CONFIG_FIELD_IDS.forEach(id => { cfg[id] = document.getElementById(id).value; });
+  cfg.camerasBuilt = camerasBuilt;
   return cfg;
 }
 
@@ -2206,7 +2259,7 @@ function copyTable() {
 
 async function pushCameras() {
   if (!SERVED) {
-    flashMsg('copy-script-msg', 'Disponible depuis Blender seulement');
+    flashMsg('config-msg', 'Disponible depuis Blender seulement');
     return;
   }
 
@@ -2225,9 +2278,14 @@ async function pushCameras() {
     });
     const data = await res.json();
     if (!data.ok) throw new Error(data.error || 'echec');
-    flashMsg('copy-script-msg', frames.length + ' camera(s) envoyee(s)');
+    flashMsg('config-msg', frames.length + ' camera(s) envoyee(s)');
+
+    // Seul endroit ou la planche est ecrite : un essai de poignee n'ecrase rien
+    camerasBuilt = true;
+    lockEditing();
+    await saveConfig();
   } catch (err) {
-    flashMsg('copy-script-msg', 'Erreur : ' + err.message);
+    flashMsg('config-msg', 'Erreur : ' + err.message);
   }
 }
 
@@ -2432,6 +2490,12 @@ function toggleSection(id) {
 function openModal(id) {
   document.getElementById(id).classList.add('open');
 }
+
+// Un bouton portant data-close referme sa modale apres son action
+document.addEventListener('click', e => {
+  const b = e.target.closest('.modal-overlay [data-close]');
+  if (b) setTimeout(() => b.closest('.modal-overlay').classList.remove('open'), 0);
+});
 
 function closeModal(id) {
   document.getElementById(id).classList.remove('open');
