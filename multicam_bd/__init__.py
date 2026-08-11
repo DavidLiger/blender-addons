@@ -15,6 +15,7 @@ import json
 import math
 import posixpath
 import threading
+import time
 import urllib.parse
 import webbrowser
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
@@ -119,8 +120,47 @@ class _GaufrierHandler(SimpleHTTPRequestHandler):
 
     def do_POST(self):
         route = urllib.parse.urlparse(self.path).path
-        if route not in ("/save", "/cameras"):
+        if route not in ("/save", "/cameras", "/trash"):
             self.send_error(404)
+            return
+
+        if route == "/trash":
+            try:
+                size = int(self.headers.get("Content-Length", 0))
+                data = json.loads(self.rfile.read(size).decode("utf-8"))
+            except Exception as e:
+                self._json({"ok": False, "error": str(e)}, 400)
+                return
+
+            prefix = str(data.get("prefix", "")).strip()
+            if not re.match(r"^\d+[a-zA-Z]*$", prefix):
+                self._json({"ok": False, "error": "prefixe invalide"}, 400)
+                return
+
+            # Trois verrous : forme du prefixe, chemin sous la racine, et nom
+            # de dossier devant correspondre exactement au prefixe demande.
+            src = self._under_root(os.path.join("planches", prefix))
+            if src is None or os.path.basename(src) != prefix:
+                self._json({"ok": False, "error": "chemin refuse"}, 403)
+                return
+            if not os.path.isdir(src):
+                self._json({"ok": False, "error": "planche introuvable"}, 404)
+                return
+
+            dest = self._under_root(os.path.join(
+                "_corbeille", "{}_{}".format(prefix, time.strftime("%Y%m%d-%H%M%S"))))
+            if dest is None:
+                self._json({"ok": False, "error": "chemin refuse"}, 403)
+                return
+
+            try:
+                os.makedirs(os.path.dirname(dest), exist_ok=True)
+                os.rename(src, dest)
+            except Exception as e:
+                self._json({"ok": False, "error": str(e)}, 500)
+                return
+
+            self._json({"ok": True, "path": dest})
             return
 
         if route == "/cameras":
@@ -565,10 +605,12 @@ class MULTICAM_OT_refresh(bpy.types.Operator):
 # ---------------------------------------------------------------------------
 # Regroupement par planche : "Camera.01.A" -> planche "01"
 # ---------------------------------------------------------------------------
-_PAGE_RE = re.compile(r"\.(\d+)\.")
+# Un chiffre suivi d'un suffixe optionnel : 03, mais aussi 03b intercale
+# entre 03 et 04 sans avoir a renumeroter les planches suivantes.
+_PAGE_RE = re.compile(r"\.(\d+[a-zA-Z]*)\.")
 
 # Convention de dossiers : .../planches/<NN>/rendus-XXX
-_PATH_PAGE_RE = re.compile(r"(planches[\\/])(\d+)([\\/])", re.IGNORECASE)
+_PATH_PAGE_RE = re.compile(r"(planches[\\/])(\d+[a-zA-Z]*)([\\/])", re.IGNORECASE)
 
 
 def _multicam_retarget_path(path, page):
@@ -588,11 +630,17 @@ def _multicam_page_of(name):
     return m.group(1) if m else None
 
 
+def _multicam_page_key(page):
+    """03 < 03b < 04 : le nombre d'abord, le suffixe ensuite."""
+    m = re.match(r"(\d+)(.*)", page or "")
+    return (int(m.group(1)), m.group(2)) if m else (0, page or "")
+
+
 def _multicam_pages(scene):
     """Liste triee des planches presentes dans la liste des cameras."""
     pages = {_multicam_page_of(item.name) for item in scene.multicam_items}
     pages.discard(None)
-    return sorted(pages, key=lambda p: (len(p), p))
+    return sorted(pages, key=_multicam_page_key)
 
 
 class MULTICAM_OT_select_page(bpy.types.Operator):

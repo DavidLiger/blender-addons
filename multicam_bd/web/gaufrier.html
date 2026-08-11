@@ -150,6 +150,20 @@
     font-weight: 600;
   }
 
+  /* Le -12px compense le padding de la colonne : l'en-tete colle au bord */
+  .pages-head {
+    position: sticky;
+    top: -12px;
+    z-index: 5;
+    background: var(--panel);
+    padding: 12px 0 10px;
+    margin: -12px 0 10px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .pages-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+  .pages-actions .btn { margin: 0; }
+
   .page-card {
     border: 1px solid var(--border);
     border-radius: 6px;
@@ -731,6 +745,9 @@
       </div>
       <div class="section-body">
 
+        <button class="btn btn-secondary" id="btn-rescan-served" style="display:none"
+                onclick="scanRenderFolder()">Relire les dossiers de rendus</button>
+
         <div id="fsapi-supported">
           <button class="btn btn-secondary" onclick="pickRenderFolder()">Choisir le dossier de rendus</button>
           <button class="btn btn-secondary" id="btn-reconnect" style="display:none" onclick="reconnectFolder()">
@@ -787,13 +804,18 @@
 
   <!-- ----------- NAVIGATEUR DE PLANCHES ----------- -->
   <div class="pages-col">
-    <h3>Planches</h3>
-    <button class="btn btn-secondary" style="margin-bottom:10px;" onclick="newPlanche()">
-      + Nouvelle planche
-    </button>
+    <div class="pages-head">
+      <h3>Planches</h3>
+      <div class="pages-actions">
+        <button class="btn btn-secondary" onclick="openNewPage(false)">+ Nouvelle</button>
+        <button class="btn btn-secondary" onclick="openNewPage(true)">Dupliquer</button>
+        <button class="btn btn-secondary" onclick="openTrash()"
+                style="border-color:#a33">Supprimer</button>
+        <button class="btn btn-secondary" id="btn-export-all" style="display:none"
+                onclick="exportAllPlanches()">Exporter tout</button>
+      </div>
+    </div>
     <div id="pages-list"></div>
-    <button class="btn btn-secondary" id="btn-export-all" style="display:none; margin-bottom:10px;"
-            onclick="exportAllPlanches()">Exporter toutes les planches</button>
     <div class="copied-msg" id="export-all-msg"></div>
     <p class="hint" id="pages-empty">
       Les planches apparaissent ici quand un dossier contenant des configs
@@ -848,6 +870,40 @@
       <button class="btn sec" onclick="copyScript()">Copier le script</button>
     </div>
     <div class="copied-msg" id="copy-script-msg"></div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="modal-trash" onclick="if(event.target===this) closeModal('modal-trash')">
+  <div class="modal-box" style="max-width:520px">
+    <button class="modal-close" onclick="closeModal('modal-trash')">&times;</button>
+    <h2>Supprimer la planche</h2>
+    <div id="trash-body"></div>
+    <div class="copy-row" style="margin-top:16px;">
+      <button class="btn" onclick="confirmTrash()">Supprimer</button>
+      <button class="btn sec" onclick="closeModal('modal-trash')">Annuler</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="modal-newpage" onclick="if(event.target===this) closeModal('modal-newpage')">
+  <div class="modal-box" style="max-width:420px">
+    <button class="modal-close" onclick="closeModal('modal-newpage')">&times;</button>
+    <h2 id="newpage-title">Nouvelle planche</h2>
+    <p class="hint" style="margin-bottom:10px; font-size:0.75rem;">
+      Un suffixe de lettre insere la planche entre deux autres sans renumeroter
+      la suite : 03b se place entre 03 et 04.
+    </p>
+
+    <div class="field">
+      <label>Prefixe de la nouvelle planche</label>
+      <input type="text" id="newpage-prefix">
+    </div>
+
+    <div class="copy-row" style="margin-top:16px;">
+      <button class="btn" onclick="confirmNewPage()">Creer</button>
+      <button class="btn sec" onclick="closeModal('modal-newpage')">Annuler</button>
+    </div>
+    <div class="copied-msg" id="newpage-msg"></div>
   </div>
 </div>
 
@@ -1378,6 +1434,11 @@ function chosenVariant(cfg) {
   const stored = localStorage.getItem('gaufrier_variant_' + cfg.prefix);
   if (vs.includes(stored)) return stored;
 
+  // Dernier choix global : evite de retomber sur EVEE a chaque ouverture,
+  // y compris sur une planche jamais reglee a la main
+  const last = localStorage.getItem('gaufrier_variant_last');
+  if (vs.includes(last)) return last;
+
   // Variante demandee par Blender, si elle a des images pour cette planche
   const asked = PARAMS.get('variant');
   if (asked && vs.includes(asked) && variantHasImages(cfg, asked)) return asked;
@@ -1475,10 +1536,14 @@ function buildVariantSelect(cfg, chosen) {
 // Changement manuel de variante : memorise pour CETTE planche uniquement
 async function onVariantChange() {
   const prefix = document.getElementById('prefix').value.trim();
+  const value = document.getElementById('variantSelect').value;
+
+  // Ecrit avant toute sortie anticipee : le choix ne doit jamais etre perdu
+  localStorage.setItem('gaufrier_variant_last', value);
+  localStorage.setItem('gaufrier_variant_' + prefix, value);
+
   const cfg = planches.find(c => String(c.prefix) === prefix);
   if (!cfg) return;
-
-  localStorage.setItem('gaufrier_variant_' + prefix, document.getElementById('variantSelect').value);
 
   await loadPlancheImages(cfg);
   await buildThumbs();
@@ -1565,6 +1630,7 @@ function setRendersStatus(text, cls) {
   if (SERVED) {
     document.getElementById('fsapi-supported').style.display = 'none';
     document.getElementById('fsapi-fallback').style.display = 'none';
+    document.getElementById('btn-rescan-served').style.display = '';
 
     const wanted = PARAMS.get('page');
     if (wanted) localStorage.setItem('gaufrier_last_prefix', wanted);
@@ -1579,6 +1645,7 @@ function setRendersStatus(text, cls) {
     return;
   }
 
+  restoreSections();
   document.getElementById('fsapi-supported').style.display = HAS_FS_API ? '' : 'none';
   document.getElementById('fsapi-fallback').style.display = HAS_FS_API ? 'none' : '';
 
@@ -2298,6 +2365,124 @@ function copyTable() {
   navigator.clipboard.writeText(text).then(() => flashMsg('copy-table-msg', 'Tableau copie'));
 }
 
+// --- Creation et duplication de planches -----------------------------------
+let newPageDuplicate = false;
+
+// Premier numero libre, sur deux chiffres
+function nextFreePrefix() {
+  const used = new Set(planches.map(p => String(p.prefix || '')));
+  for (let i = 1; i < 1000; i++) {
+    const c = String(i).padStart(2, '0');
+    if (!used.has(c)) return c;
+  }
+  return '';
+}
+
+function openNewPage(duplicate) {
+  newPageDuplicate = duplicate;
+  document.getElementById('newpage-title').textContent =
+    duplicate ? 'Dupliquer la planche' : 'Nouvelle planche';
+  document.getElementById('newpage-prefix').value = nextFreePrefix();
+  openModal('modal-newpage');
+}
+
+async function confirmNewPage() {
+  const prefix = document.getElementById('newpage-prefix').value.trim();
+
+  if (!/^\d+[a-zA-Z]*$/.test(prefix)) {
+    flashMsg('newpage-msg', 'Prefixe invalide (chiffres, suffixe de lettres)');
+    return;
+  }
+  if (planches.some(p => String(p.prefix || '') === prefix)) {
+    flashMsg('newpage-msg', 'La planche ' + prefix + ' existe deja');
+    return;
+  }
+
+  // Le format de page est conserve ; seule la grille repart de zero
+  if (!newPageDuplicate) {
+    const num = id => parseFloat(document.getElementById(id).value) || 0;
+    const zoneH = num('pageH') - num('marginTop') - num('marginBottom');
+    const usable = zoneH - 2 * num('gutter');
+    const h = Math.round(usable / 3);
+    // La derniere rangee absorbe l'arrondi, pour ne pas laisser de reste
+    rows = [h, h, Math.round(usable - 2 * h)]
+      .map(v => ({ h: v, n: 1, ratios: '', colSkews: '' }));
+  }
+
+  document.getElementById('prefix').value = prefix;
+  camerasBuilt = false;      // la copie n'a aucune camera derriere elle
+  editing = true;
+  syncLockUI();
+  renderRows();
+  render();
+
+  closeModal('modal-newpage');
+  await saveConfig();
+}
+
+// --- Suppression d'une planche ---------------------------------------------
+let trashPending = null;
+
+async function openTrash() {
+  const prefix = document.getElementById('prefix').value.trim();
+  if (!SERVED || !prefix) return;
+
+  const cams = await srvCameras(prefix);
+  const dir = 'planches/' + prefix;
+  const top = await srvList(dir);
+
+  let images = 0;
+  for (const d of top.dirs) {
+    const sub = await srvList(dir + '/' + d);
+    images += sub.files.length;
+  }
+
+  trashPending = { prefix, cams };
+
+  document.getElementById('trash-body').innerHTML =
+    '<p style="font-size:0.85rem">La planche <b>' + prefix + '</b> va etre retiree :</p>'
+    + '<ul style="font-size:0.8rem; line-height:1.6">'
+    + '<li>' + cams.length + ' camera(s) supprimee(s) dans Blender'
+    + (cams.length ? ' : ' + cams.join(', ') : '') + '</li>'
+    + '<li>le dossier ' + dir + ', contenant ' + images + ' image(s)</li>'
+    + '</ul>'
+    + '<p class="hint" style="font-size:0.75rem">Le dossier est deplace dans '
+    + '_corbeille, pas efface. Les cameras, elles, sont supprimees sans retour.</p>';
+
+  openModal('modal-trash');
+}
+
+async function confirmTrash() {
+  const { prefix, cams } = trashPending;
+  closeModal('modal-trash');
+
+  try {
+    if (cams.length) {
+      await fetch('/cameras', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ prefix, frames: [], mapping: [], remove: cams }),
+      });
+    }
+
+    const res = await fetch('/trash', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ prefix }),
+    });
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.error || 'echec');
+
+    planches = planches.filter(p => String(p.prefix || '') !== prefix);
+    buildPagesList();
+    flashMsg('config-msg', 'Planche ' + prefix + ' envoyee a la corbeille');
+
+    if (planches.length) await selectPlanche(planches[0].prefix);
+  } catch (err) {
+    flashMsg('config-msg', 'Erreur : ' + err.message);
+  }
+}
+
 // --- Remappage des cameras a la mise a jour d'un gaufrier -------------------
 let remapPending = null;   // { prefix, frames, olds }
 
@@ -2591,7 +2776,28 @@ async function exportAllPlanches() {
 // Sections repliables / modales
 // ---------------------------------------------------------------------------
 function toggleSection(id) {
-  document.getElementById(id).classList.toggle('collapsed');
+  const el = document.getElementById(id);
+  el.classList.toggle('collapsed');
+
+  const state = readSectionState();
+  state[id] = el.classList.contains('collapsed');
+  localStorage.setItem('gaufrier_sections', JSON.stringify(state));
+}
+
+function readSectionState() {
+  try {
+    return JSON.parse(localStorage.getItem('gaufrier_sections') || '{}');
+  } catch (err) {
+    return {};
+  }
+}
+
+function restoreSections() {
+  const state = readSectionState();
+  Object.keys(state).forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.classList.toggle('collapsed', !!state[id]);
+  });
 }
 
 function openModal(id) {
@@ -2636,6 +2842,9 @@ async function saveConfig() {
       const stored = { ...config, __file: fileName, __path: dir,
                        __folder: dir.replace(/^planches\//, '') };
       if (idx >= 0) planches[idx] = stored; else planches.push(stored);
+      planches.sort((a, b) =>
+        String(a.prefix || '').localeCompare(String(b.prefix || ''), undefined,
+                                             { numeric: true }));
 
       localStorage.setItem('gaufrier_last_prefix', String(config.prefix || ''));
       buildPagesList();
