@@ -425,6 +425,9 @@ class MULTICAM_UL_cameras(bpy.types.UIList):
         op = fields.operator("multicam.preview", text="", icon='HIDE_OFF')
         op.camera_name = item.name
 
+        op = fields.operator("multicam.place", text="", icon='CURSOR')
+        op.camera_name = item.name
+
 
 # ---------------------------------------------------------------------------
 # Operateur : ajouter res_x / res_y sur une camera qui n'en a pas
@@ -694,6 +697,53 @@ class MULTICAM_OT_preview(bpy.types.Operator):
                                     bpy.ops.view3d.view_camera()
                                 break
                     break
+
+        return {'FINISHED'}
+
+
+class MULTICAM_OT_place(bpy.types.Operator):
+    bl_idname = "multicam.place"
+    bl_label = "Placer"
+    bl_description = ("Selectionne cette camera et bascule le viewport en vue "
+                      "de dessus, pour la deplacer et l'orienter facilement")
+
+    camera_name: bpy.props.StringProperty()
+
+    def execute(self, context):
+        cam = bpy.data.objects.get(self.camera_name)
+
+        if cam is None or cam.type != 'CAMERA':
+            self.report({'ERROR'}, "Camera '{}' introuvable".format(self.camera_name))
+            return {'CANCELLED'}
+
+        if cam.name not in context.view_layer.objects:
+            self.report({'ERROR'}, "Camera absente du view layer courant")
+            return {'CANCELLED'}
+
+        # Une camera masquee ne peut pas etre selectionnee
+        cam.hide_set(False)
+
+        for obj in context.view_layer.objects:
+            if obj.select_get():
+                obj.select_set(False)
+
+        cam.select_set(True)
+        context.view_layer.objects.active = cam
+
+        # Vue de dessus (pave numerique 7). view_axis sort de la vue camera
+        # tout seul : contrairement a view_camera, ce n'est pas un toggle,
+        # donc pas besoin de tester l'etat courant.
+        for window in context.window_manager.windows:
+            for area in window.screen.areas:
+                if area.type != 'VIEW_3D':
+                    continue
+                for region in area.regions:
+                    if region.type == 'WINDOW':
+                        with context.temp_override(window=window, area=area,
+                                                   region=region):
+                            bpy.ops.view3d.view_axis(type='TOP')
+                        break
+                break
 
         return {'FINISHED'}
 
@@ -1752,6 +1802,7 @@ classes = (
     MULTICAM_OT_select_all,
     MULTICAM_OT_select_page,
     MULTICAM_OT_preview,
+    MULTICAM_OT_place,
     MULTICAM_OT_cancel_render,
     MULTICAM_OT_render_selected,
     MULTICAM_PT_panel,
