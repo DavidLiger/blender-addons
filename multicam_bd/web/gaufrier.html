@@ -851,6 +851,33 @@
   </div>
 </div>
 
+<div class="modal-overlay" id="modal-remap" onclick="if(event.target===this) closeModal('modal-remap')">
+  <div class="modal-box">
+    <button class="modal-close" onclick="closeModal('modal-remap')">&times;</button>
+    <h2>Mettre a jour les cameras</h2>
+    <p class="hint" style="margin-bottom:10px; font-size:0.75rem;">
+      Pour chaque case du nouveau gaufrier, indique quelle camera existante la
+      prend en charge. La camera choisie est renommee : elle garde sa position,
+      sa rotation et ses reglages, seule la resolution change.
+    </p>
+
+    <table id="remap-table" style="width:100%; font-size:0.8rem;">
+      <thead><tr>
+        <th style="text-align:left">Nouvelle case</th>
+        <th style="text-align:left">Camera reprise</th>
+      </tr></thead>
+      <tbody></tbody>
+    </table>
+
+    <div id="remap-orphans" style="margin-top:14px;"></div>
+
+    <div class="copy-row" style="margin-top:16px;">
+      <button class="btn" onclick="confirmRemap()">Mettre a jour</button>
+      <button class="btn sec" onclick="closeModal('modal-remap')">Annuler</button>
+    </div>
+  </div>
+</div>
+
 <div class="modal-overlay" id="modal-export" onclick="if(event.target===this) closeModal('modal-export')">
   <div class="modal-box">
     <button class="modal-close" onclick="closeModal('modal-export')">&times;</button>
@@ -927,6 +954,20 @@ async function srvList(path) {
   const res = await fetch('/list/' + path + '?t=' + Date.now());
   if (!res.ok) return { files: [], dirs: [] };
   return await res.json();
+}
+
+// Cameras reellement presentes dans la scene Blender pour cette planche.
+// Source de verite pour le remappage : le JSON de planche peut mentir si une
+// camera a ete supprimee a la main.
+async function srvCameras(prefix) {
+  try {
+    const res = await fetch('/cameras?prefix=' + encodeURIComponent(prefix)
+                            + '&t=' + Date.now());
+    const data = await res.json();
+    return data.ok ? (data.cameras || []) : [];
+  } catch (err) {
+    return [];
+  }
 }
 
 function srvUrl(path) {
@@ -2257,6 +2298,61 @@ function copyTable() {
   navigator.clipboard.writeText(text).then(() => flashMsg('copy-table-msg', 'Tableau copie'));
 }
 
+// --- Remappage des cameras a la mise a jour d'un gaufrier -------------------
+let remapPending = null;   // { prefix, frames, olds }
+
+function openRemap(prefix, frames, olds) {
+  remapPending = { prefix, frames, olds };
+
+  document.querySelector('#remap-table tbody').innerHTML = frames.map(f => {
+    const opts = ['<option value="">(nouvelle camera)</option>'].concat(
+      olds.map(o => '<option value="' + o + '"'
+                  + (o === f.name ? ' selected' : '') + '>' + o + '</option>'));
+    return '<tr><td style="padding:3px 8px 3px 0">' + f.name + '</td>'
+         + '<td><select class="remap-sel" data-new="' + f.name + '"'
+         + ' onchange="syncRemap()" style="width:100%">'
+         + opts.join('') + '</select></td></tr>';
+  }).join('');
+
+  syncRemap();
+  openModal('modal-remap');
+}
+
+// Une ancienne camera ne peut etre reprise qu'une fois : les options deja
+// prises sont desactivees ailleurs, et le reste bascule en suppression.
+function syncRemap() {
+  const sels = [...document.querySelectorAll('.remap-sel')];
+  const taken = sels.map(s => s.value).filter(Boolean);
+
+  sels.forEach(s => {
+    [...s.options].forEach(o => {
+      o.disabled = !!o.value && o.value !== s.value && taken.includes(o.value);
+    });
+  });
+
+  const orphans = remapPending.olds.filter(o => !taken.includes(o));
+  document.getElementById('remap-orphans').innerHTML = orphans.length
+    ? '<div class="hint" style="font-size:0.75rem; margin-bottom:6px;">'
+      + 'Cameras qui ne correspondent plus a aucune case :</div>'
+      + orphans.map(o =>
+          '<label style="display:flex; align-items:center; gap:6px; font-size:0.8rem;">'
+          + '<input type="checkbox" class="remap-del" value="' + o + '" checked'
+          + ' style="width:auto"> Supprimer ' + o + '</label>').join('')
+    : '';
+}
+
+async function confirmRemap() {
+  const mapping = [...document.querySelectorAll('.remap-sel')].map(s => ({
+    'new': s.dataset.new,
+    old: s.value || null,
+  }));
+  const remove = [...document.querySelectorAll('.remap-del:checked')]
+    .map(c => c.value);
+
+  closeModal('modal-remap');
+  await sendCameras(remapPending.prefix, remapPending.frames, mapping, remove);
+}
+
 async function pushCameras() {
   if (!SERVED) {
     flashMsg('config-msg', 'Disponible depuis Blender seulement');
@@ -2270,11 +2366,22 @@ async function pushCameras() {
     h: Math.round(p.bh),
   }));
 
+  // Premiere production, ou aucune camera en face : rien a remapper
+  const olds = camerasBuilt ? await srvCameras(L.prefix) : [];
+  if (!olds.length) {
+    await sendCameras(L.prefix, frames, [], []);
+    return;
+  }
+
+  openRemap(L.prefix, frames, olds);
+}
+
+async function sendCameras(prefix, frames, mapping, remove) {
   try {
     const res = await fetch('/cameras', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ prefix: L.prefix, frames }),
+      body: JSON.stringify({ prefix, frames, mapping, remove }),
     });
     const data = await res.json();
     if (!data.ok) throw new Error(data.error || 'echec');

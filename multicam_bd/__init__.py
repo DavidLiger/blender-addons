@@ -12,6 +12,7 @@ import bpy
 import os
 import base64
 import json
+import math
 import posixpath
 import threading
 import urllib.parse
@@ -31,6 +32,11 @@ _server = None
 _server_thread = None
 _pending_cameras = []           # rempli par le serveur, consomme par le timer
 _pending_lock = threading.Lock()
+
+# Instantane des cameras presentes dans la scene, par planche :
+# {"03": ["Camera.03.A", ...]}. Ecrit par le timer _apply_cameras, lu par le
+# thread HTTP -- qui n'a ainsi jamais a toucher bpy, non thread-safe.
+_camera_snapshot = {}
 
 
 class _GaufrierHandler(SimpleHTTPRequestHandler):
@@ -92,6 +98,16 @@ class _GaufrierHandler(SimpleHTTPRequestHandler):
                 "dirs": [d for d in entries
                          if os.path.isdir(os.path.join(target, d))],
             })
+            return
+
+        if parsed.path == "/cameras":
+            query = urllib.parse.parse_qs(parsed.query)
+            prefix = (query.get("prefix") or [""])[0]
+            with _pending_lock:
+                snap = dict(_camera_snapshot)
+            names = snap.get(prefix, []) if prefix else sorted(
+                n for lst in snap.values() for n in lst)
+            self._json({"ok": True, "prefix": prefix, "cameras": names})
             return
 
         SimpleHTTPRequestHandler.do_GET(self)
@@ -184,41 +200,136 @@ def stop_gaufrier_server():
     _server_thread = None
 
 
+def _refresh_camera_snapshot():
+    """Recense les cameras de la scene pour le thread HTTP (voir /cameras)."""
+    snap = {}
+    for obj in bpy.data.objects:
+        if obj.type != 'CAMERA':
+            continue
+        page = _multicam_page_of(obj.name)
+        if page is None:
+            continue
+        snap.setdefault(page, []).append(obj.name)
+
+    # A avant AA : on trie sur la longueur du suffixe d'abord
+    for names in snap.values():
+        names.sort(key=lambda n: (len(n.rsplit(".", 1)[-1]), n))
+
+    with _pending_lock:
+        _camera_snapshot.clear()
+        _camera_snapshot.update(snap)
+
+
 def _apply_cameras():
     """Cree ou met a jour les cameras demandees par le gaufrier."""
+    _refresh_camera_snapshot()
+
     with _pending_lock:
         jobs = list(_pending_cameras)
         _pending_cameras.clear()
 
     for job in jobs:
-        created = 0
-        for frame in job.get("frames", []):
-            name = frame.get("name")
-            if not name:
-                continue
+        _apply_camera_job(job)
 
-            obj = bpy.data.objects.get(name)
-            if obj is None or obj.type != 'CAMERA':
-                data = bpy.data.cameras.new(name)
-                obj = bpy.data.objects.new(name, data)
-                bpy.context.collection.objects.link(obj)
-                created += 1
-
-            obj["res_x"] = int(frame.get("w", 1000))
-            obj["res_y"] = int(frame.get("h", 1000))
-            if "frame" not in obj:
-                obj["frame"] = 0
-            _multicam_fix_res_bounds(obj)
-
-        try:
-            bpy.ops.multicam.refresh()
-        except Exception:
-            pass
-
-        print("[multicam] {} camera(s) creee(s), {} au total".format(
-            created, len(job.get("frames", []))))
+    if jobs:
+        _refresh_camera_snapshot()
 
     return 1.0
+
+
+NEW_CAM_Z = 2.0          # hauteur des nouvelles cameras, en metres
+NEW_CAM_STEP_X = 1.0     # ecart entre deux nouvelles, pour ne pas les superposer
+
+
+def _delete_camera(name):
+    obj = bpy.data.objects.get(name)
+    if obj is None or obj.type != 'CAMERA':
+        return False
+    data = obj.data
+    bpy.data.objects.remove(obj, do_unlink=True)
+    if data is not None and data.users == 0:
+        bpy.data.cameras.remove(data)
+    return True
+
+
+def _rename_cameras(pairs):
+    """Renomme les cameras reprises, en deux passes pour survivre aux
+    permutations (B->C et C->B) et aux chaines (D->E alors que E existe).
+    Renommer plutot que recreer preserve transform, focale, DOF et cles."""
+    moves = [(old, new) for old, new in pairs
+             if old != new and bpy.data.objects.get(old) is not None]
+    if not moves:
+        return []
+
+    sources = {old for old, _ in moves}
+    warnings = []
+
+    # Un objet qui occupe deja un nom cible sans faire partie du lot bloque le
+    # renommage : Blender suffixerait en .001. On le signale plutot que de subir.
+    for _, new in moves:
+        holder = bpy.data.objects.get(new)
+        if holder is not None and holder.name not in sources:
+            warnings.append(new)
+
+    # Passe 1 : on libere tous les noms sources
+    tmp = []
+    for i, (old, new) in enumerate(moves):
+        obj = bpy.data.objects.get(old)
+        obj.name = "__mc_tmp_{}".format(i)
+        tmp.append((obj, new))
+
+    # Passe 2 : chaque camera prend son nom definitif
+    for obj, new in tmp:
+        obj.name = new
+        if obj.data is not None:
+            obj.data.name = new
+
+    return warnings
+
+
+def _apply_camera_job(job):
+    frames = job.get("frames", [])
+    mapping = job.get("mapping") or []
+    remove = job.get("remove") or []
+
+    kept = {m.get("old") for m in mapping if m.get("old")}
+    deleted = sum(1 for n in remove if n not in kept and _delete_camera(n))
+
+    warnings = _rename_cameras([(m["old"], m["new"]) for m in mapping
+                                if m.get("old") and m.get("new")])
+
+    created = 0
+    for frame in frames:
+        name = frame.get("name")
+        if not name:
+            continue
+
+        obj = bpy.data.objects.get(name)
+        if obj is None or obj.type != 'CAMERA':
+            data = bpy.data.cameras.new(name)
+            obj = bpy.data.objects.new(name, data)
+            bpy.context.collection.objects.link(obj)
+            # A l'horizontale a hauteur d'homme, et non plongeant vers le sol
+            obj.rotation_euler = (math.radians(90.0), 0.0, 0.0)
+            obj.location = (created * NEW_CAM_STEP_X, 0.0, NEW_CAM_Z)
+            created += 1
+
+        obj["res_x"] = int(frame.get("w", 1000))
+        obj["res_y"] = int(frame.get("h", 1000))
+        if "frame" not in obj:
+            obj["frame"] = 0
+        _multicam_fix_res_bounds(obj)
+
+    try:
+        bpy.ops.multicam.refresh()
+    except Exception:
+        pass
+
+    print("[multicam] {} creee(s), {} reprise(s), {} supprimee(s), "
+          "{} au total".format(created, len(kept), deleted, len(frames)))
+    for name in warnings:
+        print("[multicam] ATTENTION : le nom {} etait deja pris, "
+              "renommage possiblement suffixe en .001".format(name))
 
 
 class MULTICAM_OT_open_gaufrier(bpy.types.Operator):
