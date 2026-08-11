@@ -16,6 +16,8 @@ import json
 import math
 import os
 import re
+import subprocess
+import tempfile
 import webbrowser
 from mathutils import Matrix, Vector
 
@@ -59,9 +61,12 @@ D_RIGGED = "mixamo-rigged"
 FAMILIES = [
     ('ROBOT', "Robot", "Corps mecanique, membres tubulaires"),
     ('HUMAN', "Humanoide", "Corps habille, pas de tubes de liaison"),
+    ('ARCHI', "Architecture", "Elements de batiment : portes, fenetres, toitures"),
+    ('URBAN', "Urbain", "Mobilier de rue, vegetation, sol"),
 ]
 
-FAMILY_DIR = {'ROBOT': "robot", 'HUMAN': "human"}
+FAMILY_DIR = {'ROBOT': "robot", 'HUMAN': "human",
+              'ARCHI': "archi", 'URBAN': "urban"}
 
 CATEGORIES = {
     'ROBOT': [
@@ -87,10 +92,46 @@ CATEGORIES = {
         ('ACC', "Accessoire", "Lunettes, cravate, sac, outil"),
         ('OTHER', "Autre", "Non classe"),
     ],
+    'ARCHI': [
+        ('DOOR', "Porte", "Porte, portail, entree d'immeuble"),
+        ('WINDOW', "Fenetre", "Fenetre, vitrine, lucarne"),
+        ('ROOF', "Toiture", "Pan de toit, tuiles, faitage"),
+        ('GUTTER', "Gouttiere", "Gouttiere, descente, cheneau"),
+        ('WALL', "Mur", "Pan de mur, module de facade"),
+        ('BALCONY', "Balcon", "Balcon, garde-corps, corniche"),
+        ('SHOP', "Devanture", "Vitrine de commerce, enseigne, store"),
+        ('CHIMNEY', "Cheminee", "Souche, conduit, ventilation de toit"),
+        ('OTHER', "Autre", "Non classe"),
+    ],
+    'URBAN': [
+        ('LAMP', "Lampadaire", "Eclairage public, applique murale"),
+        ('POLE', "Poteau", "Poteau electrique, support de cable"),
+        ('SIDEWALK', "Trottoir", "Bordure, dalle, caniveau"),
+        ('GROUND', "Sol", "Pave, enrobe, revetement de rue"),
+        ('FURNITURE', "Mobilier", "Banc, borne, panneau, boite aux lettres"),
+        ('VEGETAL', "Vegetation", "Arbre, haie, jardiniere"),
+        ('OTHER', "Autre", "Non classe"),
+    ],
 }
 
 # Categories partagees : le meme chapeau sert a un robot comme a un humanoide
 SHARED_CATEGORIES = {'HAT', 'HAIR', 'ACC'}
+
+# Metadonnees d'assets : ce sur quoi Building-maker fera ses tirages
+K_ERA = "asset_era"
+K_STYLE = "asset_style"
+
+ERAS = [
+    ('ANY', "Intemporel", "Utilisable a toutes les epoques"),
+    ('MEDIEVAL', "Medieval", ""),
+    ('CLASSIQUE', "XVIIe - XVIIIe", ""),
+    ('XIX', "XIXe", ""),
+    ('1900', "1900 - 1930", ""),
+    ('1930', "1930 - 1960", ""),
+    ('1960', "1960 - 1990", ""),
+    ('MODERNE', "Contemporain", ""),
+    ('FUTUR', "Futuriste", ""),
+]
 
 CAT_DIRS = {
     'ROBOT': {'BODY': "body", 'HEAD': "head", 'HAND': "hands",
@@ -100,6 +141,12 @@ CAT_DIRS = {
               'HAND': "hands", 'FOOT': "feet", 'HEAD': "head",
               'OTHER': "other",
               'HAIR': "hair", 'HAT': "hats", 'ACC': "accessories"},
+    'ARCHI': {'DOOR': "doors", 'WINDOW': "windows", 'ROOF': "roofs",
+              'GUTTER': "gutters", 'WALL': "walls", 'BALCONY': "balconies",
+              'SHOP': "shopfronts", 'CHIMNEY': "chimneys", 'OTHER': "other"},
+    'URBAN': {'LAMP': "lamps", 'POLE': "poles", 'SIDEWALK': "sidewalks",
+              'GROUND': "ground", 'FURNITURE': "furniture",
+              'VEGETAL': "vegetation", 'OTHER': "other"},
 }
 
 
@@ -364,11 +411,22 @@ def library_dir(context, category, create=False):
     return path
 
 
+_asset_meta = {}        # "categorie/nom" -> fiche JSON de l'asset
+
+def _style_search(self, context, edit_text):
+    """Styles deja presents en bibliotheque : evite qu'art-deco et artdeco
+    coexistent et cassent les tirages de Building-maker."""
+    seen = {str(m.get("style", "")).strip().lower()
+            for m in _asset_meta.values()}
+    seen.discard("")
+    return sorted(s for s in seen if edit_text.lower() in s)
+
 def scan_library(context):
-    """Relit la bibliotheque et recharge les vignettes."""
+    """Relit la bibliotheque, les vignettes et les fiches d'assets."""
     global _assets
 
     _assets = {}
+    _asset_meta.clear()
     if _asset_previews is not None:
         _asset_previews.clear()
 
@@ -387,6 +445,13 @@ def scan_library(context):
                 name = fname[:-6]
                 path = os.path.join(folder, fname)
                 items.append((name, path))
+
+                try:
+                    with open(os.path.join(folder, name + ".json"), "r",
+                              encoding="utf-8") as fh:
+                        _asset_meta[cat + "/" + name] = json.load(fh)
+                except Exception:
+                    pass
 
                 thumb = os.path.join(folder, name + ".png")
                 if _asset_previews is not None and os.path.isfile(thumb):
@@ -410,7 +475,18 @@ def asset_enum(self, context):
     scene = context.scene if context else None
     cat = scene.rm_category if scene else 'BODY'
 
+    era = scene.rm_filter_era if scene else 'ALL'
+    style = (scene.rm_filter_style.strip().lower() if scene else "")
+
     for i, (name, path) in enumerate(_assets.get(cat, [])):
+        meta = _asset_meta.get(cat + "/" + name, {})
+
+        # 'ANY' = intemporel : un asset intemporel passe tous les filtres
+        if era != 'ALL' and meta.get("era", 'ANY') not in (era, 'ANY'):
+            continue
+        if style and style not in str(meta.get("style", "")).lower():
+            continue
+
         icon = 0
         if _asset_previews is not None:
             prev = _asset_previews.get(cat + "/" + name)
@@ -525,11 +601,48 @@ def _deferred_scan():
     return None        # ne se replanifie pas
 
 
-def _credit_index(context):
+class RM_CreditFolder(bpy.types.PropertyGroup):
+    path: bpy.props.StringProperty(
+        name="Dossier", subtype='DIR_PATH', default="",
+        description="Parcouru recursivement a la recherche de .blend")
+
+
+class RM_UL_credit_folders(bpy.types.UIList):
+    def draw_item(self, context, layout, data, item, icon, active_data,
+                  active_propname, index):
+        layout.prop(item, "path", text="")
+
+
+class RM_OT_credit_folder_add(bpy.types.Operator):
+    bl_idname = "rm.credit_folder_add"
+    bl_label = "Ajouter un dossier"
+    bl_description = "Ajoute une ligne a la liste des dossiers a parcourir"
+
+    def execute(self, context):
+        scene = context.scene
+        scene.rm_credit_folders.add()
+        scene.rm_credit_folder_index = len(scene.rm_credit_folders) - 1
+        return {'FINISHED'}
+
+
+class RM_OT_credit_folder_remove(bpy.types.Operator):
+    bl_idname = "rm.credit_folder_remove"
+    bl_label = "Retirer le dossier"
+    bl_description = "Retire le dossier selectionne de la liste"
+
+    def execute(self, context):
+        scene = context.scene
+        i = scene.rm_credit_folder_index
+        if 0 <= i < len(scene.rm_credit_folders):
+            scene.rm_credit_folders.remove(i)
+            scene.rm_credit_folder_index = max(0, i - 1)
+        return {'FINISHED'}
+
+
+def _credit_index(root):
     """Fiches JSON de la bibliotheque, indexees par nom d'asset. C'est le
     rattrapage des objets importes avant l'ajout des cles de credit."""
     index = {}
-    root = root_path(context)
     if not root:
         return index
 
@@ -595,6 +708,55 @@ def _scan_blend_credits(path, index, found, unknown):
             pass
 
 
+def _build_credits(list_path, out_path, root):
+    """Coeur du generateur. Aucune dependance a l'interface : c'est ce qui
+    permet de l'executer dans un Blender en arriere-plan."""
+    folders = []
+    with open(list_path, "r", encoding="utf-8") as fh:
+        for line in fh:
+            line = line.strip()
+            if line and not line.startswith("#"):
+                folders.append(line if os.path.isabs(line)
+                               else os.path.join(root, line))
+
+    index = _credit_index(root)
+    found, unknown, blends = {}, [], 0
+
+    for folder in folders:
+        if not os.path.isdir(folder):
+            unknown.append("dossier absent : " + folder)
+            continue
+        for cur, _dirs, files in os.walk(folder):
+            for f in sorted(files):
+                if not f.lower().endswith(".blend"):
+                    continue
+                path = os.path.join(cur, f)
+                print("[credits] scan", path, flush=True)
+                _scan_blend_credits(path, index, found, unknown)
+                blends += 1
+
+    lines = ["# Credits", ""]
+    for c in sorted(found.values(), key=lambda d: (d["author"].lower(),
+                                                   d["src_name"].lower())):
+        line = "- {} par {}".format(c["src_name"] or "(sans titre)",
+                                    c["author"] or "(auteur inconnu)")
+        if c["license"]:
+            line += " - " + c["license"]
+        if c["url"]:
+            line += " - " + c["url"]
+        lines.append(line)
+
+    if unknown:
+        lines += ["", "# A verifier (aucune origine trouvee)", ""]
+        lines += ["- " + u for u in unknown[:300]]
+
+    os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
+    with open(out_path, "w", encoding="utf-8") as fh:
+        fh.write("\n".join(lines) + "\n")
+
+    return len(found), blends, len(unknown)
+
+
 class RM_OT_build_credits(bpy.types.Operator):
     bl_idname = "rm.build_credits"
     bl_label = "Generer les credits"
@@ -622,17 +784,62 @@ class RM_OT_build_credits(bpy.types.Operator):
 
     def execute(self, context):
         scene = context.scene
-        list_path = bpy.path.abspath(scene.rm_credits_list)
         out_path = bpy.path.abspath(scene.rm_credits_out)
 
-        if not os.path.isfile(list_path):
-            self.report({'ERROR'}, "Liste de dossiers introuvable")
+        folders = [bpy.path.abspath(f.path).strip()
+                   for f in scene.rm_credit_folders if f.path.strip()]
+        if not folders:
+            self.report({'ERROR'}, "Aucun dossier dans la liste")
             return {'CANCELLED'}
         if not out_path:
             self.report({'ERROR'}, "Fichier de sortie non defini")
             return {'CANCELLED'}
 
+        # Le sous-processus lit une liste sur disque : _build_credits reste
+        # inchange, et la commande ne depend pas du nombre de dossiers
+        fd, list_path = tempfile.mkstemp(suffix=".txt", text=True)
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write("\n".join(folders))
+
         root = root_path(context) or ""
+
+        # Blender separe : le scan tourne dans un autre processus, ton fichier
+        # courant n'est jamais touche et rien ne peut y etre sauvegarde
+        try:
+            proc = subprocess.run(
+                [bpy.app.binary_path, "--background", "--factory-startup",
+                 "--python", os.path.abspath(__file__), "--",
+                 list_path, out_path, root],
+                capture_output=True, text=True, timeout=1800)
+        except Exception as e:
+            self.report({'ERROR'}, "Lancement impossible : {}".format(e))
+            return {'CANCELLED'}
+
+        try:
+            os.remove(list_path)
+        except Exception:
+            pass
+
+        result = ""
+        for line in (proc.stdout or "").splitlines():
+            if line.startswith("[credits] RESULT"):
+                result = line.split(None, 2)[2]
+
+        if not result:
+            print(proc.stdout)
+            print(proc.stderr)
+            self.report({'ERROR'},
+                        "Scan echoue : details dans la console systeme")
+            return {'CANCELLED'}
+
+        n, b, u = result.split()
+        self.report({'INFO'},
+                    "{} credit(s), {} fichier(s), {} a verifier".format(n, b, u))
+        return {'FINISHED'}
+
+
+class _RM_dead_code:
+    def _ancien_execute(self, context):
         folders = []
         try:
             with open(list_path, "r", encoding="utf-8") as fh:
@@ -757,12 +964,16 @@ class RM_OT_add_to_library(bpy.types.Operator):
         # reviennent avec lui a chaque import, sans fichier annexe a suivre
         credit = {
             "asset": name,
+            "era": scene.rm_era,
+            "style": scene.rm_style.strip().lower(),
             "original": bool(scene.rm_src_original),
             "src_name": "" if scene.rm_src_original else src_name,
             "author": "David" if scene.rm_src_original else src_author,
             "license": "" if scene.rm_src_original else scene.rm_src_license,
             "url": "" if scene.rm_src_original else scene.rm_src_url.strip(),
         }
+        tmp[K_ERA] = credit["era"]
+        tmp[K_STYLE] = credit["style"]
         tmp[K_SRC_ORIGINAL] = credit["original"]
         tmp[K_SRC_NAME] = credit["src_name"]
         tmp[K_SRC_AUTHOR] = credit["author"]
@@ -1059,12 +1270,28 @@ def resolve_target(context):
 
 
 def filtered_assets(scene):
-    """Assets de la categorie courante, filtres par la recherche."""
+    """Assets de la categorie courante, filtres par recherche, epoque, style."""
     items = _assets.get(scene.rm_category, [])
+
     query = scene.rm_asset_search.strip().lower()
     if query:
         items = [(n, p) for n, p in items if query in n.lower()]
-    return items
+
+    era = scene.rm_filter_era
+    style = scene.rm_filter_style.strip().lower()
+    if era == 'ALL' and not style:
+        return items
+
+    out = []
+    for n, p in items:
+        meta = _asset_meta.get(scene.rm_category + "/" + n, {})
+        # 'ANY' = intemporel : passe tous les filtres d'epoque
+        if era != 'ALL' and meta.get("era", 'ANY') not in (era, 'ANY'):
+            continue
+        if style and style not in str(meta.get("style", "")).lower():
+            continue
+        out.append((n, p))
+    return out
 
 
 def page_count(scene, total):
@@ -3086,6 +3313,11 @@ class RM_PT_panel(bpy.types.Panel):
             if all_count > scene.rm_asset_per_page or scene.rm_asset_search:
                 box.prop(scene, "rm_asset_search", text="", icon='VIEWZOOM')
 
+            if scene.rm_family in ('ARCHI', 'URBAN'):
+                f = box.row(align=True)
+                f.prop(scene, "rm_filter_era", text="")
+                f.prop(scene, "rm_filter_style", text="", icon='FILTER')
+
             if assets:
                 # Vignettes si au moins une existe, sinon liste deroulante :
                 # une grille d'icones vide serait inutilisable
@@ -3194,6 +3426,10 @@ class RM_PT_panel(bpy.types.Panel):
         col.prop(scene, "rm_thumb_size")
 
         # --- Credits (politique Sketchfab) ---
+        meta = col.box()
+        meta.prop(scene, "rm_era")
+        meta.prop(scene, "rm_style")
+
         cred = col.box()
         cred.prop(scene, "rm_src_original")
         if not scene.rm_src_original:
@@ -3208,21 +3444,20 @@ class RM_PT_panel(bpy.types.Panel):
         # --- Credits ---
         box = layout.box()
         box.label(text="Credits", icon='TEXT')
-        box.prop(scene, "rm_credits_list")
+        box.label(text="Dossiers a parcourir :")
+        r = box.row()
+        r.template_list("RM_UL_credit_folders", "", scene, "rm_credit_folders",
+                        scene, "rm_credit_folder_index", rows=3)
+        c = r.column(align=True)
+        c.operator("rm.credit_folder_add", text="", icon='ADD')
+        c.operator("rm.credit_folder_remove", text="", icon='REMOVE')
+
         box.prop(scene, "rm_credits_out")
 
         # alert = True : Blender dessine la colonne en rouge
-        warn = box.column(align=True)
-        warn.alert = True
-        warn.label(text="A lire avant de generer :", icon='ERROR')
-        warn.label(text="Le scan lie chaque .blend dans le")
-        warn.label(text="fichier courant, puis le detache.")
-        warn.label(text="Travailler dans une scene vide,")
-        warn.label(text="jamais dans un decor en cours.")
-        warn.label(text="Ne pas sauvegarder juste apres.")
-        warn.label(text="Blender se fige pendant le scan :")
-        warn.label(text="environ 1 s par .blend, sans")
-        warn.label(text="barre de progression.")
+        note = box.row()
+        note.scale_y = 0.7
+        note.label(text="Scan en arriere-plan, ~1 s par .blend", icon='INFO')
 
         box.operator("rm.build_credits", icon='FILE_TEXT')
 
@@ -3449,6 +3684,10 @@ class RM_PT_panel(bpy.types.Panel):
 # Enregistrement
 # ---------------------------------------------------------------------------
 classes = (
+    RM_CreditFolder,
+    RM_UL_credit_folders,
+    RM_OT_credit_folder_add,
+    RM_OT_credit_folder_remove,
     RM_Preferences,
     RM_OT_init_folders,
     RM_OT_open_folder,
@@ -3579,10 +3818,19 @@ def register():
         name="URL", default="",
         description="Lien vers la page du modele, exige par les licences CC")
 
-    S.rm_credits_list = bpy.props.StringProperty(
-        name="Liste de dossiers", subtype='FILE_PATH', default="",
-        description=("Fichier texte, un dossier par ligne. Chemin relatif a la "
-                     "racine ROBOTS ou absolu. Les lignes # sont ignorees"))
+    S.rm_era = bpy.props.EnumProperty(name="Epoque", items=ERAS, default='ANY')
+    S.rm_style = bpy.props.StringProperty(
+        name="Style", default="", search=_style_search,
+        description="Haussmannien, art-deco, industriel... liste libre")
+    S.rm_filter_era = bpy.props.EnumProperty(
+        name="Filtre epoque",
+        items=[('ALL', "Toutes epoques", "")] + ERAS, default='ALL')
+    S.rm_filter_style = bpy.props.StringProperty(
+        name="Filtre style", default="", search=_style_search,
+        options={'TEXTEDIT_UPDATE'})
+
+    S.rm_credit_folders = bpy.props.CollectionProperty(type=RM_CreditFolder)
+    S.rm_credit_folder_index = bpy.props.IntProperty(default=0)
     S.rm_credits_out = bpy.props.StringProperty(
         name="Fichier de credits", subtype='FILE_PATH', default="//credits.md")
 
@@ -3681,7 +3929,9 @@ def unregister():
     S = bpy.types.Scene
     for prop in ("rm_mirror", "rm_mirror_axis", "rm_asset_edit", "rm_asset_search", "rm_asset_page", "rm_asset_per_page",
                  "rm_asset_columns", "rm_thumb_size", "rm_asset", "rm_asset_name", "rm_asset_overwrite",
-                 "rm_asset_freeze", "rm_credits_list", "rm_credits_out",
+                 "rm_asset_freeze", "rm_era", "rm_style",
+                 "rm_filter_era", "rm_filter_style", "rm_credit_folders",
+                 "rm_credit_folder_index", "rm_credits_out",
                  "rm_src_name", "rm_src_author",
                  "rm_src_license", "rm_src_url", "rm_src_original",
                  "rm_target_socket",
@@ -3699,4 +3949,22 @@ def unregister():
 
 
 if __name__ == "__main__":
-    register()
+    import sys
+    import traceback
+
+    # Lance par RM_OT_build_credits :
+    #   blender --background --factory-startup --python <ce fichier> --
+    #           <liste> <sortie> <racine>
+    argv = sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else []
+
+    if len(argv) == 3:
+        # Mode scan : pas d'addon a enregistrer, seules les fonctions servent
+        try:
+            n, b, u = _build_credits(argv[0], argv[1], argv[2])
+            print("[credits] RESULT {} {} {}".format(n, b, u), flush=True)
+        except Exception as e:
+            print("[credits] ERREUR", e, flush=True)
+            traceback.print_exc()
+    else:
+        # Fichier lance depuis l'editeur de texte de Blender
+        register()
