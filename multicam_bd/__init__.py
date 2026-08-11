@@ -733,6 +733,8 @@ class MULTICAM_OT_place(bpy.types.Operator):
         # Vue de dessus (pave numerique 7). view_axis sort de la vue camera
         # tout seul : contrairement a view_camera, ce n'est pas un toggle,
         # donc pas besoin de tester l'etat courant.
+        target = cam.matrix_world.translation.copy()
+
         for window in context.window_manager.windows:
             for area in window.screen.areas:
                 if area.type != 'VIEW_3D':
@@ -743,6 +745,12 @@ class MULTICAM_OT_place(bpy.types.Operator):
                                                    region=region):
                             bpy.ops.view3d.view_axis(type='TOP')
                         break
+
+                # view_axis ne change que l'orientation : le pivot reste ou il
+                # etait. On le pose sur la camera pour arriver juste au-dessus.
+                rv3d = area.spaces.active.region_3d
+                if rv3d is not None:
+                    rv3d.view_location = target
                 break
 
         return {'FINISHED'}
@@ -1700,6 +1708,7 @@ class MULTICAM_PT_panel(bpy.types.Panel):
         hcols.label(text="Hauteur")
         hcols.label(text="Frame")
         hcols.label(text="", icon='BLANK1')           # colonne du bouton preview
+        hcols.label(text="", icon='BLANK1')           # colonne du bouton placer           # colonne du bouton preview
 
         layout.template_list(
             "MULTICAM_UL_cameras", "",
