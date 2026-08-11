@@ -744,6 +744,9 @@
 
         <div class="field" style="margin-top:10px;">
           <label style="display:flex; align-items:center; gap:6px; font-size:0.8rem; color: var(--text);">
+            <label style="display:flex;align-items:center;gap:6px">
+              <input type="checkbox" id="editGuides" checked onchange="render()" style="width:auto">
+              Poignees d'edition</label>
             <input type="checkbox" id="showImages" checked style="width:auto;" onchange="render()">
             Afficher les rendus dans l'apercu
           </label>
@@ -1558,14 +1561,32 @@ function pointsAttr(corners) {
 // ---------------------------------------------------------------------------
 // Construction de la liste de rangees (UI)
 // ---------------------------------------------------------------------------
+function balanceRows() {
+  const num = id => parseFloat(document.getElementById(id).value) || 0;
+  const zoneH = num('pageH') - num('marginTop') - num('marginBottom');
+  const gutters = Math.max(0, rows.length - 1) * num('gutter');
+
+  const each = (zoneH - gutters) / rows.length;
+  if (each <= 0) return;
+
+  // Le dernier absorbe l'arrondi : la somme colle exactement au cadre
+  rows.forEach((r, i) => {
+    r.h = (i === rows.length - 1)
+      ? Math.round(zoneH - gutters - Math.round(each) * (rows.length - 1))
+      : Math.round(each);
+  });
+}
+
 function addRow() {
   rows.push({ h: 500, n: 1, ratios: "", colSkews: "" });
+  balanceRows();
   renderRows();
   render();
 }
 
 function removeRow(i) {
   rows.splice(i, 1);
+  balanceRows();
   renderRows();
   render();
 }
@@ -1774,6 +1795,30 @@ function computeLayoutFromConfig(cfg) {
     return skew * (y - p.rowTop) / (p.rowH || 1);
   }
 
+  // --- Lignes medianes des gouttieres, pour l'edition a la souris ---
+  const guides = [];
+  const byRow = [];
+  panels.forEach(p => { (byRow[p.rowIndex] = byRow[p.rowIndex] || []).push(p); });
+
+  byRow.forEach((list, i) => {
+    if (!list || !list.length) return;
+    const rowTop = list[0].rowTop, rowH = list[0].rowH;
+
+    if (i < nRows - 1) {
+      const y = rowTop + rowH + gutterPx / 2;
+      guides.push({ kind: 'row', index: i,
+                    x1: marginLeftPx, y1: y,
+                    x2: marginLeftPx + zoneWPx, y2: y + (rowGutterSkews[i] || 0) });
+    }
+
+    for (let j = 0; j < list.length - 1; j++) {
+      const x = list[j].x + list[j].w + gutterPx / 2;
+      guides.push({ kind: 'col', row: i, index: j,
+                    x1: x, y1: rowTop,
+                    x2: x + (list[0].colSkews[j] || 0), y2: rowTop + rowH });
+    }
+  });
+
   panels.forEach(p => {
     const top = p.y;
     const bottom = p.y + p.h;
@@ -1829,6 +1874,115 @@ function scheduleConfigSave() {
   cfgTimer = setTimeout(() => {
     saveConfig().catch(() => {});
   }, 800);
+}
+
+// ---------------------------------------------------------------------------
+// Edition des gouttieres a la souris
+// Poignee centrale : position de la gouttiere. Poignees d'extremite :
+// inclinaison. Les valeurs restent celles des champs texte.
+// ---------------------------------------------------------------------------
+function fromPx(px, unit, dpi) {
+  if (unit === 'mm') return px / dpi * 25.4;
+  if (unit === 'cm') return px / dpi * 2.54;
+  if (unit === 'in') return px / dpi;
+  return px;
+}
+
+function setSkew(list, index, value) {
+  const vals = (list || '').split(',').map(s => parseFloat(s.trim()));
+  while (vals.length <= index) vals.push(0);
+  vals[index] = Math.round(value);
+  return vals.map(v => isNaN(v) ? 0 : v).join(',');
+}
+
+function startGuideDrag(ev, g, role) {
+  if (!g) return;
+  ev.preventDefault();
+  ev.stopPropagation();
+
+  const svg = document.getElementById('preview-svg');
+  const unit = document.getElementById('unit').value;
+  const dpi = parseFloat(document.getElementById('dpi').value) || 300;
+
+  const start = { ...g };
+  const rowsCopy = JSON.parse(JSON.stringify(rows));
+  const skewStart = document.getElementById('rowGutterSkews').value;
+
+  const toLocal = e => {
+    const ctm = svg.getScreenCTM();
+    if (!ctm) return null;
+    const pt = svg.createSVGPoint();
+    pt.x = e.clientX; pt.y = e.clientY;
+    return pt.matrixTransform(ctm.inverse());
+  };
+
+  const origin = toLocal(ev);
+  if (!origin) return;
+
+  const move = e => {
+    const p = toLocal(e);
+    if (!p) return;
+
+    const dx = p.x - origin.x;
+    const dy = p.y - origin.y;
+
+    if (g.kind === 'row') {
+      if (role === 'move') {
+        // La gouttiere se deplace : ce que gagne une rangee, l'autre le perd
+        const d = fromPx(dy, unit, dpi);
+        const a = rowsCopy[g.index].h + d;
+        const b = rowsCopy[g.index + 1].h - d;
+        if (a < 20 || b < 20) return;
+        rows[g.index].h = Math.round(a);
+        rows[g.index + 1].h = Math.round(b);
+        renderRows();
+      } else {
+        const delta = (role === 'b') ? dy : -dy;
+        document.getElementById('rowGutterSkews').value =
+          setSkew(skewStart, g.index, (parseSkewAt(skewStart, g.index)) + delta);
+      }
+    } else {
+      const row = rows[g.row];
+      if (role === 'move') {
+        // Report de largeur entre les deux cases voisines
+        const widths = currentWidths(g.row);
+        const total = widths.reduce((s, w) => s + w, 0) || 1;
+        const a = widths[g.index] + dx;
+        const b = widths[g.index + 1] - dx;
+        if (a < 30 || b < 30) return;
+        widths[g.index] = a;
+        widths[g.index + 1] = b;
+        row.ratios = widths.map(w => (w / total * 100).toFixed(2)).join(',');
+        renderRows();
+      } else {
+        const delta = (role === 'b') ? dx : -dx;
+        row.colSkews = setSkew(rowsCopy[g.row].colSkews, g.index,
+                               parseSkewAt(rowsCopy[g.row].colSkews, g.index) + delta);
+        renderRows();
+      }
+    }
+
+    render();
+  };
+
+  const up = () => {
+    window.removeEventListener('pointermove', move);
+    window.removeEventListener('pointerup', up);
+  };
+
+  window.addEventListener('pointermove', move);
+  window.addEventListener('pointerup', up);
+}
+
+function parseSkewAt(str, index) {
+  const v = parseFloat((str || '').split(',')[index]);
+  return isNaN(v) ? 0 : v;
+}
+
+// Largeurs actuelles des cases d'une rangee, en pixels
+function currentWidths(rowIndex) {
+  const L = computeLayout();
+  return L.panels.filter(p => p.rowIndex === rowIndex).map(p => p.w);
 }
 
 function render() {
@@ -1901,7 +2055,40 @@ function render() {
     + '" width="' + fmt(zoneWPx) + '" height="' + fmt(zoneHPx)
     + '" style="stroke-width:' + fmt(marginStroke, 1) + '" />';
 
+  // --- Poignees des gouttieres ---
+  const showGuides = document.getElementById('editGuides')
+                  && document.getElementById('editGuides').checked;
+
+  if (showGuides) {
+    const r = Math.max(pageWPx / 90, 26);
+    const sw = Math.max(pageWPx / 700, 3);
+
+    (guides || []).forEach((g, gi) => {
+      const mx = (g.x1 + g.x2) / 2, my = (g.y1 + g.y2) / 2;
+
+      svgContent += '<line class="guide-line" x1="' + fmt(g.x1) + '" y1="' + fmt(g.y1)
+        + '" x2="' + fmt(g.x2) + '" y2="' + fmt(g.y2)
+        + '" stroke="#e0923d" stroke-opacity="0.55" stroke-dasharray="'
+        + fmt(r) + ' ' + fmt(r) + '" style="stroke-width:' + fmt(sw, 1) + '" />';
+
+      const dot = (cx, cy, role) =>
+        '<circle class="guide-dot" data-g="' + gi + '" data-role="' + role + '"'
+        + ' cx="' + fmt(cx) + '" cy="' + fmt(cy) + '" r="' + fmt(role === 'move' ? r : r * 0.78) + '"'
+        + ' fill="' + (role === 'move' ? '#e0923d' : '#ffffff') + '"'
+        + ' stroke="#e0923d" style="stroke-width:' + fmt(sw, 1) + ';cursor:move" />';
+
+      svgContent += dot(mx, my, 'move') + dot(g.x1, g.y1, 'a') + dot(g.x2, g.y2, 'b');
+    });
+  }
+
   svg.innerHTML = svgContent;
+
+  if (showGuides) {
+    svg.querySelectorAll('.guide-dot').forEach(el => {
+      el.addEventListener('pointerdown', ev =>
+        startGuideDrag(ev, guides[+el.dataset.g], el.dataset.role));
+    });
+  }
 
   // --- Statut des rendus charges ---
   updateExportName();
