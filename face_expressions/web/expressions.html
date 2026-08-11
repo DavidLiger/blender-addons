@@ -2483,7 +2483,10 @@ async function applyContext(c) {
   CTX.zone = c.zone || CTX.zone;
   CTX.sheet = c.sheet || CTX.sheet;
   CTX.expr = c.expr || '';
-  CTX.head = c.head || CTX.head || '';
+  // Distinguer "non fourni" de "explicitement vide" : switchRobot envoie une
+  // chaine vide pour dire que la couleur ne vient plus de Blender. Avec ||,
+  // celle du personnage precedent survivait au changement.
+  CTX.head = (c.head !== undefined) ? c.head : (CTX.head || '');
 
   if (CTX.zone === 'eyes' || CTX.zone === 'mouth') {
     $('partMode').value = CTX.zone;
@@ -2500,7 +2503,7 @@ async function applyContext(c) {
   await loadOverrides();
   await loadExtras();
   await loadRemoved();
-  rebuildExpressions();await loadExtras();
+  rebuildExpressions();
 
   // La couleur de la tete vient du materiau Blender : elle prime sur le style
   if (CTX.head) $('lidColor').value = CTX.head;
