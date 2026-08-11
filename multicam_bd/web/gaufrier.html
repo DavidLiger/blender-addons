@@ -156,13 +156,24 @@
     top: -12px;
     z-index: 5;
     background: var(--panel);
-    padding: 12px 0 10px;
-    margin: -12px 0 10px;
+    /* Deborde sur le padding de la colonne, sinon les cartes passent sur
+       les cotes ; le box-shadow bouche la bande du margin-bottom, ou une
+       carte apparaissait en defilant. */
+    padding: 12px 12px 10px;
+    margin: -12px -12px 10px;
+    box-shadow: 0 10px 0 var(--panel);
     border-bottom: 1px solid var(--border);
   }
 
-  .pages-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
-  .pages-actions .btn { margin: 0; }
+  .pages-actions { display: flex; flex-direction: column; gap: 6px; }
+  .pages-actions .btn {
+    margin: 0;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    text-align: left;
+  }
+  .pages-actions .btn svg { width: 15px; height: 15px; flex-shrink: 0; }
 
   .page-card {
     border: 1px solid var(--border);
@@ -807,12 +818,32 @@
     <div class="pages-head">
       <h3>Planches</h3>
       <div class="pages-actions">
-        <button class="btn btn-secondary" onclick="openNewPage(false)">+ Nouvelle</button>
-        <button class="btn btn-secondary" onclick="openNewPage(true)">Dupliquer</button>
-        <button class="btn btn-secondary" onclick="openTrash()"
-                style="border-color:#a33">Supprimer</button>
+        <button class="btn btn-secondary" onclick="openNewPage(false)">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"
+               stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+          Nouvelle planche
+        </button>
+
+        <button class="btn btn-secondary" onclick="openNewPage(true)">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"
+               stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="1"/>
+          <path d="M5 15V5a1 1 0 0 1 1-1h9"/></svg>
+          Dupliquer
+        </button>
+
+        <button class="btn btn-secondary" onclick="openTrash()" style="border-color:#a33">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"
+               stroke-linecap="round"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/></svg>
+          Supprimer
+        </button>
+
         <button class="btn btn-secondary" id="btn-export-all" style="display:none"
-                onclick="exportAllPlanches()">Exporter tout</button>
+                onclick="exportAllPlanches()">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"
+               stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v10"/>
+          <polyline points="7 10 12 15 17 10"/><path d="M4 18h16"/></svg>
+          Exporter tout
+        </button>
       </div>
     </div>
     <div id="pages-list"></div>
@@ -1626,6 +1657,9 @@ function setRendersStatus(text, cls) {
 (function initRenderFolderUI() {
   console.log('[gaufrier] SERVED =', SERVED, location.href);
 
+  // Avant le return du mode servi, sinon jamais atteint depuis Blender
+  restoreSections();
+
   // Servie par Multi-Cam BD : aucun dossier a designer
   if (SERVED) {
     document.getElementById('fsapi-supported').style.display = 'none';
@@ -1635,8 +1669,10 @@ function setRendersStatus(text, cls) {
     const wanted = PARAMS.get('page');
     if (wanted) localStorage.setItem('gaufrier_last_prefix', wanted);
 
+    // Indication de Blender, pas un ordre : on ne seme la valeur que si
+    // aucun choix n'a encore ete fait a la main pour cette planche
     const variant = PARAMS.get('variant');
-    if (variant && wanted) {
+    if (variant && wanted && !localStorage.getItem('gaufrier_variant_' + wanted)) {
       localStorage.setItem('gaufrier_variant_' + wanted, variant);
     }
 
@@ -1645,7 +1681,6 @@ function setRendersStatus(text, cls) {
     return;
   }
 
-  restoreSections();
   document.getElementById('fsapi-supported').style.display = HAS_FS_API ? '' : 'none';
   document.getElementById('fsapi-fallback').style.display = HAS_FS_API ? 'none' : '';
 
@@ -2066,7 +2101,7 @@ function setSkew(list, index, value) {
 }
 
 function startGuideDrag(ev, g, role) {
-  if (!g) return;
+  if (!g || ev.button !== 0) return;   // le clic du milieu sert au deplacement
   ev.preventDefault();
   ev.stopPropagation();
 
@@ -2941,6 +2976,39 @@ let previewZoom = 1;
     wrap.scrollLeft = px * previewZoom - (ev.clientX - rect.left);
     wrap.scrollTop = py * previewZoom - (ev.clientY - rect.top);
   }, { passive: false });
+
+  // Clic du milieu : saisir la planche et la deplacer. Le defilement
+  // automatique natif va dans le sens inverse, on le neutralise.
+  wrap.addEventListener('pointerdown', ev => {
+    if (ev.button !== 1) return;
+    ev.preventDefault();
+
+    const start = { x: ev.clientX, y: ev.clientY,
+                    left: wrap.scrollLeft, top: wrap.scrollTop };
+    wrap.setPointerCapture(ev.pointerId);
+    wrap.style.cursor = 'grabbing';
+
+    const move = e => {
+      wrap.scrollLeft = start.left - (e.clientX - start.x);
+      wrap.scrollTop = start.top - (e.clientY - start.y);
+    };
+
+    const up = () => {
+      try { wrap.releasePointerCapture(ev.pointerId); } catch (err) {}
+      wrap.style.cursor = '';
+      wrap.removeEventListener('pointermove', move);
+      wrap.removeEventListener('pointerup', up);
+      wrap.removeEventListener('pointercancel', up);
+    };
+
+    wrap.addEventListener('pointermove', move);
+    wrap.addEventListener('pointerup', up);
+    wrap.addEventListener('pointercancel', up);
+  });
+
+  // pointerdown ne suffit pas a empecher le defilement automatique
+  wrap.addEventListener('mousedown', ev => { if (ev.button === 1) ev.preventDefault(); });
+  wrap.addEventListener('auxclick', ev => { if (ev.button === 1) ev.preventDefault(); });
 
   // Double-clic : retour a l'ajustement
   wrap.addEventListener('dblclick', () => {
