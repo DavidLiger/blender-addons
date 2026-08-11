@@ -1205,6 +1205,42 @@ class RM_OT_place_asset(bpy.types.Operator):
             self.report({'ERROR'}, "Fichier introuvable : relire la bibliotheque")
             return {'CANCELLED'}
 
+        # Architecture et mobilier urbain : ni repere, ni parentage, ni
+        # marquage robot. L'asset se pose au curseur 3D, tel quel.
+        if scene.rm_family in ('ARCHI', 'URBAN'):
+            try:
+                with bpy.data.libraries.load(path, link=False) as (src, dst):
+                    dst.objects = list(src.objects)
+            except Exception as e:
+                self.report({'ERROR'}, "Import impossible : {}".format(e))
+                return {'CANCELLED'}
+
+            coll = context.collection
+            created = []
+            for obj in dst.objects:
+                if obj is None:
+                    continue
+                if obj.type in {'CAMERA', 'LIGHT'}:
+                    bpy.data.objects.remove(obj)
+                    continue
+                coll.objects.link(obj)
+                # Addition plutot qu'affectation : les decalages internes
+                # d'un asset en plusieurs morceaux sont preserves
+                obj.location = obj.location + scene.cursor.location
+                created.append(obj)
+
+            try:
+                bpy.ops.object.select_all(action='DESELECT')
+                for obj in created:
+                    obj.select_set(True)
+                if created:
+                    context.view_layer.objects.active = created[0]
+            except Exception:
+                pass
+
+            self.report({'INFO'}, "{} objet(s) importe(s)".format(len(created)))
+            return {'FINISHED'}
+
         empty = resolve_target(context)
         if empty is None:
             self.report({'ERROR'}, "Aucun repere : creer le squelette")
@@ -3261,7 +3297,8 @@ class RM_PT_panel(bpy.types.Panel):
         row.operator("rm.show_names", text="",
                      icon='HIDE_OFF' if scene.rm_show_names else 'HIDE_ON')
 
-        has_skel = slot_empty(coll, 'chest') is not None
+        has_skel = (slot_empty(coll, 'chest') is not None
+                    or scene.rm_family in ('ARCHI', 'URBAN'))
 
         if not has_skel:
             box.operator("rm.build_skeleton", icon='ADD')
