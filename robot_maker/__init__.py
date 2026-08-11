@@ -605,6 +605,21 @@ class RM_OT_build_credits(bpy.types.Operator):
                       "pas sauvegarder juste apres. Blender se fige pendant "
                       "toute la duree du scan")
 
+    def invoke(self, context, event):
+        wm = context.window_manager
+        # Le message personnalise n'existe que depuis Blender 4.1 ; sur 4.0
+        # on retombe sur la confirmation simple, qui affiche le bl_label
+        try:
+            return wm.invoke_confirm(
+                self, event,
+                title="Generer les credits",
+                message=("Le scan lie chaque .blend dans le fichier courant. "
+                         "Scene vide conseillee, ne pas sauvegarder ensuite. "
+                         "Blender se fige pendant toute la duree."),
+                confirm_text="Lancer le scan")
+        except TypeError:
+            return wm.invoke_confirm(self, event)
+
     def execute(self, context):
         scene = context.scene
         list_path = bpy.path.abspath(scene.rm_credits_list)
