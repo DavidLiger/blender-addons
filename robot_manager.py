@@ -35,6 +35,10 @@ READY_FILE = "ready.blend"
 
 COLL_PREFIX = "ROBOT_"
 K_ROBOT = "robot"
+K_ASSET = "rbm_asset"  # marque les materiaux/images importes par l'addon,
+                       # pour ne jamais fusionner avec un datablock etranger
+                       # qui porterait le meme nom generique par coincidence
+                       # (ex: "Image_0" par defaut de Blender)
 
 _previews = None
 _robots = []        # [(nom, dossier)]
@@ -838,19 +842,45 @@ class RBM_OT_select_robot(bpy.types.Operator):
         return {'FINISHED'}
 
 
+def tag_asset_datablocks(coll):
+    """Marque les materiaux et images utilises par les objets de coll comme
+    provenant de l'addon, pour que merge_duplicates() ne les fusionne
+    qu'avec d'autres datablocks du meme type (et jamais avec un datablock
+    etranger au nom generique identique par coincidence, ex: "Image_0")."""
+    for obj in coll.objects:
+        for mat in (getattr(obj.data, "materials", None) or []):
+            if mat is None:
+                continue
+            mat[K_ASSET] = True
+            if not mat.use_nodes:
+                continue
+            for node in mat.node_tree.nodes:
+                if node.type == 'TEX_IMAGE' and node.image is not None:
+                    node.image[K_ASSET] = True
+
+
 def merge_duplicates():
     """Remappe les datablocks .001 sur leur original : un append recree
-    systematiquement ceux qui existent deja dans le fichier."""
+    systematiquement ceux qui existent deja dans le fichier.
+
+    Restreint aux datablocks marques K_ASSET (poses par tag_asset_datablocks
+    juste apres l'import) des deux cotes : on ne fusionne un doublon que
+    s'il remplace bien un asset importe par l'addon lors d'une instanciation
+    precedente, jamais un datablock etranger qui porterait le meme nom par
+    coincidence (ex: le "Image_0" par defaut de Blender)."""
     merged = 0
 
     for data in (bpy.data.materials, bpy.data.images):
         for item in list(data):
+            if not item.get(K_ASSET):
+                continue
+
             match = re.match(r"^(.*)\.\d{3}$", item.name)
             if not match:
                 continue
 
             base = data.get(match.group(1))
-            if base is None or base is item:
+            if base is None or base is item or not base.get(K_ASSET):
                 continue
 
             try:
@@ -966,6 +996,7 @@ class RBM_OT_instantiate(bpy.types.Operator):
                     context.view_layer.objects.active = rig
 
                 rename_to_robot(source, robot)
+                tag_asset_datablocks(source)
                 merge_duplicates()
                 self.report({'INFO'}, "{} instancie depuis {}".format(robot, READY_FILE))
                 return {'FINISHED'}
@@ -1016,6 +1047,7 @@ class RBM_OT_instantiate(bpy.types.Operator):
         armature.select_set(True)
         context.view_layer.objects.active = armature
 
+        tag_asset_datablocks(coll)
         merge_duplicates()
         msg = "{} importe dans {}".format(files[0], coll.name)
 
