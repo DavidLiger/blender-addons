@@ -46,131 +46,9 @@ K_SRC_LICENSE = "src_license"
 K_SRC_URL = "src_url"
 K_SRC_ORIGINAL = "src_original"  # creation maison : aucun credit a rendre
 
-SKETCHFAB_LICENSES = [
-    ('CC-BY-4.0', "CC BY 4.0", "Attribution"),
-    ('CC-BY-SA-4.0', "CC BY-SA 4.0", "Attribution, partage identique"),
-    ('CC-BY-ND-4.0', "CC BY-ND 4.0", "Attribution, sans modification"),
-    ('CC-BY-NC-4.0', "CC BY-NC 4.0", "Attribution, non commercial"),
-    ('CC-BY-NC-SA-4.0', "CC BY-NC-SA 4.0", "Non commercial, partage identique"),
-    ('CC-BY-NC-ND-4.0', "CC BY-NC-ND 4.0", "Non commercial, sans modification"),
-    ('CC0', "CC0 (domaine public)", "Aucune attribution requise"),
-    ('STANDARD', "Sketchfab Standard", "Licence payante du store"),
-    ('EDITORIAL', "Editorial", "Usage editorial uniquement"),
-]
 FACE_SLOTS = [('eyes', "Yeux"), ('mouth', "Bouche")]
 READY_FILE = "ready.blend"
 D_RIGGED = "mixamo-rigged"
-
-# Categories de pieces (l'ordre est celui du menu)
-FAMILIES = [
-    ('ROBOT', "Robot", "Corps mecanique, membres tubulaires"),
-    ('HUMAN', "Humanoide", "Corps habille, pas de tubes de liaison"),
-    ('ARCHI', "Architecture", "Elements de batiment : portes, fenetres, toitures"),
-    ('URBAN', "Urbain", "Mobilier de rue, vegetation, sol"),
-]
-
-FAMILY_DIR = {'ROBOT': "robot", 'HUMAN': "human",
-              'ARCHI': "archi", 'URBAN': "urban"}
-
-CATEGORIES = {
-    'ROBOT': [
-        ('BODY', "Corps", "Electromenager ou objet servant de torse"),
-        ('HEAD', "Tete", "Cylindre, cube, ecran..."),
-        ('HAND', "Main", "Gant facon cartoon"),
-        ('FOOT', "Chaussure", "Chaussure ou pied"),
-        ('HINGE', "Charniere", "Articulation : epaule, coude, hanche, genou, cheville"),
-        ('HAIR', "Cheveux", "Coiffure"),
-        ('HAT', "Chapeau", "Chapeau, casque, couvre-chef"),
-        ('ACC', "Accessoire", "Lunettes, cravate, sac, outil"),
-        ('OTHER', "Autre", "Non classe"),
-    ],
-    'HUMAN': [
-        ('TORSO', "Torse", "Buste, veste, chemise"),
-        ('ARMS', "Bras", "Manches, avant-bras"),
-        ('LEGS', "Jambes", "Pantalon, jupe"),
-        ('HAND', "Main", "Main ou gant"),
-        ('FOOT', "Chaussure", "Chaussure ou pied"),
-        ('HEAD', "Tete", "Visage, crane"),
-        ('HAIR', "Cheveux", "Coiffure"),
-        ('HAT', "Chapeau", "Chapeau, casque, couvre-chef"),
-        ('ACC', "Accessoire", "Lunettes, cravate, sac, outil"),
-        ('OTHER', "Autre", "Non classe"),
-    ],
-    'ARCHI': [
-        ('DOOR', "Porte", "Porte, portail, entree d'immeuble"),
-        ('WINDOW', "Fenetre", "Fenetre, vitrine, lucarne"),
-        ('ROOF', "Toiture", "Pan de toit, tuiles, faitage"),
-        ('GUTTER', "Gouttiere", "Gouttiere, descente, cheneau"),
-        ('WALL', "Mur", "Pan de mur, module de facade"),
-        ('BALCONY', "Balcon", "Balcon, garde-corps, corniche"),
-        ('SHOP', "Devanture", "Vitrine de commerce, enseigne, store"),
-        ('CHIMNEY', "Cheminee", "Souche, conduit, ventilation de toit"),
-        ('OTHER', "Autre", "Non classe"),
-    ],
-    'URBAN': [
-        ('LAMP', "Lampadaire", "Eclairage public, applique murale"),
-        ('POLE', "Poteau", "Poteau electrique, support de cable"),
-        ('SIDEWALK', "Trottoir", "Bordure, dalle, caniveau"),
-        ('GROUND', "Sol", "Pave, enrobe, revetement de rue"),
-        ('FURNITURE', "Mobilier", "Banc, borne, panneau, boite aux lettres"),
-        ('VEGETAL', "Vegetation", "Arbre, haie, jardiniere"),
-        ('OTHER', "Autre", "Non classe"),
-    ],
-}
-
-# Categories partagees : le meme chapeau sert a un robot comme a un humanoide
-SHARED_CATEGORIES = {'HAT', 'HAIR', 'ACC'}
-
-# Metadonnees d'assets : ce sur quoi Building-maker fera ses tirages
-K_ERA = "asset_era"
-K_STYLE = "asset_style"
-
-ERAS = [
-    ('ANY', "Intemporel", "Utilisable a toutes les epoques"),
-    ('MEDIEVAL', "Medieval", ""),
-    ('CLASSIQUE', "XVIIe - XVIIIe", ""),
-    ('XIX', "XIXe", ""),
-    ('1900', "1900 - 1930", ""),
-    ('1930', "1930 - 1960", ""),
-    ('1960', "1960 - 1990", ""),
-    ('MODERNE', "Contemporain", ""),
-    ('FUTUR', "Futuriste", ""),
-]
-
-CAT_DIRS = {
-    'ROBOT': {'BODY': "body", 'HEAD': "head", 'HAND': "hands",
-              'FOOT': "feet", 'HINGE': "joints", 'OTHER': "other",
-              'HAIR': "hair", 'HAT': "hats", 'ACC': "accessories"},
-    'HUMAN': {'TORSO': "torso", 'ARMS': "arms", 'LEGS': "legs",
-              'HAND': "hands", 'FOOT': "feet", 'HEAD': "head",
-              'OTHER': "other",
-              'HAIR': "hair", 'HAT': "hats", 'ACC': "accessories"},
-    'ARCHI': {'DOOR': "doors", 'WINDOW': "windows", 'ROOF': "roofs",
-              'GUTTER': "gutters", 'WALL': "walls", 'BALCONY': "balconies",
-              'SHOP': "shopfronts", 'CHIMNEY': "chimneys", 'OTHER': "other"},
-    'URBAN': {'LAMP': "lamps", 'POLE': "poles", 'SIDEWALK': "sidewalks",
-              'GROUND': "ground", 'FURNITURE': "furniture",
-              'VEGETAL': "vegetation", 'OTHER': "other"},
-}
-
-
-def family_categories(scene):
-    return CATEGORIES.get(scene.rm_family, CATEGORIES['ROBOT'])
-
-
-_cat_cache = {}
-
-
-def category_items(self, context):
-    """Les chaines doivent rester referencees cote Python : Blender ne les
-    copie pas et l'affichage se corrompt si elles sont liberees."""
-    scene = context.scene if context else None
-    family = scene.rm_family if scene else 'ROBOT'
-
-    if family not in _cat_cache:
-        _cat_cache[family] = [(c[0], c[1], c[2]) for c in CATEGORIES[family]]
-
-    return _cat_cache[family]
 
 # Noms proposes pour les points de connexion
 SOCKET_PRESETS = [
@@ -244,25 +122,6 @@ def deselect_all(context):
             pass
 
 
-# ---------------------------------------------------------------------------
-# Arborescence de travail
-#   <racine>/library/{body,head,hands,feet,joints,other}   pieces reutilisables
-#   <racine>/creations/<robot>/expressions                 un dossier par robot
-#   <racine>/expression-maker/expressions.html             generateur partage
-# Robot-Manager s'appuiera sur cette organisation pour lister les robots et
-# retrouver leurs expressions.
-# ---------------------------------------------------------------------------
-def library_tree(root):
-    """Tous les dossiers de la bibliotheque : un par categorie et par famille,
-    les categories partagees dans une branche commune."""
-    paths = []
-
-    for family, cats in CAT_DIRS.items():
-        for cat, sub in cats.items():
-            branch = "shared" if cat in SHARED_CATEGORIES else FAMILY_DIR.get(family)
-            paths.append(os.path.join(root, LIBRARY, branch, sub))
-
-    return sorted(set(paths))
 CREATIONS = "creations"
 LIBRARY = "library"
 EXPR_MAKER = "expression-maker"
@@ -297,7 +156,8 @@ class RM_Preferences(bpy.types.AddonPreferences):
 
     def _root_changed(self, context):
         try:
-            scan_library(context)
+            if al is not None:
+                al.scan(context)
         except Exception:
             pass
 
@@ -322,8 +182,7 @@ class RM_OT_init_folders(bpy.types.Operator):
             return {'CANCELLED'}
 
         try:
-            for path in library_tree(root):
-                os.makedirs(path, exist_ok=True)
+            os.makedirs(os.path.join(root, LIBRARY), exist_ok=True)
             os.makedirs(os.path.join(root, CREATIONS), exist_ok=True)
             os.makedirs(os.path.join(root, EXPR_MAKER), exist_ok=True)
         except Exception as e:
@@ -394,215 +253,6 @@ class RM_OT_open_expression_maker(bpy.types.Operator):
         target = os.path.join(robot_dir(context, context.scene.rm_robot), "expressions")
         self.report({'INFO'}, "Exporter vers : {}".format(target))
         return {'FINISHED'}
-
-
-_asset_previews = None
-_assets = {}            # categorie -> [(nom, chemin .blend)]
-
-
-
-def library_dir(context, category, create=False):
-    root = root_path(context)
-    if not root:
-        return ""
-
-    family = context.scene.rm_family
-    sub = CAT_DIRS.get(family, {}).get(category, "other")
-    branch = "shared" if category in SHARED_CATEGORIES else FAMILY_DIR.get(family, "robot")
-    path = os.path.join(root, LIBRARY, branch, sub)
-    if create:
-        os.makedirs(path, exist_ok=True)
-    return path
-
-
-_asset_meta = {}        # "categorie/nom" -> fiche JSON de l'asset
-
-def _style_search(self, context, edit_text):
-    """Styles deja presents en bibliotheque : evite qu'art-deco et artdeco
-    coexistent et cassent les tirages de Building-maker."""
-    seen = {str(m.get("style", "")).strip().lower()
-            for m in _asset_meta.values()}
-    seen.discard("")
-    return sorted(s for s in seen if edit_text.lower() in s)
-
-def scan_library(context):
-    """Relit la bibliotheque, les vignettes et les fiches d'assets."""
-    global _assets
-
-    _assets = {}
-    _asset_meta.clear()
-    if _asset_previews is not None:
-        _asset_previews.clear()
-
-    root = root_path(context)
-    if not root:
-        return 0
-
-    total = 0
-    for cat, _label, _desc in family_categories(context.scene):
-        folder = library_dir(context, cat)
-        items = []
-        if os.path.isdir(folder):
-            for fname in sorted(os.listdir(folder)):
-                if not fname.lower().endswith(".blend"):
-                    continue
-                name = fname[:-6]
-                path = os.path.join(folder, fname)
-                items.append((name, path))
-
-                try:
-                    with open(os.path.join(folder, name + ".json"), "r",
-                              encoding="utf-8") as fh:
-                        _asset_meta[cat + "/" + name] = json.load(fh)
-                except Exception:
-                    pass
-
-                thumb = os.path.join(folder, name + ".png")
-                if _asset_previews is not None and os.path.isfile(thumb):
-                    key = cat + "/" + name
-                    if key not in _asset_previews:
-                        _asset_previews.load(key, thumb, 'IMAGE')
-        _assets[cat] = items
-        total += len(items)
-
-    return total
-
-
-_asset_enum_cache = []
-
-
-def asset_enum(self, context):
-    """Assets de la categorie courante, avec vignette si disponible."""
-    global _asset_enum_cache
-    _asset_enum_cache = []
-
-    scene = context.scene if context else None
-    cat = scene.rm_category if scene else 'BODY'
-
-    era = scene.rm_filter_era if scene else 'ALL'
-    style = (scene.rm_filter_style.strip().lower() if scene else "")
-
-    for i, (name, path) in enumerate(_assets.get(cat, [])):
-        meta = _asset_meta.get(cat + "/" + name, {})
-
-        # 'ANY' = intemporel : un asset intemporel passe tous les filtres
-        if era != 'ALL' and meta.get("era", 'ANY') not in (era, 'ANY'):
-            continue
-        if style and style not in str(meta.get("style", "")).lower():
-            continue
-
-        icon = 0
-        if _asset_previews is not None:
-            prev = _asset_previews.get(cat + "/" + name)
-            if prev:
-                icon = prev.icon_id
-        _asset_enum_cache.append((name, name, path, icon, i))
-
-    if not _asset_enum_cache:
-        _asset_enum_cache = [('NONE', "(bibliotheque vide)", "", 0, 0)]
-
-    return _asset_enum_cache
-
-
-def _mesh_bounds_world(obj):
-    """Coins du volume, calcules sur les vertices : ne depend pas d'une
-    evaluation du depsgraph, contrairement a bound_box."""
-    mw = obj.matrix_world
-    verts = getattr(obj.data, "vertices", None)
-
-    if verts and len(verts):
-        pts = [mw @ v.co for v in verts]
-    else:
-        pts = [mw @ Vector(c) for c in obj.bound_box]
-
-    lo = Vector((min(p[i] for p in pts) for i in range(3)))
-    hi = Vector((max(p[i] for p in pts) for i in range(3)))
-    return lo, hi
-
-
-def _build_thumb_scene(obj, size):
-    """Scene temporaire contenant la piece et une camera qui la cadre."""
-    scn = bpy.data.scenes.new("_rm_thumb")
-    scn.render.engine = 'BLENDER_WORKBENCH'
-    scn.render.resolution_x = size
-    scn.render.resolution_y = size
-    scn.render.resolution_percentage = 100
-    scn.render.film_transparent = True
-    scn.render.image_settings.file_format = 'PNG'
-    scn.render.image_settings.color_mode = 'RGBA'
-
-    scn.collection.objects.link(obj)
-
-    # La piece doit etre visible dans cette scene, quels que soient ses
-    # reglages d'origine
-    obj.hide_viewport = False
-    obj.hide_render = False
-    obj.hide_set(False, view_layer=scn.view_layers[0])
-
-    lo, hi = _mesh_bounds_world(obj)
-    center = (lo + hi) / 2.0
-    extent = max(hi[i] - lo[i] for i in range(3)) or 1.0
-
-    cam_data = bpy.data.cameras.new("_rm_thumb_cam")
-    cam_data.type = 'ORTHO'
-    cam_data.ortho_scale = extent * 1.6
-    cam_data.clip_start = 0.001
-    cam_data.clip_end = extent * 20.0
-
-    cam = bpy.data.objects.new("_rm_thumb_cam", cam_data)
-    scn.collection.objects.link(cam)
-    scn.camera = cam
-
-    direction = Vector((1.0, -1.2, 0.7)).normalized()
-    cam.matrix_world = (Matrix.Translation(center + direction * extent * 5.0)
-                        @ direction.to_track_quat('Z', 'Y').to_matrix().to_4x4())
-
-    return scn, cam
-
-
-def _make_thumbnail(context, scn, path):
-    """Rend la scene temporaire vers le PNG. Retourne (ok, message)."""
-    scn.render.filepath = path
-    scn.render.use_file_extension = False
-
-    window = context.window
-    previous = window.scene if window else None
-
-    try:
-        if window is not None:
-            window.scene = scn
-            bpy.ops.render.render(write_still=True)
-        else:
-            with context.temp_override(scene=scn):
-                bpy.ops.render.render(write_still=True)
-    except Exception as e:
-        return False, str(e)
-    finally:
-        if window is not None and previous is not None:
-            window.scene = previous
-
-    if not os.path.isfile(path):
-        return False, "fichier non ecrit"
-    return True, ""
-
-
-@bpy.app.handlers.persistent
-def _on_load_scan(dummy=None):
-    """Relit la bibliotheque a l'ouverture d'un fichier."""
-    try:
-        scan_library(bpy.context)
-    except Exception:
-        pass
-
-
-def _deferred_scan():
-    """Premiere lecture apres l'activation de l'addon : les preferences et le
-    contexte ne sont pas encore disponibles pendant register()."""
-    try:
-        scan_library(bpy.context)
-    except Exception:
-        pass
-    return None        # ne se replanifie pas
 
 
 class RM_CreditFolder(bpy.types.PropertyGroup):
@@ -898,148 +548,6 @@ class _RM_dead_code:
         return {'FINISHED'}
 
 
-class RM_OT_scan_library(bpy.types.Operator):
-    bl_idname = "rm.scan_library"
-    bl_label = "Relire la bibliotheque"
-    bl_description = "Relit les dossiers de la bibliotheque et recharge les vignettes"
-
-    def execute(self, context):
-        if not root_path(context):
-            self.report({'ERROR'}, "Dossier ROBOTS non defini (preferences de l'addon)")
-            return {'CANCELLED'}
-
-        total = scan_library(context)
-        self.report({'INFO'}, "{} asset(s) trouve(s)".format(total))
-        return {'FINISHED'}
-
-
-class RM_OT_add_to_library(bpy.types.Operator):
-    bl_idname = "rm.add_to_library"
-    bl_label = "Ajouter a la bibliotheque"
-    bl_description = ("Enregistre l'objet selectionne comme asset reutilisable, "
-                      "avec sa vignette. L'objet de la scene n'est pas modifie")
-
-    def execute(self, context):
-        scene = context.scene
-
-        if not root_path(context):
-            self.report({'ERROR'}, "Dossier ROBOTS non defini (preferences de l'addon)")
-            return {'CANCELLED'}
-
-        obj = context.active_object
-        if obj is None or obj.type != 'MESH':
-            self.report({'ERROR'}, "Selectionner la piece (mesh) a enregistrer")
-            return {'CANCELLED'}
-
-        src_name = scene.rm_src_name.strip()
-        src_author = scene.rm_src_author.strip()
-        if not scene.rm_src_original and not (src_name and src_author):
-            self.report({'ERROR'},
-                        "Nom original et auteur requis (ou cocher Creation originale)")
-            return {'CANCELLED'}
-
-        name = re.sub(r"[^A-Za-z0-9_-]+", "_", scene.rm_asset_name.strip())
-        if not name:
-            name = re.sub(r"[^A-Za-z0-9_-]+", "_", obj.name)
-
-        # Une piece deja rattachee garde sa categorie d'origine : reenregistrer
-        # une piece amelioree la remet au bon endroit sans reglage manuel
-        folder = library_dir(context, scene.rm_category, create=True)
-        path = os.path.join(folder, name + ".blend")
-
-        if os.path.isfile(path) and not scene.rm_asset_overwrite:
-            self.report({'ERROR'}, "'{}' existe deja (cocher Ecraser pour remplacer)".format(name))
-            return {'CANCELLED'}
-
-        # On travaille sur une copie : l'objet de la scene reste intact
-        context.view_layer.update()
-        world = obj.matrix_world.copy()
-
-        tmp = obj.copy()
-        tmp.data = obj.data.copy()
-        tmp.name = name
-        tmp.parent = None
-        tmp.animation_data_clear()
-        for key in (K_ROBOT, K_SOCKET, K_TUBE, "robot_part", "robot_slot"):
-            if key in tmp:
-                del tmp[key]
-
-        # Ecrit sur la copie : les cles partent dans le .blend de l'asset et
-        # reviennent avec lui a chaque import, sans fichier annexe a suivre
-        credit = {
-            "asset": name,
-            "era": scene.rm_era,
-            "style": scene.rm_style.strip().lower(),
-            "original": bool(scene.rm_src_original),
-            "src_name": "" if scene.rm_src_original else src_name,
-            "author": "David" if scene.rm_src_original else src_author,
-            "license": "" if scene.rm_src_original else scene.rm_src_license,
-            "url": "" if scene.rm_src_original else scene.rm_src_url.strip(),
-        }
-        tmp[K_ERA] = credit["era"]
-        tmp[K_STYLE] = credit["style"]
-        tmp[K_SRC_ORIGINAL] = credit["original"]
-        tmp[K_SRC_NAME] = credit["src_name"]
-        tmp[K_SRC_AUTHOR] = credit["author"]
-        tmp[K_SRC_LICENSE] = credit["license"]
-        tmp[K_SRC_URL] = credit["url"]
-
-        if scene.rm_asset_freeze:
-            # Rotation et echelle passees dans la geometrie : l'asset arrive
-            # ensuite a l'echelle 1, sans surprise au reimport
-            basis = world.copy()
-            basis.translation = Vector((0.0, 0.0, 0.0))
-            tmp.data.transform(basis)
-            tmp.matrix_world = Matrix.Identity(4)
-        else:
-            tmp.matrix_world = world
-
-        scn, cam = _build_thumb_scene(tmp, scene.rm_thumb_size)
-        thumb_ok, thumb_err = _make_thumbnail(context, scn,
-                                              os.path.join(folder, name + ".png"))
-
-        # La camera ne doit pas partir dans l'asset
-        scn.collection.objects.unlink(cam)
-
-        error = ""
-        try:
-            # La scene est ecrite avec l'objet : le fichier reste lisible a
-            # l'ouverture, au lieu de ne contenir que des donnees orphelines
-            bpy.data.libraries.write(path, {scn, tmp}, fake_user=True)
-        except Exception as e:
-            error = str(e)
-
-        # Nettoyage complet de la copie
-        mesh = tmp.data
-        bpy.data.scenes.remove(scn)
-        cam_data = cam.data
-        bpy.data.objects.remove(cam)
-        bpy.data.cameras.remove(cam_data)
-        bpy.data.objects.remove(tmp)
-        bpy.data.meshes.remove(mesh)
-
-        if error:
-            self.report({'ERROR'}, "Enregistrement impossible : {}".format(error))
-            return {'CANCELLED'}
-
-        # Double lisible sans ouvrir le .blend : sert d'index de bibliotheque
-        try:
-            with open(os.path.join(folder, name + ".json"), "w",
-                      encoding="utf-8") as f:
-                json.dump(credit, f, ensure_ascii=False, indent=2)
-        except Exception as e:
-            self.report({'WARNING'}, "Fiche de credits non ecrite : {}".format(e))
-
-        scan_library(context)
-        msg = "'{}' ajoute a {}/{}".format(
-            name, FAMILY_DIR.get(scene.rm_family),
-            CAT_DIRS.get(scene.rm_family, {}).get(scene.rm_category, "other"))
-        if not thumb_ok:
-            msg += " (vignette : {})".format(thumb_err or "echec")
-        self.report({'INFO'}, msg)
-        return {'FINISHED'}
-
-
 def import_asset(context, coll, path, empty, category, mirror=True):
     """Importe un .blend d'asset et le pose sur le repere. Retourne la liste
     des objets crees, marquage compris."""
@@ -1075,7 +583,7 @@ class RM_OT_default_rules(bpy.types.Operator):
         scene = context.scene
         scene.rm_rules.clear()
 
-        for slot, cat, mirror in DEFAULT_RULES.get(scene.rm_family, []):
+        for slot, cat, mirror in DEFAULT_RULES.get(scene.rm_default_rules, []):
             rule = scene.rm_rules.add()
             rule.slot = slot
             rule.category = cat
@@ -1253,78 +761,6 @@ def resolve_target(context):
     return slot_empty(coll, scene.rm_slot)
 
 
-def filtered_assets(scene):
-    """Assets de la categorie courante, filtres par recherche, epoque, style."""
-    items = _assets.get(scene.rm_category, [])
-
-    query = scene.rm_asset_search.strip().lower()
-    if query:
-        items = [(n, p) for n, p in items if query in n.lower()]
-
-    era = scene.rm_filter_era
-    style = scene.rm_filter_style.strip().lower()
-    if era == 'ALL' and not style:
-        return items
-
-    out = []
-    for n, p in items:
-        meta = _asset_meta.get(scene.rm_category + "/" + n, {})
-        # 'ANY' = intemporel : passe tous les filtres d'epoque
-        if era != 'ALL' and meta.get("era", 'ANY') not in (era, 'ANY'):
-            continue
-        if style and style not in str(meta.get("style", "")).lower():
-            continue
-        out.append((n, p))
-    return out
-
-
-def page_count(scene, total):
-    per = max(1, scene.rm_asset_per_page)
-    return max(1, (total + per - 1) // per)
-
-
-class RM_OT_delete_asset(bpy.types.Operator):
-    bl_idname = "rm.delete_asset"
-    bl_label = "Supprimer l'asset"
-    bl_description = ("Supprime definitivement cet asset de la bibliotheque "
-                      "(fichier .blend et vignette). Les pieces deja posees "
-                      "dans les scenes ne sont pas touchees")
-
-    asset: bpy.props.StringProperty()
-
-    def invoke(self, context, event):
-        return context.window_manager.invoke_confirm(self, event)
-
-    def execute(self, context):
-        scene = context.scene
-        name = self.asset or scene.rm_asset
-
-        if not name or name == 'NONE':
-            self.report({'ERROR'}, "Aucun asset selectionne")
-            return {'CANCELLED'}
-
-        path = next((p for n, p in _assets.get(scene.rm_category, []) if n == name), None)
-        if path is None:
-            self.report({'ERROR'}, "Asset introuvable : relire la bibliotheque")
-            return {'CANCELLED'}
-
-        removed = []
-        for target in (path, os.path.splitext(path)[0] + ".png"):
-            if os.path.isfile(target):
-                try:
-                    os.remove(target)
-                    removed.append(os.path.basename(target))
-                except Exception as e:
-                    self.report({'ERROR'}, "Suppression impossible : {}".format(e))
-                    return {'CANCELLED'}
-
-        scan_library(context)
-        scene.rm_asset_page = 0
-
-        self.report({'INFO'}, "'{}' supprime ({})".format(name, ", ".join(removed)))
-        return {'FINISHED'}
-
-
 class RM_OT_update_mirrors(bpy.types.Operator):
     bl_idname = "rm.update_mirrors"
     bl_label = "Mettre a jour les symetries"
@@ -1399,32 +835,6 @@ class RM_OT_mirror_selected(bpy.types.Operator):
         return {'FINISHED'}
 
 
-class RM_OT_asset_page(bpy.types.Operator):
-    bl_idname = "rm.asset_page"
-    bl_label = "Page"
-    bl_description = "Page suivante ou precedente de la bibliotheque"
-
-    delta: bpy.props.IntProperty(default=1)
-
-    def execute(self, context):
-        scene = context.scene
-        total = len(filtered_assets(scene))
-        last = page_count(scene, total) - 1
-        scene.rm_asset_page = max(0, min(last, scene.rm_asset_page + self.delta))
-        return {'FINISHED'}
-
-def _family_changed(self, context):
-    try:
-        context.scene.rm_asset_page = 0
-        scan_library(context)
-    except Exception:
-        pass
-
-def _reset_page(self, context):
-    try:
-        context.scene.rm_asset_page = 0
-    except Exception:
-        pass
 # ---------------------------------------------------------------------------
 # Suivi de la selection : les champs d'ajout a la bibliotheque se remplissent
 # avec l'objet actif. msgbus reagit au changement d'objet actif, le timer sert
@@ -1451,11 +861,8 @@ def _fill_asset_fields():
     if obj is None or obj.type != 'MESH' or obj.get(K_TUBE) or obj.get(K_SOCKET):
         return
 
-    scene.rm_asset_name = obj.name
-
-    part = obj.get("robot_part")
-    if part in {c[0] for c in family_categories(scene)}:
-        scene.rm_category = part
+    if al is not None and hasattr(scene, "al_asset_name"):
+        scene.al_asset_name = obj.name
 
     for window in bpy.context.window_manager.windows:
         for area in window.screen.areas:
@@ -1488,15 +895,6 @@ def _on_load_selection(dummy=None):
     _last_active_name = None
     _subscribe_selection()
 
-def _asset_changed(self, context):
-    """Placement immediat au clic sur une vignette."""
-    scene = context.scene
-    if not scene.rm_place_on_click or scene.rm_asset in ("", 'NONE'):
-        return
-    try:
-        bpy.ops.rm.place_asset()
-    except Exception:
-        pass
 
 class RM_OT_setup_scene(bpy.types.Operator):
     bl_idname = "rm.setup_scene"
@@ -1567,7 +965,8 @@ class RM_OT_new_robot(bpy.types.Operator):
                 coll["robot_dir"] = path
                 with open(os.path.join(path, "character.json"), "w",
                           encoding="utf-8") as f:
-                    json.dump({"name": name, "family": scene.rm_family}, f, indent=1)
+                    json.dump({"name": name, "family": scene.rm_default_rules},
+                              f, indent=1)
                 msg += " - dossier : {}".format(path)
             except Exception as e:
                 msg += " (dossier non cree : {})".format(e)
@@ -1597,8 +996,8 @@ class RM_OT_assign_part(bpy.types.Operator):
 
         for obj in parts:
             link_to_robot(obj, coll, scene.rm_robot)
-            obj["robot_part"] = scene.rm_category
-
+            obj["robot_part"] = al.key_of(scene, "rm_cat", "rm_sub") if al else ""
+            
         self.report({'INFO'}, "{} piece(s) rattachee(s)".format(len(parts)))
         return {'FINISHED'}
 
@@ -1957,11 +1356,12 @@ class RM_Rule(bpy.types.PropertyGroup):
     use: bpy.props.BoolProperty(name="Active", default=True)
 
 
+# Clef = sous-categorie de bibliotheque, en majuscules
 CATEGORY_SLOT = {
-    'BODY': 'chest', 'TORSO': 'chest', 'ACC': 'chest',
-    'HEAD': 'head', 'HAIR': 'head', 'HAT': 'head',
-    'ARMS': 'elbow_L', 'HINGE': 'elbow_L', 'HAND': 'wrist_L',
-    'LEGS': 'knee_L', 'FOOT': 'ankle_L', 'OTHER': 'chest',
+    'BODY': 'chest', 'TORSO': 'chest', 'ACCESSORIES': 'chest', 'OTHER': 'chest',
+    'HEAD': 'head', 'HAIR': 'head', 'HATS': 'head',
+    'ARMS': 'elbow_L', 'JOINTS': 'elbow_L', 'HANDS': 'wrist_L',
+    'LEGS': 'knee_L', 'FEET': 'ankle_L',
 }
 
 
@@ -2120,7 +1520,7 @@ class RM_OT_build_skeleton(bpy.types.Operator):
             created[slot] = empty
 
         tubes = 0
-        if scene.rm_family == 'ROBOT':
+        if scene.rm_default_rules == 'ROBOT':
             for a, b in BONES:
                 make_tube(context, created[a], created[b],
                           scene.rm_tube_radius, scene.rm_tube_res, scene.rm_tube_caps)
@@ -2242,7 +1642,7 @@ def make_mirror(context, obj, slot):
     coll.objects.link(dup)
 
     dup[K_ROBOT] = scene.rm_robot
-    dup["robot_part"] = obj.get("robot_part", scene.rm_category)
+    dup["robot_part"] = obj.get("robot_part", "")
     dup["robot_slot"] = other_slot
     dup[K_MIRROR_OF] = obj.name
     dup[K_MIRROR_SIG] = _source_signature(obj)
@@ -2329,7 +1729,7 @@ class RM_OT_attach_part(bpy.types.Operator):
 
         for obj in parts:
             link_to_robot(obj, coll, scene.rm_robot)
-            obj["robot_part"] = scene.rm_category
+            obj["robot_part"] = al.key_of(scene, "rm_cat", "rm_sub") if al else ""
             obj["robot_slot"] = slot
 
             _attach_to_empty(context, obj, empty)
@@ -2345,7 +1745,8 @@ class RM_OT_attach_auto(bpy.types.Operator):
     bl_description = "Pose la piece sur le repere correspondant a sa categorie"
 
     def execute(self, context):
-        slot = CATEGORY_SLOT.get(context.scene.rm_category, 'chest')
+        sub = getattr(context.scene, "rm_sub", "")
+        slot = CATEGORY_SLOT.get(sub.upper(), 'chest')
         return bpy.ops.rm.attach_part(slot=slot)
 
 
@@ -3257,8 +2658,7 @@ class RM_PT_panel(bpy.types.Panel):
         row.operator("rm.show_names", text="",
                      icon='HIDE_OFF' if scene.rm_show_names else 'HIDE_ON')
 
-        has_skel = (slot_empty(coll, 'chest') is not None
-                    or scene.rm_family in ('ARCHI', 'URBAN'))
+        has_skel = slot_empty(coll, 'chest') is not None
 
         if not has_skel:
             box.operator("rm.build_skeleton", icon='ADD')
@@ -3484,8 +2884,8 @@ class RM_PT_panel(bpy.types.Panel):
 
         # --- Tubes ---
         box = layout.box()
-        box.enabled = (scene.rm_family == 'ROBOT')
-        box.label(text="Tubes de liaison" if scene.rm_family == 'ROBOT'
+        box.enabled = (scene.rm_default_rules == 'ROBOT')
+        box.label(text="Tubes de liaison" if scene.rm_default_rules == 'ROBOT'
                   else "Tubes (robots uniquement)", icon='CURVE_PATH')
         row = box.row(align=True)
         row.prop(scene, "rm_tube_radius", text="Rayon")
@@ -3590,14 +2990,10 @@ classes = (
     RM_OT_init_folders,
     RM_OT_open_folder,
     RM_OT_open_expression_maker,
-    RM_OT_scan_library,
-    RM_OT_add_to_library,
     RM_OT_build_credits,
     RM_OT_place_asset,
-    RM_OT_delete_asset,
     RM_OT_update_mirrors,
     RM_OT_mirror_selected,
-    RM_OT_asset_page,
     RM_OT_new_robot,
     RM_OT_assign_part,
     RM_OT_add_socket,
@@ -3649,29 +3045,21 @@ def _on_load_character(dummy=None):
 
         family = data.get("family")
         if family in {'ROBOT', 'HUMAN'}:
-            bpy.context.scene.rm_family = family
+            bpy.context.scene.rm_default_rules = family
 
-        scan_library(bpy.context)
+        if al is not None:
+            al.scan(bpy.context)
     except Exception:
         pass
 
 def register():
-    global _asset_previews
 
     for cls in classes:
         bpy.utils.register_class(cls)
-
-    _asset_previews = bpy.utils.previews.new()
-
-    if _on_load_scan not in bpy.app.handlers.load_post:
-        bpy.app.handlers.load_post.append(_on_load_scan)
         
     if _on_load_character not in bpy.app.handlers.load_post:
         bpy.app.handlers.load_post.append(_on_load_character)
 
-    # Differe : pendant register(), les preferences de l'addon ne sont pas lues
-    if not bpy.app.timers.is_registered(_deferred_scan):
-        bpy.app.timers.register(_deferred_scan, first_interval=0.5)
     _subscribe_selection()
     if _on_load_selection not in bpy.app.handlers.load_post:
         bpy.app.handlers.load_post.append(_on_load_selection)
@@ -3681,11 +3069,6 @@ def register():
     S = bpy.types.Scene
     S.rm_new_name = bpy.props.StringProperty(name="Nom", default="robot_01")
     S.rm_robot = bpy.props.EnumProperty(name="Robot actif", items=robot_enum)
-    S.rm_family = bpy.props.EnumProperty(
-        name="Famille", items=FAMILIES, default='ROBOT', update=_family_changed,
-        description="Robot : membres tubulaires. Humanoide : pieces habillees, sans tubes")
-    S.rm_category = bpy.props.EnumProperty(name="Categorie", items=category_items,
-                                           update=_reset_page)
     if al is not None:
         S.rm_cat = bpy.props.EnumProperty(
             name="Categorie", items=al.scoped_cat_items(("robot", "human")))
@@ -3696,41 +3079,6 @@ def register():
         items=[(n, n.replace("_", " "), "") for n in SOCKET_PRESETS])
     S.rm_socket_custom = bpy.props.StringProperty(name="Nom du point", default="socket")
     S.rm_socket_size = bpy.props.FloatProperty(name="Taille", default=0.05, min=0.001, max=2.0)
-    S.rm_asset = bpy.props.EnumProperty(name="Asset", items=asset_enum,
-                                       update=_asset_changed)
-    S.rm_asset_name = bpy.props.StringProperty(
-        name="Nom", default="",
-        description="Nom de l'asset dans la bibliotheque (vide = nom de l'objet)")
-    S.rm_asset_overwrite = bpy.props.BoolProperty(name="Ecraser", default=False)
-    S.rm_asset_freeze = bpy.props.BoolProperty(
-        name="Figer la transformation", default=True,
-        description=("Passe la rotation et l'echelle dans la geometrie : l'asset revient "
-                     "exactement a la taille voulue au reimport"))
-    S.rm_src_original = bpy.props.BoolProperty(
-        name="Creation originale", default=False,
-        description="Modele fait maison : aucun credit exterieur a rendre")
-    S.rm_src_name = bpy.props.StringProperty(
-        name="Nom original", default="",
-        description="Titre du modele sur sa page d'origine, avant renommage")
-    S.rm_src_author = bpy.props.StringProperty(
-        name="Auteur", default="",
-        description="Auteur credite sur la page d'origine")
-    S.rm_src_license = bpy.props.EnumProperty(
-        name="Licence", items=SKETCHFAB_LICENSES, default='CC-BY-4.0')
-    S.rm_src_url = bpy.props.StringProperty(
-        name="URL", default="",
-        description="Lien vers la page du modele, exige par les licences CC")
-
-    S.rm_era = bpy.props.EnumProperty(name="Epoque", items=ERAS, default='ANY')
-    S.rm_style = bpy.props.StringProperty(
-        name="Style", default="", search=_style_search,
-        description="Haussmannien, art-deco, industriel... liste libre")
-    S.rm_filter_era = bpy.props.EnumProperty(
-        name="Filtre epoque",
-        items=[('ALL', "Toutes epoques", "")] + ERAS, default='ALL')
-    S.rm_filter_style = bpy.props.StringProperty(
-        name="Filtre style", default="", search=_style_search,
-        options={'TEXTEDIT_UPDATE'})
 
     S.rm_credit_folders = bpy.props.CollectionProperty(type=RM_CreditFolder)
     S.rm_credit_folder_index = bpy.props.IntProperty(default=0)
@@ -3740,29 +3088,9 @@ def register():
     S.rm_target_socket = bpy.props.StringProperty(
         name="Repere vise", default="",
         description="Dernier repere utilise, conserve entre deux placements")
-    S.rm_place_on_click = bpy.props.BoolProperty(
-        name="Placer au clic", default=True,
-        description="Importe et pose l'asset des sa selection dans la grille")
-    S.rm_asset_scale = bpy.props.FloatProperty(name="Taille vignettes", default=4.0,
-                                               min=1.0, max=10.0)
-    S.rm_asset_edit = bpy.props.BoolProperty(
-        name="Mode gestion", default=False,
-        description="Affiche un bouton de suppression sur chaque asset")
-    S.rm_asset_search = bpy.props.StringProperty(
-        name="Rechercher", default="", options={'TEXTEDIT_UPDATE'},
-        update=_reset_page,
-        description="Filtre les assets de la categorie par leur nom")
-    S.rm_asset_page = bpy.props.IntProperty(name="Page", default=0, min=0)
-    S.rm_asset_per_page = bpy.props.IntProperty(
-        name="Par page", default=12, min=3, max=60,
-        update=_reset_page,
-        description="Nombre de vignettes affichees a la fois")
-    S.rm_asset_columns = bpy.props.IntProperty(
-        name="Colonnes", default=3, min=1, max=6,
-        description="Nombre de vignettes par ligne")
-    S.rm_thumb_size = bpy.props.IntProperty(
-        name="Resolution vignette", default=256, min=64, max=512,
-        description="Taille en pixels des vignettes generees")
+    S.rm_default_rules = bpy.props.EnumProperty(
+        name="Regles usuelles", default='ROBOT',
+        items=[('ROBOT', "Robot", ""), ('HUMAN', "Humanoide", "")])
     S.rm_slot = bpy.props.EnumProperty(
         name="Repere", default='chest',
         items=[(s, s.replace("_", " "), "") for s in SLOTS])
@@ -3812,22 +3140,14 @@ def register():
 
 
 def unregister():
-    global _asset_previews
 
-    if _on_load_scan in bpy.app.handlers.load_post:
-        bpy.app.handlers.load_post.remove(_on_load_scan)
     if _on_load_character in bpy.app.handlers.load_post:
         bpy.app.handlers.load_post.remove(_on_load_character)
-    if bpy.app.timers.is_registered(_deferred_scan):
-        bpy.app.timers.unregister(_deferred_scan)
     bpy.msgbus.clear_by_owner(_sync_owner)
     if _on_load_selection in bpy.app.handlers.load_post:
         bpy.app.handlers.load_post.remove(_on_load_selection)
     if bpy.app.timers.is_registered(_poll_selection):
         bpy.app.timers.unregister(_poll_selection)
-    if _asset_previews is not None:
-        bpy.utils.previews.remove(_asset_previews)
-        _asset_previews = None
 
     S = bpy.types.Scene
     for prop in ("rm_mirror", "rm_mirror_axis", "rm_asset_edit", "rm_asset_search", "rm_asset_page", "rm_asset_per_page",
@@ -3843,7 +3163,7 @@ def unregister():
                  "rm_shoulder_w", "rm_shoulder_drop", "rm_hip_w", "rm_arm_upper",
                  "rm_arm_fore", "rm_arm_angle", "rm_leg_thigh", "rm_leg_shin", "rm_tube_res", "rm_tube_radius", "rm_tube_material",
                  "rm_socket_size", "rm_socket_custom", "rm_socket_name", "rm_category", "rm_robot",
-                 "rm_new_name", "rm_family", "rm_make_rig", "rm_rules", "rm_cat", "rm_sub",):
+                 "rm_new_name", "rm_family", "rm_make_rig", "rm_rules", "rm_cat", "rm_sub", "rm_default_rules", "rm_cat", "rm_sub"):
         if hasattr(S, prop):
             delattr(S, prop)
 
