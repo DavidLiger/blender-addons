@@ -981,6 +981,62 @@ def _apply_exclusions(view_layer, mode, cycles=False):
     for child in view_layer.layer_collection.children:
         walk(child)
 
+def _line_distance(scene, style):
+    """Epaisseur selon l'eloignement. Un seul passage : le modificateur agit
+    par sommet le long du trace, en multipliant le resultat des precedents."""
+    if not scene.multicam_line_dist:
+        return
+
+    base = max(0.01, scene.multicam_line_thick)
+    d1 = max(0.01, scene.multicam_line_d1)
+    d2 = max(d1 + 0.01, scene.multicam_line_d2)
+
+    mod = style.thickness_modifiers.new("distance", 'DISTANCE_FROM_CAMERA')
+    mod.blend = 'MULTIPLY'
+    mod.influence = 1.0
+
+    if scene.multicam_line_dist_mode == 'LINEAR':
+        mod.mapping = 'LINEAR'
+        mod.range_min = d1
+        mod.range_max = d2
+        mod.value_min = scene.multicam_line_near / base
+        mod.value_max = scene.multicam_line_far / base
+        return
+
+    # Trois paliers : c'est la courbe qui fait les marches, pas trois passes
+    vmax = max(scene.multicam_line_near, scene.multicam_line_mid,
+               scene.multicam_line_far) / base or 1.0
+
+    mod.mapping = 'CURVE'
+    mod.range_min = 0.0
+    mod.range_max = d2 * 1.5
+    mod.value_min = 0.0
+    mod.value_max = vmax
+
+    span = mod.range_max
+    x1, x2 = d1 / span, d2 / span
+    e = 0.004
+
+    def y(thick):
+        return min(1.0, max(0.0, (thick / base) / vmax))
+
+    cm = mod.curve.curves[0]
+    while len(cm.points) > 2:
+        cm.points.remove(cm.points[1])
+
+    cm.points[0].location = (0.0, y(scene.multicam_line_near))
+    cm.points[1].location = (1.0, y(scene.multicam_line_far))
+
+    for px, py in ((x1, y(scene.multicam_line_near)),
+                   (min(x1 + e, x2 - e), y(scene.multicam_line_mid)),
+                   (x2, y(scene.multicam_line_mid)),
+                   (min(x2 + e, 0.999), y(scene.multicam_line_far))):
+        cm.points.new(px, py)
+
+    for p in cm.points:
+        p.handle_type = 'VECTOR'
+
+    mod.curve.update()
 
 def _freestyle_setup(scene, view_layer):
     """Contour sur le calque des personnages, avec tremble d'epaisseur."""
@@ -1019,6 +1075,56 @@ def _freestyle_setup(scene, view_layer):
         noise.period = scene.multicam_line_period
         noise.seed = 1
 
+    _line_distance(scene, style)
+
+def _line_signature(scene):
+    """Empreinte des reglages de contour, pour reperer ce qui n'a pas encore
+    ete applique aux calques."""
+    keys = ("multicam_line_color", "multicam_line_thick", "multicam_line_calli",
+            "multicam_line_noise", "multicam_line_period",
+            "multicam_line_dist", "multicam_line_dist_mode",
+            "multicam_line_d1", "multicam_line_d2",
+            "multicam_line_near", "multicam_line_mid", "multicam_line_far")
+
+    parts = []
+    for k in keys:
+        v = getattr(scene, k, None)
+        if hasattr(v, "__len__") and not isinstance(v, str):
+            v = tuple(round(x, 4) for x in v)
+        elif isinstance(v, float):
+            v = round(v, 4)
+        parts.append("{}={}".format(k, v))
+
+    return "|".join(parts)
+
+
+def _apply_line_settings(scene):
+    """Reconstruit les modificateurs de trait, sans toucher aux exclusions."""
+    if not scene.multicam_split_layers:
+        return False
+
+    vl = scene.view_layers.get(VL_PERSOS)
+    if vl is None:
+        return False
+
+    _freestyle_setup(scene, vl)
+    scene.multicam_line_sig = _line_signature(scene)
+    return True
+
+
+class MULTICAM_OT_apply_lines(bpy.types.Operator):
+    bl_idname = "multicam.apply_lines"
+    bl_label = "Appliquer le contour"
+    bl_description = ("Reconstruit les modificateurs de trait sur le calque des "
+                      "personnages, sans retoucher la repartition des collections")
+
+    def execute(self, context):
+        if not _apply_line_settings(context.scene):
+            self.report({'ERROR'}, "Calques non configures")
+            return {'CANCELLED'}
+
+        self.report({'INFO'}, "Contour applique")
+        return {'FINISHED'}
 
 def _tidy_master(scene):
     """Les objets poses a la racine ne peuvent pas etre exclus d'un calque :
@@ -1587,6 +1693,7 @@ class MULTICAM_OT_setup_layers(bpy.types.Operator):
         moved = _tidy_master(scene)
         _setup_view_layers(scene)
         _build_compositor(scene)
+        scene.multicam_line_sig = _line_signature(scene)
 
         if scene.multicam_kuwahara:
             _kuwahara_setup(scene)
@@ -1622,6 +1729,9 @@ class MULTICAM_OT_render_selected(bpy.types.Operator):
         # Verification des dossiers AVANT tout rendu
         cams_check = [bpy.data.objects[i.name] for i in scene.multicam_items
                       if i.enabled and i.name in bpy.data.objects]
+        # Filet : le contour est reapplique quoi qu'il arrive avant de rendre
+        _apply_line_settings(scene)
+
         missing = _multicam_check_cameras(scene, cams_check)
         if missing:
             msg = "Chemin introuvable : " + " | ".join(missing[:3])
@@ -1782,15 +1892,42 @@ class MULTICAM_PT_panel(bpy.types.Panel):
             col.label(text="Contour des personnages :")
             col.prop(scene, "multicam_line_color", text="")
             col.prop(scene, "multicam_line_thick")
+            col.prop(scene, "multicam_line_dist")
+
+            if scene.multicam_line_dist:
+                col.prop(scene, "multicam_line_dist_mode", expand=True)
+                r = col.row(align=True)
+                r.prop(scene, "multicam_line_d1")
+                r.prop(scene, "multicam_line_d2")
+                r = col.row(align=True)
+                r.prop(scene, "multicam_line_near")
+                if scene.multicam_line_dist_mode == 'ZONES':
+                    r.prop(scene, "multicam_line_mid")
+                r.prop(scene, "multicam_line_far")
+
+                # Distance reelle de l'objet actif : de quoi caler les seuils
+                cam, obj = scene.camera, context.active_object
+                if cam is not None and obj is not None and obj is not cam:
+                    d = (obj.matrix_world.translation
+                         - cam.matrix_world.translation).length
+                    sub = col.row()
+                    sub.scale_y = 0.7
+                    sub.label(text="{} : {:.1f} m".format(obj.name, d))
+
             col.prop(scene, "multicam_line_calli")
             r = col.row(align=True)
             r.prop(scene, "multicam_line_noise")
             r.prop(scene, "multicam_line_period")
 
-            sub = box.row()
-            sub.scale_y = 0.7
-            sub.label(text="Relancer la configuration apres un changement",
-                      icon='INFO')
+            if scene.multicam_line_sig != _line_signature(scene):
+                warn = box.column(align=True)
+                warn.alert = True
+                warn.label(text="Contour modifie, pas encore applique", icon='ERROR')
+                warn.operator("multicam.apply_lines", icon='FILE_REFRESH')
+            else:
+                sub = box.row()
+                sub.scale_y = 0.7
+                sub.label(text="Contour a jour", icon='CHECKMARK')
 
         # --- Sortie Kuwahara ---
         box = layout.box()
@@ -1867,6 +2004,7 @@ classes = (
     MULTICAM_OT_open_gaufrier,
     MULTICAM_OT_setup_layers,
     MULTICAM_OT_clean_colls,
+    MULTICAM_OT_apply_lines,
 )
 
 
@@ -1901,6 +2039,24 @@ def register():
         default=(0.0, 0.0, 0.0, 1.0), min=0.0, max=1.0)
     bpy.types.Scene.multicam_line_thick = bpy.props.FloatProperty(
         name="Epaisseur", default=3.0, min=0.1, max=40.0)
+    bpy.types.Scene.multicam_line_dist = bpy.props.BoolProperty(
+        name="Epaisseur selon la distance", default=False)
+    bpy.types.Scene.multicam_line_dist_mode = bpy.props.EnumProperty(
+        name="Mode", default='ZONES',
+        items=[('ZONES', "Zones", "Trois paliers nets"),
+               ('LINEAR', "Continu", "Variation progressive")])
+    bpy.types.Scene.multicam_line_d1 = bpy.props.FloatProperty(
+        name="Proche", default=6.0, min=0.01, unit='LENGTH',
+        description="Limite entre premier plan et plan moyen")
+    bpy.types.Scene.multicam_line_d2 = bpy.props.FloatProperty(
+        name="Lointain", default=20.0, min=0.02, unit='LENGTH',
+        description="Limite entre plan moyen et arriere-plan")
+    bpy.types.Scene.multicam_line_near = bpy.props.FloatProperty(
+        name="Trait proche", default=4.5, min=0.0, max=40.0)
+    bpy.types.Scene.multicam_line_mid = bpy.props.FloatProperty(
+        name="Trait moyen", default=3.0, min=0.0, max=40.0)
+    bpy.types.Scene.multicam_line_far = bpy.props.FloatProperty(
+        name="Trait lointain", default=1.4, min=0.0, max=40.0)
     bpy.types.Scene.multicam_line_calli = bpy.props.BoolProperty(
         name="Plume", default=True,
         description="Epaisseur variable selon l'orientation, comme une plume")
@@ -1910,6 +2066,7 @@ def register():
     bpy.types.Scene.multicam_line_period = bpy.props.FloatProperty(
         name="Grain", default=25.0, min=1.0, max=400.0,
         description="Longueur d'onde du tremble : petit = nerveux")
+    bpy.types.Scene.multicam_line_sig = bpy.props.StringProperty(default="")
     bpy.types.Scene.multicam_kuwahara = bpy.props.BoolProperty(
         name="Sortie Kuwahara", default=False,
         description=("Ecrit en parallele une version picturale dans "
@@ -1999,6 +2156,7 @@ def unregister():
     del bpy.types.Scene.multicam_kuwa_denoise
     del bpy.types.Scene.multicam_bw_contrast
     del bpy.types.Scene.multicam_bw
+    del bpy.types.Scene.multicam_line_sig
 
     for cls in reversed(classes):
         bpy.utils.unregister_class(cls)

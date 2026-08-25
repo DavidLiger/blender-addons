@@ -1,5 +1,5 @@
 bl_info = {
-    "name": "Robot Maker",
+    "name": "Character Maker",
     "author": "David",
     "version": (0, 1, 0),
     "blender": (4, 0, 0),
@@ -21,6 +21,10 @@ import tempfile
 import webbrowser
 from mathutils import Matrix, Vector
 
+try:
+    import asset_library as al
+except Exception:      # l'addon n'est pas installe ou pas active
+    al = None
 
 # ---------------------------------------------------------------------------
 # Conventions de nommage
@@ -1041,17 +1045,9 @@ def import_asset(context, coll, path, empty, category, mirror=True):
     des objets crees, marquage compris."""
     scene = context.scene
 
-    try:
-        with bpy.data.libraries.load(path, link=False) as (src, dst):
-            dst.objects = list(src.objects)
-    except Exception:
+    imported = al.import_blend(path) if al else []
+    if not imported:
         return []
-
-    imported = [o for o in dst.objects
-                if o is not None and o.type not in {'CAMERA', 'LIGHT'}]
-    for o in dst.objects:
-        if o is not None and o.type in {'CAMERA', 'LIGHT'}:
-            bpy.data.objects.remove(o)
 
     created = []
     for obj in imported:
@@ -1153,7 +1149,7 @@ class RM_OT_random_fill(bpy.types.Operator):
             if empty is None:
                 continue
 
-            pool = _assets.get(rule.category, [])
+            pool = al.assets(rule.category) if al else []
             if not pool:
                 empty_cats.append(rule.category)
                 continue
@@ -1186,83 +1182,35 @@ class RM_OT_place_asset(bpy.types.Operator):
     bl_options = {'REGISTER', 'UNDO'}
 
     asset: bpy.props.StringProperty(default="")
+    category: bpy.props.StringProperty(default="")
 
     def execute(self, context):
         scene = context.scene
+
+        if al is None:
+            self.report({'ERROR'}, "Addon Asset Library non active")
+            return {'CANCELLED'}
+
         coll = active_robot_collection(context)
-
         if coll is None:
-            self.report({'ERROR'}, "Aucun robot actif")
+            self.report({'ERROR'}, "Aucun personnage actif")
             return {'CANCELLED'}
 
-        name = self.asset or scene.rm_asset
-        if not name or name == 'NONE':
-            self.report({'ERROR'}, "Aucun asset selectionne")
-            return {'CANCELLED'}
-
-        path = next((p for n, p in _assets.get(scene.rm_category, []) if n == name), None)
-        if path is None or not os.path.isfile(path):
+        key = self.category or al.key_of(scene)
+        path = al.path_of(key, self.asset)
+        if path is None:
             self.report({'ERROR'}, "Fichier introuvable : relire la bibliotheque")
             return {'CANCELLED'}
-
-        # Architecture et mobilier urbain : ni repere, ni parentage, ni
-        # marquage robot. L'asset se pose au curseur 3D, tel quel.
-        if scene.rm_family in ('ARCHI', 'URBAN'):
-            try:
-                with bpy.data.libraries.load(path, link=False) as (src, dst):
-                    dst.objects = list(src.objects)
-            except Exception as e:
-                self.report({'ERROR'}, "Import impossible : {}".format(e))
-                return {'CANCELLED'}
-
-            coll = context.collection
-            created = []
-            for obj in dst.objects:
-                if obj is None:
-                    continue
-                if obj.type in {'CAMERA', 'LIGHT'}:
-                    bpy.data.objects.remove(obj)
-                    continue
-                coll.objects.link(obj)
-                # Addition plutot qu'affectation : les decalages internes
-                # d'un asset en plusieurs morceaux sont preserves
-                obj.location = obj.location + scene.cursor.location
-                created.append(obj)
-
-            try:
-                bpy.ops.object.select_all(action='DESELECT')
-                for obj in created:
-                    obj.select_set(True)
-                if created:
-                    context.view_layer.objects.active = created[0]
-            except Exception:
-                pass
-
-            self.report({'INFO'}, "{} objet(s) importe(s)".format(len(created)))
-            return {'FINISHED'}
 
         empty = resolve_target(context)
         if empty is None:
             self.report({'ERROR'}, "Aucun repere : creer le squelette")
             return {'CANCELLED'}
 
-        # Memorise la cible : la selection va changer apres l'import
+        # La selection va changer apres l'import : on retient la cible
         scene.rm_target_socket = empty.name
 
-        try:
-            with bpy.data.libraries.load(path, link=False) as (src, dst):
-                dst.objects = list(src.objects)
-        except Exception as e:
-            self.report({'ERROR'}, "Import impossible : {}".format(e))
-            return {'CANCELLED'}
-
-        imported = [o for o in dst.objects
-                    if o is not None and o.type not in {'CAMERA', 'LIGHT'}]
-
-        # Les objets ecartes sont supprimes pour ne pas encombrer le fichier
-        for o in dst.objects:
-            if o is not None and o.type in {'CAMERA', 'LIGHT'}:
-                bpy.data.objects.remove(o)
+        imported = al.import_blend(path)
         if not imported:
             self.report({'ERROR'}, "Le fichier ne contient aucun objet")
             return {'CANCELLED'}
@@ -1270,7 +1218,7 @@ class RM_OT_place_asset(bpy.types.Operator):
         for obj in imported:
             coll.objects.link(obj)
             obj[K_ROBOT] = scene.rm_robot
-            obj["robot_part"] = scene.rm_category
+            obj["robot_part"] = key
             obj["robot_slot"] = empty.get("robot_slot", empty.name)
             _attach_to_empty(context, obj, empty)
             _mirror_after_attach(context, obj, empty)
@@ -1281,7 +1229,7 @@ class RM_OT_place_asset(bpy.types.Operator):
         context.view_layer.objects.active = imported[0]
 
         self.report({'INFO'}, "'{}' pose sur {}".format(
-            name, empty.name[len(SOCKET_PREFIX):]))
+            self.asset, empty.name[len(SOCKET_PREFIX):]))
         return {'FINISHED'}
 
 
@@ -1953,19 +1901,18 @@ K_RANDOM = "robot_random"      # marque une piece posee par le tirage
 # Repere -> categorie piochee, et mise en miroir automatique
 DEFAULT_RULES = {
     'ROBOT': [
-        ('chest', 'BODY', False), ('head', 'HEAD', False),
-        ('shoulder_L', 'HINGE', True), ('elbow_L', 'HINGE', True),
-        ('hip_L', 'HINGE', True), ('knee_L', 'HINGE', True),
-        ('wrist_L', 'HAND', True), ('ankle_L', 'FOOT', True),
+        ('chest', 'robot/body', False), ('head', 'robot/head', False),
+        ('shoulder_L', 'robot/joints', True), ('elbow_L', 'robot/joints', True),
+        ('hip_L', 'robot/joints', True), ('knee_L', 'robot/joints', True),
+        ('wrist_L', 'robot/hands', True), ('ankle_L', 'robot/feet', True),
     ],
     'HUMAN': [
-        ('chest', 'TORSO', False), ('head', 'HEAD', False),
-        ('hips', 'LEGS', False), ('neck', 'HAIR', False),
-        ('elbow_L', 'ARMS', True), ('wrist_L', 'HAND', True),
-        ('ankle_L', 'FOOT', True),
+        ('chest', 'human/torso', False), ('head', 'human/head', False),
+        ('hips', 'human/legs', False), ('neck', 'human/hair', False),
+        ('elbow_L', 'human/arms', True), ('wrist_L', 'human/hands', True),
+        ('ankle_L', 'human/feet', True),
     ],
 }
-
 
 _slot_cache = {}
 
@@ -1987,10 +1934,23 @@ def slot_items(self, context):
 
     return _slot_cache[key]
 
+def _rule_keys(edit_text=""):
+    """Cles de bibliotheque proposees dans la table de tirage."""
+    if al is None:
+        return []
+
+    out = []
+    for cat in al.categories():
+        for sub in cat.get("children", []):
+            out.append(cat["key"] + "/" + sub["key"])
+
+    return sorted(k for k in out if edit_text.lower() in k.lower())
 
 class RM_Rule(bpy.types.PropertyGroup):
     slot: bpy.props.EnumProperty(name="Repere", items=slot_items)
-    category: bpy.props.EnumProperty(name="Categorie", items=category_items)
+    category: bpy.props.StringProperty(
+        name="Categorie", default="",
+        search=lambda s, c, t: al.style_search and _rule_keys(t) or [])
     mirror: bpy.props.BoolProperty(
         name="Miroir", default=True,
         description="Duplique la piece sur le repere oppose")
@@ -3230,11 +3190,11 @@ def draw_schema(layout, context, coll):
 # Panneau
 # ---------------------------------------------------------------------------
 class RM_PT_panel(bpy.types.Panel):
-    bl_label = "Robot Maker"
+    bl_label = "Character Maker"
     bl_idname = "RM_PT_panel"
     bl_space_type = 'VIEW_3D'
     bl_region_type = 'UI'
-    bl_category = "Robot Maker"
+    bl_category = "Character Maker"
 
     def draw(self, context):
         layout = self.layout
@@ -3335,100 +3295,20 @@ class RM_PT_panel(bpy.types.Panel):
         box = layout.box()
         row = box.row(align=True)
         row.label(text="Bibliotheque", icon='ASSET_MANAGER')
-        row.prop(scene, "rm_asset_edit", text="", icon='TRASH', toggle=True)
-        row.operator("rm.scan_library", text="", icon='FILE_REFRESH')
 
-        box.prop(scene, "rm_family", expand=True)
-        box.prop(scene, "rm_category", text="")
-
-        if not root:
-            box.label(text="Racine non definie (preferences)", icon='ERROR')
+        if al is None:
+            box.label(text="Addon Asset Library non active", icon='ERROR')
         else:
-            assets = filtered_assets(scene)
-            all_count = len(_assets.get(scene.rm_category, []))
+            row.prop(scene, "al_edit", text="", icon='TRASH', toggle=True)
+            row.operator("al.open_folder", text="", icon='FILEBROWSER')
+            row.operator("al.scan", text="", icon='FILE_REFRESH')
 
-            if all_count > scene.rm_asset_per_page or scene.rm_asset_search:
-                box.prop(scene, "rm_asset_search", text="", icon='VIEWZOOM')
-
-            if scene.rm_family in ('ARCHI', 'URBAN'):
-                f = box.row(align=True)
-                f.prop(scene, "rm_filter_era", text="")
-                f.prop(scene, "rm_filter_style", text="", icon='FILTER')
-
-            if assets:
-                # Vignettes si au moins une existe, sinon liste deroulante :
-                # une grille d'icones vide serait inutilisable
-                has_thumb = any(
-                    _asset_previews is not None
-                    and (scene.rm_category + "/" + n) in _asset_previews
-                    for n, _ in assets)
-
-                if has_thumb:
-                    # Pagination : au-dela de quelques dizaines d'assets, tout
-                    # afficher rendrait le panneau interminable
-                    per = max(1, scene.rm_asset_per_page)
-                    pages = page_count(scene, len(assets))
-                    page = min(scene.rm_asset_page, pages - 1)
-                    shown = assets[page * per:(page + 1) * per]
-
-                    # Grille toujours depliee : un clic sur une vignette pose la piece
-                    grid = box.grid_flow(row_major=True, columns=scene.rm_asset_columns,
-                                         even_columns=True, align=False)
-                    grid.enabled = has_skel
-
-                    for aname, apath in shown:
-                        cell = grid.box()
-                        cell.scale_y = 0.9
-                        icon = 0
-                        if _asset_previews is not None:
-                            prev = _asset_previews.get(scene.rm_category + "/" + aname)
-                            if prev:
-                                icon = prev.icon_id
-
-                        if icon:
-                            cell.template_icon(icon_value=icon, scale=scene.rm_asset_scale)
-
-                        line = cell.row(align=True)
-                        op = line.operator("rm.place_asset", text=aname,
-                                           icon='IMPORT' if not icon else 'NONE')
-                        op.asset = aname
-                        if scene.rm_asset_edit:
-                            op = line.operator("rm.delete_asset", text="", icon='TRASH')
-                            op.asset = aname
-
-                    if pages > 1:
-                        nav = box.row(align=True)
-                        op = nav.operator("rm.asset_page", text="", icon='TRIA_LEFT')
-                        op.delta = -1
-                        nav.label(text="{} / {}  ({} assets)".format(
-                            page + 1, pages, len(assets)))
-                        op = nav.operator("rm.asset_page", text="", icon='TRIA_RIGHT')
-                        op.delta = 1
-
-                    r = box.row(align=True)
-                    r.prop(scene, "rm_asset_columns", text="Colonnes")
-                    r.prop(scene, "rm_asset_scale", text="Taille")
-                    if all_count > 12:
-                        box.prop(scene, "rm_asset_per_page")
-                else:
-                    box.prop(scene, "rm_asset", text="")
-                    box.prop(scene, "rm_place_on_click")
+            if al.draw_categories(box, context):
+                al.draw_browser(box, context, "rm.place_asset", enabled=has_skel)
+                if not has_skel:
                     sub = box.row()
                     sub.scale_y = 0.7
-                    sub.label(text="Aucune vignette pour cette categorie", icon='INFO')
-
-                    r = box.row(align=True)
-                    sub = r.row()
-                    sub.enabled = has_skel
-                    sub.operator("rm.place_asset", icon='IMPORT')
-                    if scene.rm_asset_edit:
-                        r.operator("rm.delete_asset", text="", icon='TRASH')
-            elif scene.rm_asset_search:
-                box.label(text="Aucun asset ne correspond a la recherche", icon='INFO')
-            else:
-                box.label(text="Categorie vide - relire la bibliotheque", icon='INFO')
-
-        # --- Tirage au sort ---
+                    sub.label(text="Creer le squelette pour poser", icon='INFO')
         box.separator()
         row = box.row(align=True)
         row.label(text="Remplissage automatique", icon='FILE_REFRESH')
@@ -3452,30 +3332,9 @@ class RM_PT_panel(bpy.types.Panel):
             r.operator("rm.rule_add", icon='ADD')
             r.label(text="ou fleche pour les regles usuelles")
 
-        box.separator()
-        col = box.column(align=True)
-        col.label(text="Ajouter la piece selectionnee :")
-
-        r = col.row(align=True)
-        r.prop(scene, "rm_asset_name", text="")
-        r.prop(scene, "rm_asset_overwrite")
-        col.prop(scene, "rm_asset_freeze")
-        col.prop(scene, "rm_thumb_size")
-
-        # --- Credits (politique Sketchfab) ---
-        meta = col.box()
-        meta.prop(scene, "rm_era")
-        meta.prop(scene, "rm_style")
-
-        cred = col.box()
-        cred.prop(scene, "rm_src_original")
-        if not scene.rm_src_original:
-            cred.prop(scene, "rm_src_name")
-            cred.prop(scene, "rm_src_author")
-            cred.prop(scene, "rm_src_license")
-            cred.prop(scene, "rm_src_url")
-
-        col.operator("rm.add_to_library", icon='EXPORT')
+        if al is not None:
+            box.separator()
+            al.draw_add_panel(box, context)
 
         # --- Placement ---
         # --- Credits ---
