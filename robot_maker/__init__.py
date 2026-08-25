@@ -1196,7 +1196,7 @@ class RM_OT_place_asset(bpy.types.Operator):
             self.report({'ERROR'}, "Aucun personnage actif")
             return {'CANCELLED'}
 
-        key = self.category or al.key_of(scene)
+        key = self.category or al.key_of(scene, "rm_cat", "rm_sub")
         path = al.path_of(key, self.asset)
         if path is None:
             self.report({'ERROR'}, "Fichier introuvable : relire la bibliotheque")
@@ -3303,8 +3303,10 @@ class RM_PT_panel(bpy.types.Panel):
             row.operator("al.open_folder", text="", icon='FILEBROWSER')
             row.operator("al.scan", text="", icon='FILE_REFRESH')
 
-            if al.draw_categories(box, context):
-                al.draw_browser(box, context, "rm.place_asset", enabled=has_skel)
+            if al.draw_categories(box, context, manage=False,
+                                  cat_prop="rm_cat", sub_prop="rm_sub"):
+                al.draw_browser(box, context, "rm.place_asset", enabled=has_skel,
+                                key=al.key_of(scene, "rm_cat", "rm_sub"))
                 if not has_skel:
                     sub = box.row()
                     sub.scale_y = 0.7
@@ -3684,6 +3686,11 @@ def register():
         description="Robot : membres tubulaires. Humanoide : pieces habillees, sans tubes")
     S.rm_category = bpy.props.EnumProperty(name="Categorie", items=category_items,
                                            update=_reset_page)
+    if al is not None:
+        S.rm_cat = bpy.props.EnumProperty(
+            name="Categorie", items=al.scoped_cat_items(("robot", "human")))
+        S.rm_sub = bpy.props.EnumProperty(
+            name="Sous-categorie", items=al.scoped_sub_items("rm_cat"))
     S.rm_socket_name = bpy.props.EnumProperty(
         name="Point", default="shoulder_L",
         items=[(n, n.replace("_", " "), "") for n in SOCKET_PRESETS])
@@ -3836,7 +3843,7 @@ def unregister():
                  "rm_shoulder_w", "rm_shoulder_drop", "rm_hip_w", "rm_arm_upper",
                  "rm_arm_fore", "rm_arm_angle", "rm_leg_thigh", "rm_leg_shin", "rm_tube_res", "rm_tube_radius", "rm_tube_material",
                  "rm_socket_size", "rm_socket_custom", "rm_socket_name", "rm_category", "rm_robot",
-                 "rm_new_name", "rm_family", "rm_make_rig", "rm_rules",):
+                 "rm_new_name", "rm_family", "rm_make_rig", "rm_rules", "rm_cat", "rm_sub",):
         if hasattr(S, prop):
             delattr(S, prop)
 

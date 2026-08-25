@@ -1,9 +1,9 @@
 bl_info = {
-    "name": "Robot Manager",
+    "name": "Character Manager",
     "author": "David",
     "version": (0, 1, 0),
     "blender": (4, 0, 0),
-    "location": "View3D > Sidebar (N) > Robot Manager",
+    "location": "View3D > Sidebar (N) > Character Manager",
     "description": ("Bibliotheque de robots rigges et de postures : instanciation en scene, "
                     "postures enregistrees a la main ou extraites d'une animation Mixamo"),
     "category": "3D View",
@@ -1415,11 +1415,11 @@ class RBM_OT_clear_source(bpy.types.Operator):
 # Panneau
 # ---------------------------------------------------------------------------
 class RBM_PT_panel(bpy.types.Panel):
-    bl_label = "Robot Manager"
+    bl_label = "Character Manager"
     bl_idname = "RBM_PT_panel"
     bl_space_type = 'VIEW_3D'
     bl_region_type = 'UI'
-    bl_category = "Robot Manager"
+    bl_category = "Character Manager"
 
     def draw(self, context):
         layout = self.layout

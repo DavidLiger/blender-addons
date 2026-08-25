@@ -232,13 +232,48 @@ def sub_items(self, context):
 
     return _sub_cache[key]
 
+_scoped_cache = {}
 
-def key_of(scene):
-    if not scene.al_cat or scene.al_cat == 'NONE':
+
+def scoped_cat_items(scope=None):
+    """Fabrique une liste de categories limitee a certaines cles."""
+    def items(self, context):
+        allowed = [c for c in _tree if not scope or c["key"] in scope]
+        sig = (tuple(scope or ()), tuple(c["key"] for c in allowed))
+
+        if sig not in _scoped_cache:
+            _scoped_cache[sig] = ([(c["key"], c["label"], "") for c in allowed]
+                                  or [('NONE', "(aucune categorie)", "")])
+        return _scoped_cache[sig]
+
+    return items
+
+
+def scoped_sub_items(cat_prop):
+    """Sous-categories de la categorie designee par cat_prop."""
+    def items(self, context):
+        scene = context.scene if context else None
+        cat = find_cat(getattr(scene, cat_prop, "")) if scene else None
+        children = cat.get("children", []) if cat else []
+        sig = (cat_prop, getattr(scene, cat_prop, "") if scene else "",
+               tuple(c["key"] for c in children))
+
+        if sig not in _scoped_cache:
+            _scoped_cache[sig] = ([(c["key"], c["label"], "") for c in children]
+                                  or [('NONE', "(aucune sous-categorie)", "")])
+        return _scoped_cache[sig]
+
+    return items
+
+def key_of(scene, cat_prop="al_cat", sub_prop="al_sub"):
+    cat = getattr(scene, cat_prop, "")
+    sub = getattr(scene, sub_prop, "")
+
+    if not cat or cat == 'NONE':
         return ""
-    if not scene.al_sub or scene.al_sub == 'NONE':
-        return scene.al_cat
-    return scene.al_cat + "/" + scene.al_sub
+    if not sub or sub == 'NONE':
+        return cat
+    return cat + "/" + sub
 
 
 # ---------------------------------------------------------------------------
@@ -312,9 +347,9 @@ def path_of(key, name):
     return next((p for n, p in _assets.get(key, []) if n == name), None)
 
 
-def filtered(scene):
-    """Assets de la categorie courante, apres recherche, epoque et style."""
-    key = key_of(scene)
+def filtered(scene, key=None):
+    """Assets de la categorie donnee, apres recherche, epoque et style."""
+    key = key or key_of(scene)
     items = _assets.get(key, [])
 
     query = scene.al_search.strip().lower()
@@ -971,7 +1006,8 @@ class AL_OT_place(bpy.types.Operator):
 # Character Maker appelle draw_browser en passant son propre operateur, pour
 # poser sur un repere au lieu du curseur 3D.
 # ---------------------------------------------------------------------------
-def draw_categories(layout, context, manage=True):
+def draw_categories(layout, context, manage=True,
+                    cat_prop="al_cat", sub_prop="al_sub"):
     scene = context.scene
 
     if not library_root():
@@ -987,21 +1023,21 @@ def draw_categories(layout, context, manage=True):
         return False
 
     row = layout.row(align=True)
-    row.prop(scene, "al_cat", text="")
+    row.prop(scene, cat_prop, text="")
     if manage:
         row.operator("al.cat_add", text="", icon='ADD').level = 'CAT'
         row.operator("al.cat_rename", text="", icon='GREASEPENCIL').level = 'CAT'
         row.operator("al.cat_remove", text="", icon='X').level = 'CAT'
 
     row = layout.row(align=True)
-    row.prop(scene, "al_sub", text="")
+    row.prop(scene, sub_prop, text="")
     if manage:
         row.operator("al.cat_add", text="", icon='ADD').level = 'SUB'
         row.operator("al.cat_link", text="", icon='LINKED')
         row.operator("al.cat_rename", text="", icon='GREASEPENCIL').level = 'SUB'
         row.operator("al.cat_remove", text="", icon='X').level = 'SUB'
 
-    key = key_of(scene)
+    key = key_of(scene, cat_prop, sub_prop)
     if is_shortcut(key):
         sub = layout.row()
         sub.scale_y = 0.7
@@ -1010,11 +1046,11 @@ def draw_categories(layout, context, manage=True):
     return True
 
 
-def draw_browser(layout, context, op_idname="al.place", enabled=True):
+def draw_browser(layout, context, op_idname="al.place", enabled=True, key=None):
     """Grille de vignettes. L'operateur recoit asset et category."""
     scene = context.scene
-    key = key_of(scene)
-    items = filtered(scene)
+    key = key or key_of(scene)
+    items = filtered(scene, key)
     total = len(_assets.get(key, []))
 
     if total > scene.al_per_page or scene.al_search:
