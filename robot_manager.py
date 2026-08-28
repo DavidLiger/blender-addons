@@ -432,6 +432,42 @@ def dict_to_pose(rig, data):
 
     return applied, missing
 
+
+def keyframe_pose(rig, frame, bones=None):
+    """Insere une keyframe (loc/rot/scale) pour chaque os pose, a la frame
+    donnee - sans passer par le mode Pose ni par la touche I. Fonctionne
+    quel que soit le mode courant (Objet, Pose...) puisque PoseBone.keyframe_insert
+    resout lui-meme le chemin RNA complet vers l'action de l'armature.
+
+    bones : sous-ensemble de noms d'os a garder (defaut : tous les os pose,
+    c'est-a-dire la posture entiere, comme pose_to_dict)."""
+    if rig is None:
+        return 0
+
+    if rig.animation_data is None:
+        rig.animation_data_create()
+    if rig.animation_data.action is None:
+        rig.animation_data.action = bpy.data.actions.new(name=rig.name + "_Action")
+
+    count = 0
+    for pb in rig.pose.bones:
+        if bones is not None and pb.name not in bones:
+            continue
+
+        pb.keyframe_insert(data_path="location", frame=frame, group=pb.name)
+
+        if pb.rotation_mode == 'QUATERNION':
+            pb.keyframe_insert(data_path="rotation_quaternion", frame=frame, group=pb.name)
+        elif pb.rotation_mode == 'AXIS_ANGLE':
+            pb.keyframe_insert(data_path="rotation_axis_angle", frame=frame, group=pb.name)
+        else:
+            pb.keyframe_insert(data_path="rotation_euler", frame=frame, group=pb.name)
+
+        pb.keyframe_insert(data_path="scale", frame=frame, group=pb.name)
+        count += 1
+
+    return count
+
 # Nom de la posture de repos, creee automatiquement a la premiere instanciation.
 # Le prefixe numerique la place en tete de liste.
 REST_POSTURE = "00_repos"
@@ -1263,6 +1299,37 @@ class RBM_OT_delete_posture(bpy.types.Operator):
         return {'FINISHED'}
 
 
+class RBM_OT_insert_keyframe(bpy.types.Operator):
+    bl_idname = "rbm.insert_keyframe"
+    bl_label = "Keyframer la posture"
+    bl_description = ("Pose une keyframe (loc/rot/scale, tous les os) sur le control "
+                      "rig a la frame courante - independant du systeme de postures, "
+                      "sans passer par le mode Pose")
+    bl_options = {'REGISTER', 'UNDO'}
+
+    def execute(self, context):
+        rig = find_control_rig(context)
+        if rig is None:
+            self.report({'ERROR'}, "Aucun control rig trouve")
+            return {'CANCELLED'}
+
+        frame = context.scene.frame_current
+        count = keyframe_pose(rig, frame)
+
+        if not count:
+            self.report({'WARNING'}, "Aucun os sur ce rig")
+            return {'CANCELLED'}
+
+        # La timeline / dope sheet n'affichent pas toujours la nouvelle
+        # keyframe sans un rafraichissement explicite
+        for area in context.screen.areas:
+            if area.type in {'DOPESHEET_EDITOR', 'GRAPH_EDITOR', 'TIMELINE', 'VIEW_3D'}:
+                area.tag_redraw()
+
+        self.report({'INFO'}, "Keyframe posee sur {} os a la frame {}".format(count, frame))
+        return {'FINISHED'}
+
+
 class RBM_OT_load_animation(bpy.types.Operator):
     bl_idname = "rbm.load_animation"
     bl_label = "Charger l'animation"
@@ -1552,6 +1619,17 @@ class RBM_PT_panel(bpy.types.Panel):
         else:
             box.label(text="Aucune animation dans le dossier", icon='INFO')
 
+        # --- Keyframe manuelle ---
+        box = layout.box()
+        box.enabled = rig is not None
+        row = box.row(align=True)
+        row.label(text="Keyframe", icon='KEY_HLT')
+        sub = box.row()
+        sub.scale_y = 0.7
+        sub.label(text="Pose du control rig entier, sans passer par le mode Pose")
+        box.operator("rbm.insert_keyframe", icon='KEY_HLT',
+                    text="Keyframer la posture (frame {})".format(scene.frame_current))
+
 
 # ---------------------------------------------------------------------------
 # Enregistrement
@@ -1565,6 +1643,7 @@ classes = (
     RBM_OT_save_posture,
     RBM_OT_apply_posture,
     RBM_OT_delete_posture,
+    RBM_OT_insert_keyframe,
     RBM_OT_load_animation,
     RBM_OT_clear_source,
     RBM_PT_panel,
