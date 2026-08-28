@@ -892,11 +892,14 @@ def _multicam_check_cameras(scene, cams):
 
 def _multicam_check_output_dir(scene):
     """Verifie le dossier de sortie du moteur actif.
-    Renvoie None si tout va bien, sinon un message d'erreur.
+    Renvoie None si tout va bien, sinon un message d'erreur."""
+    if scene.multicam_auto_paths:
+        if not scene.multicam_strip_root:
+            return "Racine de la serie non definie"
+        if not _multicam_pages(scene):
+            return "Aucune planche detectee dans le gaufrier"
+        return None
 
-    Le dossier de rendu lui-meme peut ne pas exister (il sera cree), mais son
-    parent doit exister : cela evite de creer silencieusement une arborescence
-    entiere a cause d'une faute de frappe (ex: strip-02 pas encore cree)."""
     raw = _multicam_output_dir_raw(scene)
 
     if not raw:
