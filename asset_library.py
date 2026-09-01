@@ -502,6 +502,84 @@ def _render_thumb(context, scn, path):
     return os.path.isfile(path), "" if os.path.isfile(path) else "fichier non ecrit"
 
 
+def _armature_of(obj):
+    """Armature dont l'objet depend, par modifier ou par parente."""
+    arm = obj.find_armature()
+    if arm is not None:
+        return arm
+    p = obj.parent
+    while p is not None:
+        if p.type == 'ARMATURE':
+            return p
+        p = p.parent
+    return None
+
+
+def _rig_objects(armature):
+    """L'armature et tout ce qui en depend : meshes parentes ou skinnees."""
+    objs = {armature}
+    for o in bpy.data.objects:
+        if o.parent == armature:
+            objs.add(o)
+        elif o.type == 'MESH' and o.find_armature() == armature:
+            objs.add(o)
+    return objs
+
+
+def _bounds_multi(objs):
+    lo = Vector((1e9, 1e9, 1e9))
+    hi = Vector((-1e9, -1e9, -1e9))
+    found = False
+
+    for o in objs:
+        if o.type != 'MESH':
+            continue
+        a, b = _mesh_bounds_world(o)
+        lo = Vector(min(lo[i], a[i]) for i in range(3))
+        hi = Vector(max(hi[i], b[i]) for i in range(3))
+        found = True
+
+    return (lo, hi) if found else (Vector((0, 0, 0)), Vector((1, 1, 1)))
+
+
+def _build_thumb_scene_multi(objs, size):
+    """Variante de _build_thumb_scene pour plusieurs objets (rig complet)."""
+    scn = bpy.data.scenes.new("_al_thumb")
+    scn.render.engine = 'BLENDER_WORKBENCH'
+    scn.render.resolution_x = size
+    scn.render.resolution_y = size
+    scn.render.resolution_percentage = 100
+    scn.render.film_transparent = True
+    scn.render.image_settings.file_format = 'PNG'
+    scn.render.image_settings.color_mode = 'RGBA'
+
+    for o in objs:
+        scn.collection.objects.link(o)
+        o.hide_viewport = False
+        o.hide_render = False
+        o.hide_set(False, view_layer=scn.view_layers[0])
+
+    lo, hi = _bounds_multi(objs)
+    center = (lo + hi) / 2.0
+    extent = max(hi[i] - lo[i] for i in range(3)) or 1.0
+
+    cam_data = bpy.data.cameras.new("_al_cam")
+    cam_data.type = 'ORTHO'
+    cam_data.ortho_scale = extent * 1.6
+    cam_data.clip_start = 0.001
+    cam_data.clip_end = extent * 20.0
+
+    cam = bpy.data.objects.new("_al_cam", cam_data)
+    scn.collection.objects.link(cam)
+    scn.camera = cam
+
+    direction = Vector((1.0, -1.2, 0.7)).normalized()
+    cam.matrix_world = (Matrix.Translation(center + direction * extent * 5.0)
+                        @ direction.to_track_quat('Z', 'Y').to_matrix().to_4x4())
+
+    return scn, cam
+
+
 # ---------------------------------------------------------------------------
 # Preferences
 # ---------------------------------------------------------------------------
@@ -828,6 +906,8 @@ class AL_OT_add(bpy.types.Operator):
             self.report({'ERROR'}, "Selectionner la piece (mesh) a enregistrer")
             return {'CANCELLED'}
 
+        rig = _armature_of(obj)
+
         src_name = scene.al_src_name.strip()
         src_author = scene.al_src_author.strip()
         if not scene.al_src_original and not (src_name and src_author):
@@ -849,16 +929,52 @@ class AL_OT_add(bpy.types.Operator):
         context.view_layer.update()
         world = obj.matrix_world.copy()
 
-        tmp = obj.copy()
-        tmp.data = obj.data.copy()
-        tmp.name = name
-        tmp.parent = None
-        tmp.animation_data_clear()
+        rig_map = {}
+        if rig is not None:
+            # Asset rigge : toute la hierarchie part ensemble, avec ses
+            # relations de parente et ses cibles de modifier Armature
+            originals = _rig_objects(rig)
+            for o in originals:
+                c = o.copy()
+                if o.data is not None:
+                    c.data = o.data.copy()
+                c.animation_data_clear()
+                rig_map[o] = c
 
-        for k in ("robot", "robot_socket", "robot_tube",
-                  "robot_part", "robot_slot", "mirror_of", "mirror_sig"):
-            if k in tmp:
-                del tmp[k]
+            for o, c in rig_map.items():
+                c.parent = rig_map.get(o.parent)
+                if o.parent is not None and o.parent not in rig_map:
+                    c.matrix_world = o.matrix_world.copy()
+                for mod in c.modifiers:
+                    if mod.type == 'ARMATURE' and mod.object in rig_map:
+                        mod.object = rig_map[mod.object]
+
+            # Origine ramenee au pied de l'armature, sans toucher au maillage :
+            # figer la transformation n'a pas de sens ici, ca desynchroniserait
+            # le mesh du squelette qui l'anime
+            offset = rig_map[rig].matrix_world.translation.copy()
+            for c in rig_map.values():
+                if c.parent is None:
+                    c.matrix_world.translation -= offset
+
+            tmp = rig_map[obj]
+            tmp.name = name
+
+            for k in ("robot", "robot_socket", "robot_tube",
+                      "robot_part", "robot_slot", "mirror_of", "mirror_sig"):
+                if k in tmp:
+                    del tmp[k]
+        else:
+            tmp = obj.copy()
+            tmp.data = obj.data.copy()
+            tmp.name = name
+            tmp.parent = None
+            tmp.animation_data_clear()
+
+            for k in ("robot", "robot_socket", "robot_tube",
+                      "robot_part", "robot_slot", "mirror_of", "mirror_sig"):
+                if k in tmp:
+                    del tmp[k]
 
         credit = {
             "asset": name,
@@ -880,32 +996,51 @@ class AL_OT_add(bpy.types.Operator):
         tmp[K_SRC_LICENSE] = credit["license"]
         tmp[K_SRC_URL] = credit["url"]
 
-        if scene.al_freeze:
-            basis = world.copy()
-            basis.translation = Vector((0.0, 0.0, 0.0))
-            tmp.data.transform(basis)
-            tmp.matrix_world = Matrix.Identity(4)
-        else:
-            tmp.matrix_world = world
+        if rig is None:
+            if scene.al_freeze:
+                basis = world.copy()
+                basis.translation = Vector((0.0, 0.0, 0.0))
+                tmp.data.transform(basis)
+                tmp.matrix_world = Matrix.Identity(4)
+            else:
+                tmp.matrix_world = world
 
-        scn, cam = _build_thumb_scene(tmp, scene.al_thumb_size)
+            scn, cam = _build_thumb_scene(tmp, scene.al_thumb_size)
+            write_set = {scn, tmp}
+        else:
+            if scene.al_freeze:
+                self.report({'WARNING'},
+                            "Figer la transformation ignore : asset rigge")
+            scn, cam = _build_thumb_scene_multi(list(rig_map.values()),
+                                                scene.al_thumb_size)
+            write_set = {scn} | set(rig_map.values())
+
         thumb_ok, thumb_err = _render_thumb(context, scn,
                                             os.path.join(folder, name + ".png"))
         scn.collection.objects.unlink(cam)
 
         error = ""
         try:
-            bpy.data.libraries.write(path, {scn, tmp}, fake_user=True)
+            bpy.data.libraries.write(path, write_set, fake_user=True)
         except Exception as e:
             error = str(e)
-
-        mesh = tmp.data
         bpy.data.scenes.remove(scn)
         cam_data = cam.data
         bpy.data.objects.remove(cam)
         bpy.data.cameras.remove(cam_data)
-        bpy.data.objects.remove(tmp)
-        bpy.data.meshes.remove(mesh)
+
+        if rig is None:
+            bpy.data.objects.remove(tmp)
+            bpy.data.meshes.remove(tmp.data)
+        else:
+            for c in rig_map.values():
+                data = c.data
+                bpy.data.objects.remove(c)
+                if data is not None and data.users == 0:
+                    if isinstance(data, bpy.types.Mesh):
+                        bpy.data.meshes.remove(data)
+                    elif isinstance(data, bpy.types.Armature):
+                        bpy.data.armatures.remove(data)
 
         if error:
             self.report({'ERROR'}, "Enregistrement impossible : {}".format(error))
