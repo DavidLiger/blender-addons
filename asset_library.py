@@ -928,34 +928,26 @@ class AL_OT_add(bpy.types.Operator):
         # Copie de travail : l'objet de la scene reste intact
         context.view_layer.update()
         world = obj.matrix_world.copy()
-
+        
         rig_map = {}
         if rig is not None:
-            # Asset rigge : toute la hierarchie part ensemble, avec ses
-            # relations de parente et ses cibles de modifier Armature
-            originals = _rig_objects(rig)
+            # Duplication brute, rien d'autre : c'est ce que fait un
+            # copier-coller manuel, et ca suffit
+            originals = list(_rig_objects(rig))
+
+            for o in context.selected_objects:
+                o.select_set(False)
             for o in originals:
-                c = o.copy()
-                if o.data is not None:
-                    c.data = o.data.copy()
-                c.animation_data_clear()
-                rig_map[o] = c
+                o.select_set(True)
+            context.view_layer.objects.active = rig
 
-            for o, c in rig_map.items():
-                c.parent = rig_map.get(o.parent)
-                if o.parent is not None and o.parent not in rig_map:
-                    c.matrix_world = o.matrix_world.copy()
-                for mod in c.modifiers:
-                    if mod.type == 'ARMATURE' and mod.object in rig_map:
-                        mod.object = rig_map[mod.object]
+            bpy.ops.object.duplicate(linked=False)
 
-            # Origine ramenee au pied de l'armature, sans toucher au maillage :
-            # figer la transformation n'a pas de sens ici, ca desynchroniserait
-            # le mesh du squelette qui l'anime
-            offset = rig_map[rig].matrix_world.translation.copy()
-            for c in rig_map.values():
-                if c.parent is None:
-                    c.matrix_world.translation -= offset
+            dupes = list(context.selected_objects)
+            rig_map = {o: d for o, d in zip(originals, dupes)}
+
+            for d in dupes:
+                d.animation_data_clear()
 
             tmp = rig_map[obj]
             tmp.name = name
@@ -1020,6 +1012,19 @@ class AL_OT_add(bpy.types.Operator):
         scn.collection.objects.unlink(cam)
 
         error = ""
+        
+        if rig is not None:
+            print("=== DIAGNOSTIC RIG ===")
+            for o, c in rig_map.items():
+                print("  {} -> copie {} | parent={} | parent_type={} | "
+                      "matrix_world.translation={} | scale={}".format(
+                          o.name, c.name,
+                          c.parent.name if c.parent else None,
+                          c.parent_type,
+                          tuple(round(x, 3) for x in c.matrix_world.translation),
+                          tuple(round(x, 3) for x in c.scale)))
+            print("=======================")
+        
         try:
             bpy.data.libraries.write(path, write_set, fake_user=True)
         except Exception as e:
@@ -1123,8 +1128,23 @@ class AL_OT_place(bpy.types.Operator):
 
         for obj in objects:
             context.collection.objects.link(obj)
-            obj.matrix_world = (Matrix.Translation(scene.cursor.location)
-                                @ obj.matrix_world)
+
+        # Le depsgraph doit connaitre les objets et leurs parentes avant tout
+        # calcul de matrice : sinon la matrice d'un os n'est pas encore evaluee
+        context.view_layer.update()
+
+        # Seuls les objets racine (sans parent parmi le lot importe) sont
+        # deplaces : les enfants suivent deja par leur parente
+        roots = [o for o in objects if o.parent is None or o.parent not in objects]
+
+        # Un asset rigge arrive a sa position d'origine : le deplacer casse
+        # la relation avec l'armature. A toi de le bouger ensuite.
+        if not any(o.type == 'ARMATURE' for o in objects):
+            offset = Matrix.Translation(scene.cursor.location)
+            for obj in roots:
+                obj.matrix_world = offset @ obj.matrix_world
+
+        context.view_layer.update()
 
         for o in context.selected_objects:
             o.select_set(False)
