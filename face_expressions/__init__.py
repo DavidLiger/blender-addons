@@ -727,6 +727,10 @@ def clear_sheet(scene):
         scene.expr_name = ""
         scene.expr_json = ""
         scene.expr_image = None
+        scene.expr_fit_w = 1.0
+        scene.expr_fit_h = 1.0
+        scene.expr_off_x = 0.0
+        scene.expr_off_y = 0.0
     finally:
         _restoring = False
 
@@ -764,6 +768,10 @@ def _auto_load_zone(scene, obj):
         bpy.ops.expr.load_json()
     except Exception:
         return False
+
+    # Le cadrage vit dans le materiau de la zone : il doit etre relu a
+    # chaque bascule, sinon les curseurs gardent ceux de la zone precedente
+    _fit_read(scene, obj)
     return True
 
 
@@ -918,6 +926,9 @@ def _adjust_node(tree, create=False):
 
 
 def _fit_update(self, context):
+    if _restoring:
+        return                       # lecture en cours : ne pas reecrire
+
     scene = context.scene
     tree, mapping, tex = _find_nodes(scene.expr_target or context.active_object)
     if tree is None:

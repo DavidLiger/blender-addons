@@ -350,7 +350,10 @@ def _scan_blend_credits(path, index, found, unknown):
         credit = _credit_of(obj, index)
         if credit is None:
             if K_SRC_AUTHOR not in obj:
-                unknown.append("{} : {}".format(os.path.basename(path), obj.name))
+                # Controleurs de rig et objets techniques : rien a crediter
+                if obj.name.startswith(("cs_", "WGT-", "_al_", "SKT_", "TUBE_")):
+                    continue
+                unknown.append(...)
             continue
         found[(credit["author"], credit["src_name"],
                credit["license"], credit["url"])] = credit
@@ -408,6 +411,25 @@ def _build_credits(list_path, out_path, root):
     with open(out_path, "w", encoding="utf-8") as fh:
         fh.write("\n".join(lines) + "\n")
 
+    # Version structuree, consommee par le gaufrier pour composer la page
+    try:
+        data = []
+        for c in sorted(found.values(), key=lambda d: (d["author"].lower(),
+                                                       d["src_name"].lower())):
+            data.append({
+                "asset": c.get("asset", ""),
+                "src_name": c.get("src_name", ""),
+                "author": c.get("author", ""),
+                "license": c.get("license", ""),
+                "url": c.get("url", ""),
+                "original": bool(c.get("original")),
+            })
+
+        with open(os.path.join(root, "credits.json"), "w", encoding="utf-8") as fh:
+            json.dump({"entries": data}, fh, ensure_ascii=False, indent=2)
+    except Exception as e:
+        print("[credits] credits.json non ecrit :", e, flush=True)
+
     return len(found), blends, len(unknown)
 
 
@@ -416,10 +438,9 @@ class RM_OT_build_credits(bpy.types.Operator):
     bl_label = "Generer les credits"
     bl_description = ("Parcourt les .blend des dossiers listes et ecrit le "
                       "fichier de credits des assets utilises.\n\n"
-                      "ATTENTION : lie temporairement chaque .blend dans le "
-                      "fichier courant. Travailler dans une scene vide et ne "
-                      "pas sauvegarder juste apres. Blender se fige pendant "
-                      "toute la duree du scan")
+                      "Le scan tourne dans un Blender separe : le fichier "
+                      "courant n'est pas touche. Compter environ une seconde "
+                      "par .blend")
 
     def invoke(self, context, event):
         wm = context.window_manager
@@ -429,9 +450,8 @@ class RM_OT_build_credits(bpy.types.Operator):
             return wm.invoke_confirm(
                 self, event,
                 title="Generer les credits",
-                message=("Le scan lie chaque .blend dans le fichier courant. "
-                         "Scene vide conseillee, ne pas sauvegarder ensuite. "
-                         "Blender se fige pendant toute la duree."),
+                message=("Le scan tourne dans un Blender separe : ton fichier "
+                         "n'est pas touche. Environ une seconde par .blend."),
                 confirm_text="Lancer le scan")
         except TypeError:
             return wm.invoke_confirm(self, event)
@@ -2504,6 +2524,20 @@ class RM_OT_save_ready(bpy.types.Operator):
             self.report({'ERROR'}, "Dossier de '{}' introuvable".format(robot))
             return {'CANCELLED'}
 
+        # Les sprite sheets sont referencees par chemin : en absolu elles
+        # restent trouvables depuis n'importe quel fichier
+        for obj in coll.objects:
+            for mat in (getattr(obj.data, "materials", None) or []):
+                if mat is None or not mat.use_nodes:
+                    continue
+                for node in mat.node_tree.nodes:
+                    if node.type == 'TEX_IMAGE' and node.image is not None:
+                        try:
+                            node.image.filepath = bpy.path.abspath(
+                                node.image.filepath)
+                        except Exception:
+                            pass
+
         try:
             bpy.data.libraries.write(os.path.join(folder, READY_FILE),
                                      {coll}, fake_user=True)
@@ -2511,7 +2545,16 @@ class RM_OT_save_ready(bpy.types.Operator):
             self.report({'ERROR'}, "Ecriture impossible : {}".format(e))
             return {'CANCELLED'}
 
-        self.report({'INFO'}, "'{}' pret ({})".format(robot, coll.name))
+        # Vignette pour Character Manager, tant que le personnage est complet
+        msg = "'{}' pret ({})".format(robot, coll.name)
+        if not os.path.isfile(os.path.join(folder, "preview.png")):
+            try:
+                bpy.ops.rbm.robot_thumb()
+                msg += " - vignette creee"
+            except Exception:
+                msg += " - vignette a faire dans Character Manager"
+
+        self.report({'INFO'}, msg)
         return {'FINISHED'}
 
 class RM_OT_prepare_mixamo(bpy.types.Operator):
@@ -2799,10 +2842,10 @@ class RM_PT_panel(bpy.types.Panel):
         if al is None:
             box.label(text="Addon Asset Library non active", icon='ERROR')
         else:
-            row.prop(scene, "al_edit", text="", icon='TRASH', toggle=True)
-            row.operator("al.open_folder", text="", icon='FILEBROWSER')
             row.operator("al.scan", text="", icon='FILE_REFRESH')
 
+            # Gestion, ajout et credits vivent dans l'onglet Assets : ici on
+            # ne garde que le choix et la pose sur un repere
             if al.draw_categories(box, context, manage=False,
                                   cat_prop="rm_cat", sub_prop="rm_sub"):
                 al.draw_browser(box, context, "rm.place_asset", enabled=has_skel,
@@ -2811,6 +2854,10 @@ class RM_PT_panel(bpy.types.Panel):
                     sub = box.row()
                     sub.scale_y = 0.7
                     sub.label(text="Creer le squelette pour poser", icon='INFO')
+
+            sub = box.row()
+            sub.scale_y = 0.7
+            sub.label(text="Ajout et credits : onglet Assets", icon='INFO')
         box.separator()
         row = box.row(align=True)
         row.label(text="Remplissage automatique", icon='FILE_REFRESH')
@@ -2834,9 +2881,6 @@ class RM_PT_panel(bpy.types.Panel):
             r.operator("rm.rule_add", icon='ADD')
             r.label(text="ou fleche pour les regles usuelles")
 
-        if al is not None:
-            box.separator()
-            al.draw_add_panel(box, context)
 
         # --- Placement ---
         # --- Credits ---

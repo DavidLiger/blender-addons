@@ -66,6 +66,34 @@ class _GaufrierHandler(SimpleHTTPRequestHandler):
     def do_GET(self):
         parsed = urllib.parse.urlparse(self.path)
 
+        # credits.json vit a la racine ROBOTS, au-dessus du dossier du strip
+        if parsed.path == "/credits":
+            # credits.json vit dans la racine ROBOTS, une arborescence
+            # distincte de celle du strip : on la demande aux preferences
+            candidates = [os.path.join(self.root, "credits.json")]
+
+            for module in ("robot_maker", "asset_library", "face_expressions"):
+                try:
+                    addon = bpy.context.preferences.addons.get(module)
+                    if addon is not None and addon.preferences.root:
+                        candidates.append(os.path.join(
+                            bpy.path.abspath(addon.preferences.root),
+                            "credits.json"))
+                except Exception:
+                    continue
+
+            found = next((p for p in candidates if os.path.isfile(p)), None)
+
+            if found is None:
+                self._json({"entries": []})
+                return
+            try:
+                with open(found, "r", encoding="utf-8") as f:
+                    self._json(json.load(f))
+            except Exception as e:
+                self._json({"entries": [], "error": str(e)}, 500)
+            return
+
         if parsed.path.startswith("/files/"):
             target = self._under_root(posixpath.normpath(parsed.path[7:]).lstrip("/"))
             if target is None or not os.path.isfile(target):

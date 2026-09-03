@@ -111,7 +111,7 @@ def resolve_key(key):
     if cat is None:
         return key
 
-    sub = next((c for c in cat.get("children", []) if c["key"] == parts[1]), None)
+    sub = next((c for c in children_of(cat) if c["key"] == parts[1]), None)
     return sub["from"] if sub and sub.get("from") else key
 
 
@@ -201,6 +201,29 @@ def save_tree():
 def find_cat(key):
     return next((c for c in _tree if c["key"] == key), None)
 
+def children_of(cat):
+    """Enfants reels, plus ceux des categories reflechies. Les miroirs sont
+    resolus a la lecture : un nouveau sous-dossier dans la source apparait
+    partout, sans avoir a recreer de raccourci."""
+    if cat is None:
+        return []
+
+    out = list(cat.get("children", []))
+    known = {c["key"] for c in out}
+
+    for src_key in cat.get("mirror", []):
+        src = find_cat(src_key)
+        if src is None:
+            continue
+        for c in src.get("children", []):
+            if c["key"] in known or c.get("from"):
+                continue
+            known.add(c["key"])
+            out.append({"key": c["key"], "label": c["label"],
+                        "from": src_key + "/" + c["key"]})
+
+    return out
+
 
 def categories():
     return _tree
@@ -222,7 +245,7 @@ def sub_items(self, context):
 
     scene = context.scene if context else None
     cat = find_cat(scene.al_cat) if scene else None
-    children = cat.get("children", []) if cat else []
+    children = children_of(cat) if cat else []
 
     key = (scene.al_cat if scene else "", tuple(c["key"] for c in children))
     if key not in _sub_cache:
@@ -296,7 +319,7 @@ def scan(context=None):
 
     total = 0
     for cat in _tree:
-        for sub in cat.get("children", []) or [{"key": ""}]:
+        for sub in children_of(cat) or [{"key": ""}]:
             key = cat["key"] + ("/" + sub["key"] if sub["key"] else "")
             folder = folder_of(key)
             items = []
@@ -729,7 +752,7 @@ def _keys_search(self, context, edit_text):
     out = []
     for cat in _tree:
         out.append(cat["key"])
-        for sub in cat.get("children", []):
+        for sub in children_of(cat):
             if not sub.get("from"):
                 out.append(cat["key"] + "/" + sub["key"])
 
@@ -809,6 +832,47 @@ class AL_OT_cat_link(bpy.types.Operator):
         scan(context)
 
         self.report({'INFO'}, "{} raccourci(s) ajoute(s)".format(added))
+        return {'FINISHED'}
+    
+class AL_OT_cat_mirror(bpy.types.Operator):
+    bl_idname = "al.cat_mirror"
+    bl_label = "Refleter une categorie"
+    bl_description = ("Fait apparaitre ici tous les sous-dossiers d'une autre "
+                      "categorie, y compris ceux ajoutes plus tard")
+
+    source: bpy.props.StringProperty(name="Categorie source", default="",
+                                     search=lambda s, c, t: sorted(
+                                         k["key"] for k in _tree
+                                         if t.lower() in k["key"].lower()))
+    remove: bpy.props.BoolProperty(name="Retirer le reflet", default=False)
+
+    def invoke(self, context, event):
+        self.source = ""
+        return context.window_manager.invoke_props_dialog(self, width=340)
+
+    def execute(self, context):
+        cat = find_cat(context.scene.al_cat)
+        src = self.source.strip()
+
+        if cat is None or not src or src == cat["key"]:
+            self.report({'ERROR'}, "Choisir une source differente")
+            return {'CANCELLED'}
+
+        mirrors = cat.setdefault("mirror", [])
+
+        if self.remove:
+            if src in mirrors:
+                mirrors.remove(src)
+        elif src not in mirrors:
+            mirrors.append(src)
+
+        save_tree()
+        _sub_cache.clear()
+        _scoped_cache.clear()
+        scan(context)
+
+        self.report({'INFO'}, "Reflets de {} : {}".format(
+            cat["label"], ", ".join(mirrors) or "aucun"))
         return {'FINISHED'}
 
 class AL_OT_cat_rename(bpy.types.Operator):
@@ -920,6 +984,61 @@ class AL_OT_page(bpy.types.Operator):
 # ---------------------------------------------------------------------------
 # Assets
 # ---------------------------------------------------------------------------
+_last_synced = None
+
+
+def _read_credits(scene, obj):
+    """Recopie les credits portes par l'objet dans les champs du panneau :
+    sans ca, un update ecrase les infos par celles qui trainent."""
+    global _last_synced
+
+    name = obj.name if obj else None
+    if name == _last_synced:
+        return
+    _last_synced = name
+
+    if obj is None or obj.type != 'MESH':
+        return
+
+    scene.al_asset_name = obj.name
+
+    if K_ERA in obj:
+        try:
+            scene.al_era = obj[K_ERA]
+        except Exception:
+            pass
+    if K_STYLE in obj:
+        scene.al_style = str(obj[K_STYLE])
+
+    if K_SRC_ORIGINAL in obj:
+        scene.al_src_original = bool(obj[K_SRC_ORIGINAL])
+    if K_SRC_NAME in obj:
+        scene.al_src_name = str(obj[K_SRC_NAME])
+    if K_SRC_AUTHOR in obj:
+        scene.al_src_author = str(obj[K_SRC_AUTHOR])
+    if K_SRC_URL in obj:
+        scene.al_src_url = str(obj[K_SRC_URL])
+    if K_SRC_LICENSE in obj:
+        try:
+            scene.al_src_license = obj[K_SRC_LICENSE]
+        except Exception:
+            pass
+
+    for window in bpy.context.window_manager.windows:
+        for area in window.screen.areas:
+            if area.type == 'VIEW_3D':
+                area.tag_redraw()
+
+
+def _poll_selection():
+    try:
+        scene = bpy.context.scene
+        if scene is not None and scene.al_follow:
+            _read_credits(scene, bpy.context.view_layer.objects.active)
+    except Exception:
+        pass
+    return 0.3
+
 class AL_OT_add(bpy.types.Operator):
     bl_idname = "al.add"
     bl_label = "Ajouter a la bibliotheque"
@@ -944,7 +1063,8 @@ class AL_OT_add(bpy.types.Operator):
 
         # Un groupe est a copier des qu'il y a une armature, un parent, ou
         # des enfants : le cas du bus avec ses flammes n'a pas d'armature
-        has_group = (rig is not None) or (root is not obj) or bool(obj.children)
+        has_group = scene.al_group and (
+            (rig is not None) or (root is not obj) or bool(obj.children))
 
         src_name = scene.al_src_name.strip()
         src_author = scene.al_src_author.strip()
@@ -1222,6 +1342,7 @@ def draw_categories(layout, context, manage=True,
     if manage:
         row.operator("al.cat_add", text="", icon='ADD').level = 'CAT'
         row.operator("al.cat_rename", text="", icon='GREASEPENCIL').level = 'CAT'
+        row.operator("al.cat_mirror", text="", icon='DUPLICATE')
         row.operator("al.cat_remove", text="", icon='X').level = 'CAT'
 
     row = layout.row(align=True)
@@ -1310,6 +1431,8 @@ def draw_add_panel(layout, context):
     r.prop(scene, "al_asset_name", text="")
     r.prop(scene, "al_overwrite")
     col.prop(scene, "al_freeze")
+    col.prop(scene, "al_group")
+    col.prop(scene, "al_follow")
     col.prop(scene, "al_thumb_size")
 
     meta = layout.column(align=True)
@@ -1373,6 +1496,7 @@ classes = (
     AL_OT_place,
     AL_PT_panel,
     AL_OT_cat_link,
+    AL_OT_cat_mirror,
 )
 
 
@@ -1444,6 +1568,18 @@ def register():
     S.al_src_license = bpy.props.EnumProperty(
         name="Licence", items=SKETCHFAB_LICENSES, default='CC-BY-4.0')
     S.al_src_url = bpy.props.StringProperty(name="Lien", default="")
+    
+    S.al_follow = bpy.props.BoolProperty(
+        name="Suivre la selection", default=True,
+        description="Recharge les credits de l'objet selectionne, pour eviter "
+                    "de les ecraser a l'enregistrement")
+    S.al_group = bpy.props.BoolProperty(
+        name="Enregistrer la hierarchie", default=True,
+        description="Embarque les enfants et l'armature. Decocher pour ne "
+                    "sauver que l'objet selectionne")
+
+    if not bpy.app.timers.is_registered(_poll_selection):
+        bpy.app.timers.register(_poll_selection, first_interval=1.0, persistent=True)
 
     if _on_load not in bpy.app.handlers.load_post:
         bpy.app.handlers.load_post.append(_on_load)
@@ -1458,6 +1594,8 @@ def unregister():
         bpy.app.handlers.load_post.remove(_on_load)
     if bpy.app.timers.is_registered(_deferred_scan):
         bpy.app.timers.unregister(_deferred_scan)
+    if bpy.app.timers.is_registered(_poll_selection):
+        bpy.app.timers.unregister(_poll_selection)
 
     if _previews is not None:
         bpy.utils.previews.remove(_previews)
@@ -1469,7 +1607,7 @@ def unregister():
                  "al_thumb_size", "al_freeze", "al_overwrite", "al_asset_name",
                  "al_filter_style", "al_filter_era",
                  "al_edit", "al_scale", "al_columns", "al_per_page",
-                 "al_page", "al_search", "al_sub", "al_cat"):
+                 "al_page", "al_search", "al_sub", "al_cat", "al_follow", "al_group"):
         if hasattr(S, prop):
             delattr(S, prop)
 

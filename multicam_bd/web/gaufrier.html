@@ -677,6 +677,35 @@
           </div>
         </div>
 
+        <label style="display:flex;align-items:center;gap:6px;color:var(--text);
+                      font-size:.8rem;margin-top:8px">
+          <input type="checkbox" id="isCredits" onchange="render()" style="width:auto">
+          Page de credits</label>
+        <div id="creditsOpts" style="display:none">
+          <div class="field"><label>Police</label>
+            <select id="credFont" onchange="render()">
+              <option value="Georgia, serif">Georgia</option>
+              <option value="'Times New Roman', serif">Times</option>
+              <option value="Helvetica, Arial, sans-serif">Helvetica</option>
+              <option value="'Courier New', monospace">Courier</option>
+              <option value="__custom__">Autre (saisir ci-dessous)</option>
+            </select></div>
+          <div class="field"><label>Nom exact de la police</label>
+            <input type="text" id="credFontCustom" value=""
+                   placeholder="ex: Comic Neue, Bebas Neue"
+                   oninput="render()">
+            <span class="hint">Toute police installee sur le systeme</span></div>
+          <div class="field"><label>URLs</label>
+            <select id="credUrls" onchange="render()">
+              <option value="none">Sans les liens</option>
+              <option value="same">Sur la meme ligne</option>
+              <option value="below" selected>Sur une ligne dessous</option>
+            </select></div>
+          <div class="field"><label>Taille <span class="val" id="v-credSize"></span></label>
+            <input type="range" id="credSize" min="10" max="200" step="2" value="60"
+                   oninput="render()"></div>
+        </div>
+
         <div class="field-row">
           <div class="field">
             <label>Marge haut</label>
@@ -1677,7 +1706,7 @@ function setRendersStatus(text, cls) {
     }
 
     // Le reste du script n'est pas encore evalue a cet instant
-    setTimeout(scanRenderFolder, 0);
+    setTimeout(() => { scanRenderFolder(); loadCredits(); }, 0);
     return;
   }
 
@@ -2216,6 +2245,95 @@ function currentWidths(rowIndex) {
   return L.panels.filter(p => p.rowIndex === rowIndex).map(p => p.w);
 }
 
+let CREDITS = [];
+
+async function loadCredits() {
+  if (!SERVED) return;
+  try {
+    const res = await fetch('/credits?t=' + Date.now());
+    if (res.ok) CREDITS = (await res.json()).entries || [];
+  } catch (err) { CREDITS = []; }
+}
+
+// Page de credits : du texte compose dans le cadre des marges, pas de cases
+function creditsSVG(L) {
+  // Le champ libre prime des qu'il est rempli : la liste n'est qu'un raccourci
+  // En SVG, font-family veut le nom nu : les guillemets CSS le font echouer
+  const custom = (document.getElementById('credFontCustom').value || '').trim();
+  let font = custom || document.getElementById('credFont').value;
+
+  if (font === '__custom__') font = 'Georgia';
+  font = font.replace(/['"]/g, '').split(',')[0].trim();
+
+  // Certains navigateurs ignorent font-family en attribut SVG : la regle de
+  // style est plus fiable
+  let out = '<style>.cred{font-family:"' + font + '",serif}</style>';
+
+  const size = parseFloat(document.getElementById('credSize').value) || 24;
+  const lh = size * 1.45;
+  const urlMode = document.getElementById('credUrls').value;
+
+  const x = L.marginLeftPx;
+  const maxY = L.pageHPx - L.marginBottomPx;
+  let y = L.marginTopPx + size * 2;
+
+  const esc = t => String(t).replace(/&/g, '&amp;').replace(/</g, '&lt;');
+  const line = (txt, bold) => {
+    if (y > maxY) return;
+    out += '<text x="' + fmt(x) + '" y="' + fmt(y) + '" class="cred"'
+      + ' font-size="' + fmt(size) + '"' + (bold ? ' font-weight="bold"' : '')
+      + '>' + esc(txt) + '</text>';
+    y += lh;
+  };
+
+  out += '<text x="' + fmt(x) + '" y="' + fmt(y) + '" class="cred"'
+    + ' font-size="' + fmt(size * 1.8) + '" font-weight="bold">Credits</text>';
+  y += size * 3;
+
+  const originals = CREDITS.filter(c => c.original);
+  const externals = CREDITS.filter(c => !c.original);
+
+  if (originals.length) {
+    line('Modeles originaux', true);
+    y += size * .3;
+    originals.forEach(c => line('  ' + (c.src_name || c.asset)));
+    y += size;
+  }
+
+  if (externals.length) {
+    line('Modeles tiers', true);
+    y += size * .3;
+
+    externals.forEach(c => {
+      let txt = '  ' + (c.src_name || c.asset) + ' - ' + c.author
+              + (c.license ? ' (' + c.license + ')' : '');
+
+      // Les licences Creative Commons imposent le lien vers la source
+      if (urlMode === 'same' && c.url) txt += ' - ' + c.url;
+      line(txt);
+
+      if (urlMode === 'below' && c.url) {
+        const before = y;
+        y -= lh * .25;
+        if (y <= maxY) {
+          out += '<text x="' + fmt(x + size) + '" y="' + fmt(y)
+            + '" class="cred" font-size="' + fmt(size * .72)
+            + '" fill="#555">' + esc(c.url) + '</text>';
+        }
+        y = before + lh * .9;
+      }
+    });
+  }
+
+  if (y > maxY) {
+    out += '<text x="' + fmt(x) + '" y="' + fmt(maxY) + '" class="cred"'
+      + ' font-size="' + fmt(size * .8) + '" fill="#c00">'
+      + 'Liste tronquee : reduire la taille de police</text>';
+  }
+
+  return out;
+}
+
 function render() {
   const L = computeLayout();
   const {
@@ -2244,6 +2362,20 @@ function render() {
   const nameFontSize = fontSize * 0.85;
 
   let svgContent = '';
+
+  // Page de credits : du texte a la place des cases
+  const credOn = document.getElementById('isCredits')
+              && document.getElementById('isCredits').checked;
+  const credOpts = document.getElementById('creditsOpts');
+  if (credOpts) credOpts.style.display = credOn ? '' : 'none';
+
+  if (credOn) {
+    svg.innerHTML = creditsSVG(L);
+    document.getElementById('blender-script').value = '';
+    scheduleConfigSave();
+    return;
+  }
+
   const showImages = document.getElementById('showImages').checked;
 
   panels.forEach((p, i) => {
