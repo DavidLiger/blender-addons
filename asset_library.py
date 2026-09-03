@@ -29,6 +29,7 @@ K_SRC_NAME = "src_name"
 K_SRC_AUTHOR = "src_author"
 K_SRC_LICENSE = "src_license"
 K_SRC_URL = "src_url"
+K_CATEGORY = "asset_category"
 
 ERAS = [
     ('ANY', "Intemporel", "Utilisable a toutes les epoques"),
@@ -1002,6 +1003,18 @@ def _read_credits(scene, obj):
 
     scene.al_asset_name = obj.name
 
+    # Replace les deux menus sur la categorie d'origine de l'asset
+    stored = obj.get(K_CATEGORY, "")
+    if stored and "/" in stored:
+        cat, sub = stored.split("/", 1)
+        if find_cat(cat) is not None:
+            try:
+                scene.al_cat = cat
+                if any(c["key"] == sub for c in children_of(find_cat(cat))):
+                    scene.al_sub = sub
+            except Exception:
+                pass
+
     if K_ERA in obj:
         try:
             scene.al_era = obj[K_ERA]
@@ -1139,6 +1152,7 @@ class AL_OT_add(bpy.types.Operator):
             "url": "" if scene.al_src_original else scene.al_src_url.strip(),
         }
 
+        tmp[K_CATEGORY] = key
         tmp[K_ERA] = credit["era"]
         tmp[K_STYLE] = credit["style"]
         tmp[K_SRC_ORIGINAL] = credit["original"]
@@ -1288,6 +1302,8 @@ class AL_OT_place(bpy.types.Operator):
 
         for obj in objects:
             context.collection.objects.link(obj)
+            if K_CATEGORY not in obj:
+                obj[K_CATEGORY] = key
 
         # Le depsgraph doit connaitre les objets et leurs parentes avant tout
         # calcul de matrice : sinon la matrice d'un os n'est pas encore evaluee
