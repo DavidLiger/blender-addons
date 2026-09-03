@@ -516,15 +516,48 @@ def _armature_of(obj):
 
 
 def _rig_objects(armature):
-    """L'armature et tout ce qui en depend : meshes parentes ou skinnees."""
+    """L'armature et tout ce qui en depend, a n'importe quelle profondeur :
+    enfants directs, enfants d'enfants, et meshes skinnees."""
     objs = {armature}
-    for o in bpy.data.objects:
-        if o.parent == armature:
-            objs.add(o)
-        elif o.type == 'MESH' and o.find_armature() == armature:
-            objs.add(o)
+    changed = True
+
+    while changed:
+        changed = False
+        for o in bpy.data.objects:
+            if o in objs:
+                continue
+            if o.parent in objs:
+                objs.add(o)
+                changed = True
+            elif o.type == 'MESH' and o.find_armature() == armature:
+                objs.add(o)
+                changed = True
+
     return objs
 
+def _hierarchy_root(obj):
+    """Ancetre le plus haut de la chaine de parente."""
+    top = obj
+    while top.parent is not None:
+        top = top.parent
+    return top
+
+
+def _hierarchy_objects(root):
+    """La racine et tous ses descendants, a n'importe quelle profondeur."""
+    objs = {root}
+    changed = True
+
+    while changed:
+        changed = False
+        for o in bpy.data.objects:
+            if o in objs:
+                continue
+            if o.parent in objs:
+                objs.add(o)
+                changed = True
+
+    return objs
 
 def _bounds_multi(objs):
     lo = Vector((1e9, 1e9, 1e9))
@@ -907,6 +940,11 @@ class AL_OT_add(bpy.types.Operator):
             return {'CANCELLED'}
 
         rig = _armature_of(obj)
+        root = _hierarchy_root(obj)
+
+        # Un groupe est a copier des qu'il y a une armature, un parent, ou
+        # des enfants : le cas du bus avec ses flammes n'a pas d'armature
+        has_group = (rig is not None) or (root is not obj) or bool(obj.children)
 
         src_name = scene.al_src_name.strip()
         src_author = scene.al_src_author.strip()
@@ -930,10 +968,11 @@ class AL_OT_add(bpy.types.Operator):
         world = obj.matrix_world.copy()
         
         rig_map = {}
-        if rig is not None:
+        if has_group:
             # Duplication brute, rien d'autre : c'est ce que fait un
             # copier-coller manuel, et ca suffit
-            originals = list(_rig_objects(rig))
+            originals = (list(_rig_objects(rig)) if rig is not None
+                         else list(_hierarchy_objects(root)))
 
             for o in context.selected_objects:
                 o.select_set(False)
@@ -988,7 +1027,7 @@ class AL_OT_add(bpy.types.Operator):
         tmp[K_SRC_LICENSE] = credit["license"]
         tmp[K_SRC_URL] = credit["url"]
 
-        if rig is None:
+        if not has_group:
             if scene.al_freeze:
                 basis = world.copy()
                 basis.translation = Vector((0.0, 0.0, 0.0))
@@ -1002,7 +1041,7 @@ class AL_OT_add(bpy.types.Operator):
         else:
             if scene.al_freeze:
                 self.report({'WARNING'},
-                            "Figer la transformation ignore : asset rigge")
+                            "Figer la transformation ignore : asset a plusieurs objets")
             scn, cam = _build_thumb_scene_multi(list(rig_map.values()),
                                                 scene.al_thumb_size)
             write_set = {scn} | set(rig_map.values())
@@ -1013,7 +1052,7 @@ class AL_OT_add(bpy.types.Operator):
 
         error = ""
         
-        if rig is not None:
+        if False:
             print("=== DIAGNOSTIC RIG ===")
             for o, c in rig_map.items():
                 print("  {} -> copie {} | parent={} | parent_type={} | "
@@ -1034,9 +1073,10 @@ class AL_OT_add(bpy.types.Operator):
         bpy.data.objects.remove(cam)
         bpy.data.cameras.remove(cam_data)
 
-        if rig is None:
+        if not has_group:
+            tmp_mesh = tmp.data
             bpy.data.objects.remove(tmp)
-            bpy.data.meshes.remove(tmp.data)
+            bpy.data.meshes.remove(tmp_mesh)
         else:
             for c in rig_map.values():
                 data = c.data

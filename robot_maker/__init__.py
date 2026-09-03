@@ -2286,6 +2286,106 @@ class RM_OT_face_info(bpy.types.Operator):
             for line in lines:
                 col.label(text=line)
                 
+JAW_BONE = "jaw"
+
+
+class RM_OT_add_jaw(bpy.types.Operator):
+    bl_idname = "rm.add_jaw"
+    bl_label = "Machoire"
+    bl_description = ("Cree l'os de machoire sous mixamorig:Head et y assigne "
+                      "les sommets selectionnes. A faire apres le retour de "
+                      "Mixamo, avant le control rig")
+    bl_options = {'REGISTER', 'UNDO'}
+
+    def execute(self, context):
+        obj = context.active_object
+
+        if obj is None or obj.type != 'MESH':
+            self.report({'ERROR'}, "Selectionner le maillage de la tete")
+            return {'CANCELLED'}
+
+        rig = obj.find_armature()
+        if rig is None:
+            self.report({'ERROR'}, "Le maillage n'est pas rigge")
+            return {'CANCELLED'}
+
+        head = None
+        for name in ("mixamorig:Head", "mixamorig1:Head", "Head"):
+            if name in rig.data.bones:
+                head = name
+                break
+
+        if head is None:
+            self.report({'ERROR'}, "Os de tete introuvable dans l'armature")
+            return {'CANCELLED'}
+
+        # En Edit Mode la selection n'est pas encore repercutee sur le maillage
+        was_edit = (obj.mode == 'EDIT')
+        if was_edit:
+            bpy.ops.object.mode_set(mode='OBJECT')
+
+        mesh = obj.data
+        verts = [v for v in mesh.vertices if v.select]
+        if not verts:
+            if was_edit:
+                bpy.ops.object.mode_set(mode='EDIT')
+            self.report({'ERROR'}, "Aucun sommet selectionne")
+            return {'CANCELLED'}
+
+        mw = obj.matrix_world
+        pts = [mw @ v.co for v in verts]
+
+        lo = Vector((min(p[i] for p in pts) for i in range(3)))
+        hi = Vector((max(p[i] for p in pts) for i in range(3)))
+        center = (lo + hi) / 2.0
+
+        # La charniere est a l'arriere de la selection, l'os pointe vers l'avant
+        pivot = Vector((center.x, hi.y, center.z))
+        tip = Vector((center.x, lo.y, center.z))
+        if (tip - pivot).length < 1e-4:
+            tip = pivot + Vector((0.0, -0.1, 0.0))
+
+        # --- Creation de l'os ---
+        previous = context.view_layer.objects.active
+        deselect_all(context)
+        rig.select_set(True)
+        context.view_layer.objects.active = rig
+
+        inv = rig.matrix_world.inverted()
+        bpy.ops.object.mode_set(mode='EDIT')
+
+        edit_bones = rig.data.edit_bones
+        bone = edit_bones.get(JAW_BONE)
+        if bone is None:
+            bone = edit_bones.new(JAW_BONE)
+
+        bone.head = inv @ pivot
+        bone.tail = inv @ tip
+        bone.parent = edit_bones[head]
+        bone.use_connect = False        # sinon la tete du parent serait deplacee
+
+        bpy.ops.object.mode_set(mode='OBJECT')
+
+        deselect_all(context)
+        obj.select_set(True)
+        context.view_layer.objects.active = previous or obj
+
+        # --- Groupe de poids ---
+        group = obj.vertex_groups.get(JAW_BONE) or obj.vertex_groups.new(name=JAW_BONE)
+        group.add([v.index for v in verts], 1.0, 'REPLACE')
+
+        # Les memes sommets ne doivent plus suivre la tete
+        head_group = obj.vertex_groups.get(head)
+        if head_group is not None:
+            head_group.remove([v.index for v in verts])
+
+        if was_edit:
+            bpy.ops.object.mode_set(mode='EDIT')
+
+        self.report({'INFO'}, "Os '{}' cree sous {} - {} sommet(s)".format(
+            JAW_BONE, head, len(verts)))
+        return {'FINISHED'}
+                
 class RM_OT_import_rigged(bpy.types.Operator):
     bl_idname = "rm.import_rigged"
     bl_label = "Instancier le perso rigge"
@@ -2949,6 +3049,7 @@ class RM_PT_panel(bpy.types.Panel):
         r = box.row(align=True)
         for slot, label in FACE_SLOTS:
             r.operator("rm.prepare_face", text=label).slot = slot
+        r.operator("rm.add_jaw", text="Machoire")
 
         sub = box.column(align=True)
         sub.scale_y = 0.7
@@ -3017,6 +3118,7 @@ classes = (
     RM_PT_panel,
     RM_OT_setup_scene,
     RM_OT_prepare_face,
+    RM_OT_add_jaw,
     RM_OT_face_info,
     RM_OT_save_ready,
     RM_OT_import_rigged,
