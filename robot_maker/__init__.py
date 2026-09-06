@@ -2284,7 +2284,184 @@ class RM_OT_rigid_skin(bpy.types.Operator):
         self.report({'INFO'}, msg)
         return {'FINISHED'}
     
+LIMB_BONES = [
+    "mixamorig:LeftArm", "mixamorig:LeftForeArm",
+    "mixamorig:RightArm", "mixamorig:RightForeArm",
+    "mixamorig:LeftUpLeg", "mixamorig:LeftLeg",
+    "mixamorig:RightUpLeg", "mixamorig:RightLeg",
+]
 
+K_BONE_TUBE = "bone_tube"
+
+
+def _cylinder_mesh(name, length, radius, segments=12):
+    """Cylindre le long de Z, de 0 a length."""
+    verts, faces = [], []
+
+    for i in range(segments):
+        a = 2.0 * math.pi * i / segments
+        x, y = math.cos(a) * radius, math.sin(a) * radius
+        verts.append((x, y, 0.0))
+        verts.append((x, y, length))
+
+    for i in range(segments):
+        j = (i + 1) % segments
+        faces.append((i * 2, j * 2, j * 2 + 1, i * 2 + 1))
+
+    mesh = bpy.data.meshes.new(name)
+    mesh.from_pydata(verts, [], faces)
+    mesh.update()
+    return mesh
+
+
+class RM_OT_bone_tubes(bpy.types.Operator):
+    bl_idname = "rm.bone_tubes"
+    bl_label = "Tubes sur les os"
+    bl_description = ("Cree un tube par membre, parente rigidement a son os. "
+                      "Il ne se deforme jamais et suit la chaine FK")
+    bl_options = {'REGISTER', 'UNDO'}
+
+    def execute(self, context):
+        scene = context.scene
+        rig = context.active_object
+
+        if rig is not None and rig.type == 'MESH':
+            rig = rig.find_armature()
+        if rig is None or rig.type != 'ARMATURE':
+            self.report({'ERROR'}, "Selectionner le personnage rigge")
+            return {'CANCELLED'}
+
+        coll = rig.users_collection[0] if rig.users_collection else context.collection
+
+        # Un nouveau passage remplace les tubes precedents
+        for obj in [o for o in bpy.data.objects if o.get(K_BONE_TUBE)]:
+            if obj.parent == rig:
+                bpy.data.objects.remove(obj)
+
+        context.view_layer.update()
+        made, missing = 0, []
+
+        # Positions enregistrees a l'export : chaque tube retrouve sa longueur,
+        # son diametre et sa place exacte
+        recorded = []
+        robot = scene.rm_robot or robot_of(rig)
+        base = robot_dir(context, robot)
+        if base:
+            jpath = os.path.join(base, "prototype", robot + "_mixamo_tubes.json")
+            try:
+                with open(jpath, "r", encoding="utf-8") as fh:
+                    recorded = json.load(fh).get("tubes", [])
+            except Exception:
+                recorded = []
+
+        if recorded:
+            for entry in recorded:
+                a = Vector(entry["a"])
+                b = Vector(entry["b"])
+                axis = b - a
+                if axis.length < 1e-5:
+                    continue
+
+                # L'os porteur est celui dont la tete est la plus proche
+                best, best_d = None, None
+                for pb in rig.pose.bones:
+                    if not pb.name.startswith("mixamorig:"):
+                        continue
+                    d = (rig.matrix_world @ pb.head - a).length
+                    if best_d is None or d < best_d:
+                        best, best_d = pb, d
+
+                if best is None:
+                    continue
+
+                radius = entry.get("radius") or scene.rm_tube_radius
+                mesh = _cylinder_mesh(entry.get("name", "TUBE"),
+                                      axis.length, radius * scene.rm_tube_grow,
+                                      max(6, scene.rm_tube_res * 3))
+
+                if scene.rm_tube_material is not None:
+                    mesh.materials.append(scene.rm_tube_material)
+
+                obj = bpy.data.objects.new(mesh.name, mesh)
+                obj[K_BONE_TUBE] = best.name
+                coll.objects.link(obj)
+
+                obj.matrix_world = (Matrix.Translation(a)
+                                    @ axis.to_track_quat('Z', 'Y').to_matrix().to_4x4())
+
+                world = obj.matrix_world.copy()
+                obj.parent = rig
+                obj.parent_type = 'BONE'
+                obj.parent_bone = best.name
+                context.view_layer.update()
+                obj.matrix_world = world
+                context.view_layer.update()
+
+                made += 1
+
+            deselect_all(context)
+            self.report({'INFO'},
+                        "{} tube(s) reposes depuis le prototype".format(made))
+            return {'FINISHED'}
+
+        # Aucun enregistrement : repli sur les os des membres
+        for name in LIMB_BONES:
+            pbone = rig.pose.bones.get(name)
+            if pbone is None:
+                missing.append(name.replace("mixamorig:", ""))
+                continue
+
+            # Tete et queue reelles de l'os, en coordonnees monde : plus fiable
+            # que de recomposer une matrice, dont le roll varie d'un os a l'autre
+            head = rig.matrix_world @ pbone.head
+            tail = rig.matrix_world @ pbone.tail
+            axis = tail - head
+            length = axis.length
+
+            if length < 1e-5:
+                missing.append(name.replace("mixamorig:", "") + " (longueur nulle)")
+                continue
+
+            mesh = _cylinder_mesh("TUBE_" + name.replace("mixamorig:", ""),
+                                  length, scene.rm_tube_radius,
+                                  max(6, scene.rm_tube_res * 3))
+
+            if scene.rm_tube_material is not None:
+                mesh.materials.append(scene.rm_tube_material)
+
+            obj = bpy.data.objects.new(mesh.name, mesh)
+            obj[K_BONE_TUBE] = name
+            coll.objects.link(obj)
+
+            # Le cylindre est bati le long de Z : on l'oriente sur l'axe reel
+            obj.matrix_world = (Matrix.Translation(head)
+                                @ axis.to_track_quat('Z', 'Y').to_matrix().to_4x4())
+
+            # Parentage direct : l'operateur parent_set exige un os actif en
+            # mode Pose, ce qui ne survit pas au retour en mode Objet
+            world = obj.matrix_world.copy()
+
+            obj.parent = rig
+            obj.parent_type = 'BONE'
+            obj.parent_bone = name
+            context.view_layer.update()
+
+            # matrix_parent_inverse ne s'applique pas au parentage par os :
+            # on recale via matrix_basis une fois la parente etablie
+            obj.matrix_world = world
+            context.view_layer.update()
+
+            made += 1
+
+        deselect_all(context)
+        msg = "{} tube(s) crees".format(made)
+        if missing:
+            msg += " - os absents : " + ", ".join(missing[:4])
+
+        self.report({'INFO'}, msg)
+        return {'FINISHED'}
+    
+    
 class RM_OT_prepare_face(bpy.types.Operator):
     bl_idname = "rm.prepare_face"
     bl_label = "Preparer"
@@ -2767,6 +2944,36 @@ class RM_OT_prepare_mixamo(bpy.types.Operator):
 
         path = os.path.join(folder, scene.rm_robot + "_mixamo.fbx")
 
+        # Position reelle de chaque tube, dans la pose exportee : elle servira
+        # a les reposer a l'identique une fois le personnage rigge
+        context.view_layer.update()
+        tubes_data = []
+
+        for obj in coll.objects:
+            if not obj.get(K_TUBE) or obj.type != 'CURVE':
+                continue
+
+            sa = bpy.data.objects.get(obj.get("socket_a", ""))
+            sb = bpy.data.objects.get(obj.get("socket_b", ""))
+            if sa is None or sb is None:
+                continue
+
+            tubes_data.append({
+                "name": obj.name,
+                "a": list(sa.matrix_world.translation),
+                "b": list(sb.matrix_world.translation),
+                "radius": obj.data.bevel_depth,
+                "resolution": obj.data.bevel_resolution,
+            })
+
+        if tubes_data:
+            try:
+                with open(os.path.splitext(path)[0] + "_tubes.json", "w",
+                          encoding="utf-8") as fh:
+                    json.dump({"tubes": tubes_data}, fh, indent=1)
+            except Exception as e:
+                self.report({'WARNING'}, "Positions des tubes non ecrites : {}".format(e))
+
         # Les pieces sont parentees aux reperes : exportees telles quelles, elles
         # perdraient leur position (les empties ne partent pas dans le FBX).
         # On travaille donc sur des copies detachees, fusionnees en un seul
@@ -3230,6 +3437,9 @@ class RM_PT_panel(bpy.types.Panel):
 
         box.prop(scene, "rm_make_rig")
         box.operator("rm.import_rigged", icon='IMPORT')
+        box.prop(scene, "rm_tube_grow")
+        box.operator("rm.bone_tubes", icon='CURVE_PATH')
+
         r = box.row(align=True)
         r.operator("rm.rigid_skin", icon='CON_ARMATURE')
         r.operator("rm.rigid_info", text="", icon='INFO')
@@ -3322,6 +3532,7 @@ classes = (
     RM_OT_rule_remove,
     RM_OT_rigid_skin,
     RM_OT_rigid_info,
+    RM_OT_bone_tubes,
 )
 
 @bpy.app.handlers.persistent
@@ -3434,6 +3645,10 @@ def register():
         name="Creer le control rig", default=True,
         description="Ajoute les controleurs IK/FK via l'addon Mixamo Control Rig")
     S.rm_rules = bpy.props.CollectionProperty(type=RM_Rule)
+    S.rm_tube_grow = bpy.props.FloatProperty(
+        name="Elargissement", default=1.15, min=1.0, max=2.0,
+        description="Les tubes reposes sont un peu plus larges que ceux du "
+                    "montage, pour recouvrir ceux qui s'ecrasent")
 
 
 def unregister():
@@ -3460,7 +3675,7 @@ def unregister():
                  "rm_shoulder_w", "rm_shoulder_drop", "rm_hip_w", "rm_arm_upper",
                  "rm_arm_fore", "rm_arm_angle", "rm_leg_thigh", "rm_leg_shin", "rm_tube_res", "rm_tube_radius", "rm_tube_material",
                  "rm_socket_size", "rm_socket_custom", "rm_socket_name", "rm_category", "rm_robot",
-                 "rm_new_name", "rm_family", "rm_make_rig", "rm_rules", "rm_cat", "rm_sub", "rm_default_rules", "rm_cat", "rm_sub"):
+                 "rm_new_name", "rm_family", "rm_make_rig", "rm_rules", "rm_cat", "rm_sub", "rm_default_rules", "rm_cat", "rm_tube_grow", "rm_sub"):
         if hasattr(S, prop):
             delattr(S, prop)
 
