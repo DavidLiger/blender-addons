@@ -648,6 +648,9 @@ class RM_OT_random_fill(bpy.types.Operator):
                       "Un nouveau clic remplace le tirage precedent")
     bl_options = {'REGISTER', 'UNDO'}
 
+    def invoke(self, context, event):
+        return context.window_manager.invoke_confirm(self, event)
+
     def execute(self, context):
         import random
 
@@ -2142,6 +2145,145 @@ def _face_material(name, uv_layer, sprite, color):
 
     return mat
 
+class RM_OT_rigid_info(bpy.types.Operator):
+    bl_idname = "rm.rigid_info"
+    bl_label = "Rigidification du skinning"
+    bl_description = "Comment et quand rigidifier"
+
+    def invoke(self, context, event):
+        return context.window_manager.invoke_popup(self, width=520)
+
+    def execute(self, context):
+        return {'FINISHED'}
+
+    def draw(self, context):
+        steps = [
+            ("A quoi ca sert", [
+                "Mixamo repartit les poids progressivement entre deux os :",
+                "un tube qui traverse une articulation se pince quand elle plie.",
+                "Rigidifier fait suivre un seul os a chaque piece detachee,",
+                "comme une vraie mecanique. Les charnieres cachent la jointure.",
+            ]),
+            ("Robot entier", [
+                "Selectionner le maillage en Object Mode, cliquer le bouton.",
+                "Toutes les pieces sont traitees.",
+            ]),
+            ("Cyborg : membres mecaniques seulement", [
+                "1. Tab pour passer en Edit Mode sur le maillage.",
+                "2. Survoler chaque piece metallique et appuyer sur L :",
+                "   ca selectionne l'ilot entier sous le curseur.",
+                "3. Tab pour revenir en Object Mode.",
+                "4. Cliquer le bouton : seules ces pieces deviennent rigides,",
+                "   la chair garde sa deformation souple.",
+            ]),
+            ("A ne pas faire", [
+                "Ne pas rigidifier un humanoide entier : il se briserait",
+                "en morceaux a chaque articulation.",
+            ]),
+        ]
+
+        for title, lines in steps:
+            box = self.layout.box()
+            box.label(text=title, icon='DOT')
+            col = box.column(align=True)
+            col.scale_y = 0.8
+            for line in lines:
+                col.label(text=line)
+
+class RM_OT_rigid_skin(bpy.types.Operator):
+    bl_idname = "rm.rigid_skin"
+    bl_label = "Rigidifier le skinning"
+    bl_description = ("Chaque piece detachee suit un seul os, comme une vraie "
+                      "mecanique : les tubes ne s'ecrasent plus aux "
+                      "articulations.\n\n"
+                      "Sans selection : tout le maillage est rigidifie.\n"
+                      "Avec une selection partielle en Edit Mode : seules les "
+                      "pieces touchees le sont, le reste garde sa deformation "
+                      "souple (cas des cyborgs)")
+    bl_options = {'REGISTER', 'UNDO'}
+
+    def execute(self, context):
+        obj = context.active_object
+
+        if obj is None or obj.type != 'MESH':
+            self.report({'ERROR'}, "Selectionner le maillage rigge")
+            return {'CANCELLED'}
+
+        rig = obj.find_armature()
+        if rig is None:
+            self.report({'ERROR'}, "Le maillage n'est pas rigge")
+            return {'CANCELLED'}
+
+        mode = obj.mode
+        if mode != 'OBJECT':
+            bpy.ops.object.mode_set(mode='OBJECT')
+
+        mesh = obj.data
+        count = len(mesh.vertices)
+
+        # Selection partielle : on ne rigidifie que les pieces concernees,
+        # le reste garde sa deformation souple (cas des cyborgs)
+        selected = {v.index for v in mesh.vertices if v.select}
+        partial = 0 < len(selected) < count
+
+        # Ilots de geometrie : les sommets relies par une arete forment une
+        # piece. Chaque tube, charniere ou gant en est un.
+        parent = list(range(count))
+
+        def find(a):
+            while parent[a] != a:
+                parent[a] = parent[parent[a]]
+                a = parent[a]
+            return a
+
+        for edge in mesh.edges:
+            ra, rb = find(edge.vertices[0]), find(edge.vertices[1])
+            if ra != rb:
+                parent[ra] = rb
+
+        islands = {}
+        for i in range(count):
+            islands.setdefault(find(i), []).append(i)
+
+        bones = {g.index: g.name for g in obj.vertex_groups
+                 if g.name in rig.data.bones}
+        if not bones:
+            self.report({'ERROR'}, "Aucun groupe de vertices ne correspond a un os")
+            return {'CANCELLED'}
+
+        done, skipped = 0, 0
+        for verts in islands.values():
+            if partial and not any(v in selected for v in verts):
+                skipped += 1
+                continue
+
+            # Os dominant de la piece : celui qui pese le plus au total
+            totals = {}
+            for vi in verts:
+                for vg in mesh.vertices[vi].groups:
+                    if vg.group in bones:
+                        totals[vg.group] = totals.get(vg.group, 0.0) + vg.weight
+
+            if not totals:
+                continue
+
+            best = max(totals, key=totals.get)
+
+            for group in obj.vertex_groups:
+                if group.index != best:
+                    group.remove(verts)
+            obj.vertex_groups[bones[best]].add(verts, 1.0, 'REPLACE')
+            done += 1
+
+        if mode != 'OBJECT':
+            bpy.ops.object.mode_set(mode=mode)
+
+        msg = "{} piece(s) rigidifiee(s)".format(done)
+        if partial:
+            msg += " - {} laissee(s) souple(s)".format(skipped)
+        self.report({'INFO'}, msg)
+        return {'FINISHED'}
+    
 
 class RM_OT_prepare_face(bpy.types.Operator):
     bl_idname = "rm.prepare_face"
@@ -3088,6 +3230,13 @@ class RM_PT_panel(bpy.types.Panel):
 
         box.prop(scene, "rm_make_rig")
         box.operator("rm.import_rigged", icon='IMPORT')
+        r = box.row(align=True)
+        r.operator("rm.rigid_skin", icon='CON_ARMATURE')
+        r.operator("rm.rigid_info", text="", icon='INFO')
+
+        sub = box.row()
+        sub.scale_y = 0.7
+        sub.label(text="Selection partielle = seules ces pieces")
         box.separator()
 
         r = box.row(align=True)
@@ -3171,6 +3320,8 @@ classes = (
     RM_OT_random_fill,
     RM_OT_rule_add,
     RM_OT_rule_remove,
+    RM_OT_rigid_skin,
+    RM_OT_rigid_info,
 )
 
 @bpy.app.handlers.persistent
