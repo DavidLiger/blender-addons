@@ -589,7 +589,19 @@ def zone_material(obj, zone):
         return getattr(obj, "active_material", None)
 
     prefix = "FACE_" + zone
-    for mat in getattr(obj.data, "materials", []):
+    mats = list(getattr(obj.data, "materials", []))
+
+    # Un doublon .001 peut trainer sans porter aucune face : on privilegie
+    # celui qui est reellement assigne a de la geometrie
+    used = set()
+    for poly in getattr(obj.data, "polygons", []):
+        used.add(poly.material_index)
+
+    for index, mat in enumerate(mats):
+        if mat is not None and mat.name.startswith(prefix) and index in used:
+            return mat
+
+    for mat in mats:
         if mat is not None and mat.name.startswith(prefix):
             return mat
 
@@ -713,8 +725,13 @@ def find_sheet(robot, zone):
     if not folder or not os.path.isdir(folder):
         return ""
 
+    # style.json, overrides.json et extras.json ne sont pas des planches
+    skip = {"style.json", "overrides.json", "extras.json", "removed.json"}
+
     match = next((f for f in sorted(os.listdir(folder))
-                  if f.lower().endswith(".json") and zone in f.lower()), None)
+                  if f.lower().endswith(".json")
+                  and f.lower() not in skip
+                  and zone in f.lower()), None)
     return os.path.join(folder, match) if match else ""
 
 
@@ -749,7 +766,10 @@ def _auto_load_zone(scene, obj):
         return False
 
     key = data_key(scene)
-    if key in obj and bpy.path.abspath(scene.expr_json) == path:
+    same = (os.path.normcase(os.path.normpath(bpy.path.abspath(scene.expr_json)))
+            == os.path.normcase(os.path.normpath(path))) if path else False
+
+    if key in obj and same:
         _fit_read(scene, obj)
         if _stored_sheet_name(obj) == scene.expr_name:
             _sync_current_from_material(scene, force=True)
@@ -1488,7 +1508,11 @@ class EXPR_PT_panel(bpy.types.Panel):
         sub = box.row()
         sub.scale_y = 0.7
         if mat is not None:
-            sub.label(text=mat.name, icon='MATERIAL')
+            doubles = [m for m in (obj.data.materials if obj else [])
+                       if m is not None and m.name.startswith("FACE_" + current_zone(scene))]
+            sub.label(text=mat.name
+                      + ("  ({} slots)".format(len(doubles)) if len(doubles) > 1 else ""),
+                      icon='MATERIAL' if len(doubles) < 2 else 'ERROR')
         else:
             sub.alert = True
             sub.label(text="Aucun materiau de zone", icon='ERROR')

@@ -2313,7 +2313,54 @@ def _cylinder_mesh(name, length, radius, segments=12):
     mesh.update()
     return mesh
 
+class RM_OT_tubes_info(bpy.types.Operator):
+    bl_idname = "rm.tubes_info"
+    bl_label = "Tubes sur les os : marche a suivre"
+    bl_description = "Rappelle la procedure complete"
 
+    def invoke(self, context, event):
+        return context.window_manager.invoke_popup(self, width=540)
+
+    def execute(self, context):
+        return {'FINISHED'}
+
+    def draw(self, context):
+        steps = [
+            ("Pourquoi", [
+                "Mixamo repartit les poids entre deux os : un tube qui traverse",
+                "une articulation se pince quand elle plie. On le remplace donc",
+                "par un tube rigide, parente a un seul os.",
+            ]),
+            ("1. Generer", [
+                "Apres 'Instancier le perso rigge', selectionner le personnage",
+                "et cliquer 'Tubes sur les os'. Les tubes sont reposes aux",
+                "positions enregistrees a l'export du prototype.",
+            ]),
+            ("2. Ajuster", [
+                "Passer en Edit Mode sur chaque tube (bras, avant-bras, cuisse,",
+                "jambe) et replacer les cercles aux bons endroits.",
+            ]),
+            ("3. Retirer les anciens", [
+                "Selectionner le maillage skinne, Edit Mode, survoler chaque",
+                "tube ecrase et appuyer sur L pour selectionner l'ilot entier",
+                "(bras, avant-bras, cuisse, jambe), puis supprimer.",
+            ]),
+            ("4. Enregistrer", [
+                "Verifier dans l'outliner que les objets TUBE_* sont bien dans",
+                "la collection ROBOT_<nom>_NN, puis cliquer",
+                "'Enregistrer le personnage pret'.",
+            ]),
+        ]
+
+        for title, lines in steps:
+            box = self.layout.box()
+            box.label(text=title, icon='DOT')
+            col = box.column(align=True)
+            col.scale_y = 0.8
+            for line in lines:
+                col.label(text=line)
+                
+                
 class RM_OT_bone_tubes(bpy.types.Operator):
     bl_idname = "rm.bone_tubes"
     bl_label = "Tubes sur les os"
@@ -3438,15 +3485,11 @@ class RM_PT_panel(bpy.types.Panel):
         box.prop(scene, "rm_make_rig")
         box.operator("rm.import_rigged", icon='IMPORT')
         box.prop(scene, "rm_tube_grow")
-        box.operator("rm.bone_tubes", icon='CURVE_PATH')
 
         r = box.row(align=True)
-        r.operator("rm.rigid_skin", icon='CON_ARMATURE')
-        r.operator("rm.rigid_info", text="", icon='INFO')
+        r.operator("rm.bone_tubes", icon='CURVE_PATH')
+        r.operator("rm.tubes_info", text="", icon='INFO')
 
-        sub = box.row()
-        sub.scale_y = 0.7
-        sub.label(text="Selection partielle = seules ces pieces")
         box.separator()
 
         r = box.row(align=True)
@@ -3533,6 +3576,7 @@ classes = (
     RM_OT_rigid_skin,
     RM_OT_rigid_info,
     RM_OT_bone_tubes,
+    RM_OT_tubes_info,
 )
 
 @bpy.app.handlers.persistent
