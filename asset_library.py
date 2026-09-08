@@ -278,7 +278,7 @@ def scoped_sub_items(cat_prop):
     def items(self, context):
         scene = context.scene if context else None
         cat = find_cat(getattr(scene, cat_prop, "")) if scene else None
-        children = cat.get("children", []) if cat else []
+        children = children_of(cat) if cat else []
         sig = (cat_prop, getattr(scene, cat_prop, "") if scene else "",
                tuple(c["key"] for c in children))
 
