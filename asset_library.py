@@ -1052,6 +1052,53 @@ def _poll_selection():
         pass
     return 0.3
 
+class AL_OT_texture_info(bpy.types.Operator):
+    bl_idname = "al.texture_info"
+    bl_label = "Textures et images"
+    bl_description = "Ou ranger les images pour qu'elles suivent l'asset"
+
+    def invoke(self, context, event):
+        return context.window_manager.invoke_popup(self, width=520)
+
+    def execute(self, context):
+        return {'FINISHED'}
+
+    def draw(self, context):
+        steps = [
+            ("Le probleme", [
+                "Un .blend n'embarque pas ses images, seulement leur chemin.",
+                "Une texture laissee dans Telechargements cassera le jour ou",
+                "tu feras du menage.",
+            ]),
+            ("La regle", [
+                "Ranger l'image dans un sous-dossier textures/ a cote du .blend",
+                "de l'asset, par exemple :",
+                "  library/shared/hair/textures/cheveux.png",
+            ]),
+            ("Avant d'ajouter a la bibliotheque", [
+                "File > External Data > Make Paths Relative",
+                "Le chemin devient //textures/cheveux.png : le dossier library",
+                "peut alors etre deplace ou synchronise sans rien casser.",
+            ]),
+            ("Alternative", [
+                "File > External Data > Pack Resources embarque l'image dans",
+                "le .blend. Fichier autonome mais plus lourd, et la texture",
+                "n'est plus modifiable dans GIMP sans repasser par Blender.",
+            ]),
+            ("Ne pas oublier", [
+                "Une image trouvee sur le web se credite comme un modele :",
+                "remplir les champs ci-dessous si sa licence l'exige.",
+            ]),
+        ]
+
+        for title, lines in steps:
+            box = self.layout.box()
+            box.label(text=title, icon='DOT')
+            col = box.column(align=True)
+            col.scale_y = 0.8
+            for line in lines:
+                col.label(text=line)
+
 class AL_OT_add(bpy.types.Operator):
     bl_idname = "al.add"
     bl_label = "Ajouter a la bibliotheque"
@@ -1184,20 +1231,30 @@ class AL_OT_add(bpy.types.Operator):
                                             os.path.join(folder, name + ".png"))
         scn.collection.objects.unlink(cam)
 
+        # Les textures sont referencees par chemin : en relatif au .blend de
+        # l'asset, elles suivent le dossier si tu le deplaces
+        for mat in (tmp.data.materials if tmp.data else []):
+            if mat is None or not mat.use_nodes:
+                continue
+            for node in mat.node_tree.nodes:
+                if node.type != 'TEX_IMAGE' or node.image is None:
+                    continue
+                src = bpy.path.abspath(node.image.filepath)
+                if not os.path.isfile(src):
+                    continue
+
+                dest_dir = os.path.join(folder, "textures")
+                dest = os.path.join(dest_dir, os.path.basename(src))
+                try:
+                    os.makedirs(dest_dir, exist_ok=True)
+                    if os.path.normcase(src) != os.path.normcase(dest):
+                        import shutil
+                        shutil.copy2(src, dest)
+                    node.image.filepath = bpy.path.relpath(dest, start=folder)
+                except Exception:
+                    pass
+
         error = ""
-        
-        if False:
-            print("=== DIAGNOSTIC RIG ===")
-            for o, c in rig_map.items():
-                print("  {} -> copie {} | parent={} | parent_type={} | "
-                      "matrix_world.translation={} | scale={}".format(
-                          o.name, c.name,
-                          c.parent.name if c.parent else None,
-                          c.parent_type,
-                          tuple(round(x, 3) for x in c.matrix_world.translation),
-                          tuple(round(x, 3) for x in c.scale)))
-            print("=======================")
-        
         try:
             bpy.data.libraries.write(path, write_set, fake_user=True)
         except Exception as e:
@@ -1440,8 +1497,11 @@ def draw_browser(layout, context, op_idname="al.place", enabled=True, key=None):
 def draw_add_panel(layout, context):
     scene = context.scene
 
+    header = layout.row(align=True)
+    header.label(text="Ajouter la piece selectionnee :")
+    header.operator("al.texture_info", text="", icon='TEXTURE')
+
     col = layout.column(align=True)
-    col.label(text="Ajouter la piece selectionnee :")
 
     r = col.row(align=True)
     r.prop(scene, "al_asset_name", text="")
@@ -1513,6 +1573,7 @@ classes = (
     AL_PT_panel,
     AL_OT_cat_link,
     AL_OT_cat_mirror,
+    AL_OT_texture_info,
 )
 
 
