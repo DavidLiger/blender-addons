@@ -2892,12 +2892,13 @@ class RM_OT_save_ready(bpy.types.Operator):
 
         # Les sprite sheets sont referencees par chemin : en absolu elles
         # restent trouvables depuis n'importe quel fichier
-        for obj in coll.objects:
+        for obj in coll.all_objects:
             for mat in (getattr(obj.data, "materials", None) or []):
                 if mat is None or not mat.use_nodes:
                     continue
                 for node in mat.node_tree.nodes:
-                    if node.type == 'TEX_IMAGE' and node.image is not None:
+                    if (node.type == 'TEX_IMAGE' and node.image is not None
+                            and not node.image.packed_file):
                         try:
                             node.image.filepath = bpy.path.abspath(
                                 node.image.filepath)
