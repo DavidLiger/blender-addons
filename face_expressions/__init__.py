@@ -1491,7 +1491,8 @@ class EXPR_PT_panel(bpy.types.Panel):
     bl_idname = "EXPR_PT_panel"
     bl_space_type = 'VIEW_3D'
     bl_region_type = 'UI'
-    bl_category = "Expressions"
+    bl_category = "BD"
+    bl_order = 30
 
     def draw(self, context):
         layout = self.layout

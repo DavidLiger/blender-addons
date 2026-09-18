@@ -32,6 +32,8 @@ D_RIGGED = "mixamo-rigged"
 D_ANIM = "animations"
 D_POSE = "postures"
 READY_FILE = "ready.blend"
+D_EXPR = "expressions-arkit"
+PRESETS = "_presets"
 
 COLL_PREFIX = "ROBOT_"
 K_ROBOT = "robot"
@@ -240,11 +242,12 @@ def render_thumbnail(context, objects, path, size=256, front=True):
         scn.collection.objects.link(dup)
         temps.append(dup)
 
-        for v in mesh.vertices:
-            p = dup.matrix_world @ v.co
-            for i in range(3):
-                lo[i] = min(lo[i], p[i])
-                hi[i] = max(hi[i], p[i])
+        if frame_on is None or obj in frame_on:
+            for v in mesh.vertices:
+                p = dup.matrix_world @ v.co
+                for i in range(3):
+                    lo[i] = min(lo[i], p[i])
+                    hi[i] = max(hi[i], p[i])
 
     if not temps:
         bpy.data.scenes.remove(scn)
@@ -255,7 +258,7 @@ def render_thumbnail(context, objects, path, size=256, front=True):
 
     cam_data = bpy.data.cameras.new("_rbm_cam")
     cam_data.type = 'ORTHO'
-    cam_data.ortho_scale = extent * 1.25
+    cam_data.ortho_scale = extent * zoom
     cam_data.clip_start = 0.001
     cam_data.clip_end = extent * 20.0
 
@@ -1486,7 +1489,8 @@ class RBM_PT_panel(bpy.types.Panel):
     bl_idname = "RBM_PT_panel"
     bl_space_type = 'VIEW_3D'
     bl_region_type = 'UI'
-    bl_category = "Character Manager"
+    bl_category = "BD"
+    bl_order = 20
 
     def draw(self, context):
         layout = self.layout
@@ -1630,7 +1634,359 @@ class RBM_PT_panel(bpy.types.Panel):
         box.operator("rbm.insert_keyframe", icon='KEY_HLT',
                     text="Keyframer la posture (frame {})".format(scene.frame_current))
 
+# ---------------------------------------------------------------------------
+# Expressions ARKit
+#   creations/_presets/expressions-arkit/<nom>.json   presets communs a la serie
+#   creations/<perso>/expressions-arkit/<nom>.json    override propre au perso
+#   Un preset de meme nom dans le dossier du perso masque le commun.
+# ---------------------------------------------------------------------------
+ARKIT_PROBE = "jawOpen"   # presence = personnage bake par Faceit
 
+
+def expr_dirs(robot):
+    """(dossier commun, dossier du perso). L'un ou l'autre peut etre vide."""
+    root = root_path()
+    shared = os.path.join(root, CREATIONS, PRESETS, D_EXPR) if root else ""
+    own = sub_dir(robot, D_EXPR) if robot else ""
+    return shared, own
+
+
+def scan_expressions(robot):
+    """[(nom, chemin, propre_au_perso)] : le perso ecrase le commun."""
+    found = {}
+    shared, own = expr_dirs(robot)
+
+    for folder, is_own in ((shared, False), (own, True)):
+        if not folder or not os.path.isdir(folder):
+            continue
+        for fname in sorted(os.listdir(folder)):
+            if not fname.lower().endswith(".json"):
+                continue
+            base = fname[:-5]
+            found[base] = (base, os.path.join(folder, fname), is_own)
+
+            key = "expr/" + robot + "/" + base
+            png = os.path.join(folder, base + ".png")
+            if _previews is not None and key not in _previews and os.path.isfile(png):
+                _previews.load(key, png, 'IMAGE')
+
+    return [found[k] for k in sorted(found)]
+
+
+def face_meshes(context, robot=None):
+    """Meshes du personnage courant qui portent des shape keys ARKit.
+
+    Les shapes sont reparties sur plusieurs objets (visage, yeux, dents,
+    langue) : il faut tous les traiter, pas seulement l'objet actif.
+    """
+    obj = context.view_layer.objects.active
+    robot = robot or robot_of(obj)
+    if not robot:
+        return []
+
+    colls = [c for c in bpy.data.collections
+             if c.name.startswith(COLL_PREFIX)
+             and re.sub(r"_\d+$", "", c.name[len(COLL_PREFIX):]) == robot]
+
+    # Plusieurs instances du meme perso : on prend celle de l'objet actif
+    if len(colls) > 1 and obj is not None:
+        mine = [c for c in colls if obj.name in c.all_objects]
+        colls = mine or colls[:1]
+
+    meshes = []
+    for coll in colls[:1]:
+        for o in coll.all_objects:
+            if o.type != 'MESH':
+                continue
+            keys = getattr(o.data, "shape_keys", None)
+            if keys and len(keys.key_blocks) > 1:
+                meshes.append(o)
+    return meshes
+
+
+def has_arkit(context, robot=None):
+    for obj in face_meshes(context, robot):
+        if ARKIT_PROBE in obj.data.shape_keys.key_blocks:
+            return True
+    return False
+
+
+def expr_to_dict(meshes):
+    """Valeurs non nulles des shapes, tous objets confondus."""
+    data = {}
+    for obj in meshes:
+        for kb in obj.data.shape_keys.key_blocks:
+            if kb.name == "Basis" or kb.value <= 0.0005:
+                continue
+            data[kb.name] = round(kb.value, 4)
+    return data
+
+
+def apply_expr(meshes, data, keyframe=False, frame=None):
+    """Applique un preset. Toute shape absente du preset repasse a 0, sinon
+    l'expression precedente se cumule avec la nouvelle."""
+    frame = frame if frame is not None else bpy.context.scene.frame_current
+    touched = 0
+
+    for obj in meshes:
+        keys = obj.data.shape_keys
+        for kb in keys.key_blocks:
+            if kb.name == "Basis":
+                continue
+            kb.value = float(data.get(kb.name, 0.0))
+            touched += 1
+            if keyframe:
+                kb.keyframe_insert("value", frame=frame)
+
+        # Interpolation Constant : pas d'etat intermediaire entre deux cases
+        if keyframe and keys.animation_data and keys.animation_data.action:
+            for fc in keys.animation_data.action.fcurves:
+                for kp in fc.keyframe_points:
+                    if abs(kp.co.x - frame) < 0.001:
+                        kp.interpolation = 'CONSTANT'
+
+    return touched
+
+def shape_actions(meshes):
+    """Meshes dont les shape keys sont pilotees par une action."""
+    out = []
+    for obj in meshes:
+        ad = getattr(obj.data.shape_keys, "animation_data", None)
+        if ad is not None and ad.action is not None:
+            out.append(obj)
+    return out
+
+
+class RBM_OT_expr_clear_anim(bpy.types.Operator):
+    bl_idname = "rbm.expr_clear_anim"
+    bl_label = "Delier l'animation des shapes"
+    bl_description = ("Retire l'action qui pilote les shape keys sur tous les "
+                      "meshes du visage et remet les valeurs a zero. L'action "
+                      "est conservee dans le fichier (fake user)")
+    bl_options = {'REGISTER', 'UNDO'}
+
+    def execute(self, context):
+        meshes = face_meshes(context)
+        if not meshes:
+            self.report({'ERROR'}, "Aucun mesh a shape keys pour ce personnage")
+            return {'CANCELLED'}
+
+        cleared = 0
+        for obj in meshes:
+            keys = obj.data.shape_keys
+            ad = getattr(keys, "animation_data", None)
+            if ad is not None:
+                if ad.action is not None:
+                    ad.action.use_fake_user = True
+                    cleared += 1
+                keys.animation_data_clear()
+            for kb in keys.key_blocks:
+                if kb.name != "Basis":
+                    kb.value = 0.0
+
+        self.report({'INFO'},
+                    "{} action(s) deliee(s) sur {} mesh(es), shapes a zero".format(
+                        cleared, len(meshes)))
+        return {'FINISHED'}
+    
+class RBM_OT_expr_apply(bpy.types.Operator):
+    bl_idname = "rbm.expr_apply"
+    bl_label = "Appliquer l'expression"
+    bl_description = "Regle les shape keys ARKit du personnage sur ce preset"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    name: bpy.props.StringProperty()
+
+    def execute(self, context):
+        scene = context.scene
+        robot = robot_of(context.view_layer.objects.active) or scene.rbm_robot
+        entry = next((e for e in scan_expressions(robot) if e[0] == self.name), None)
+        if entry is None:
+            self.report({'ERROR'}, "Preset '{}' introuvable".format(self.name))
+            return {'CANCELLED'}
+
+        try:
+            with open(entry[1], "r", encoding="utf-8") as f:
+                data = json.load(f).get("arkit", {})
+        except Exception as e:
+            self.report({'ERROR'}, "Lecture impossible : {}".format(e))
+            return {'CANCELLED'}
+
+        meshes = face_meshes(context, robot)
+        if not meshes:
+            self.report({'ERROR'}, "Aucun mesh a shape keys pour ce personnage")
+            return {'CANCELLED'}
+
+        apply_expr(meshes, data, scene.rbm_expr_keyframe)
+        msg = "'{}' appliquee".format(self.name)
+        if scene.rbm_expr_keyframe:
+            msg += " et keyframee a la frame {}".format(scene.frame_current)
+        self.report({'INFO'}, msg)
+        return {'FINISHED'}
+
+
+class RBM_OT_expr_save(bpy.types.Operator):
+    bl_idname = "rbm.expr_save"
+    bl_label = "Enregistrer l'expression"
+    bl_description = ("Enregistre l'etat courant des shape keys comme preset, "
+                      "avec sa vignette")
+
+    def execute(self, context):
+        scene = context.scene
+        robot = robot_of(context.view_layer.objects.active) or scene.rbm_robot
+        name = safe_name(scene.rbm_expr_name) or "expression"
+
+        meshes = face_meshes(context, robot)
+        if not meshes:
+            self.report({'ERROR'}, "Aucun mesh a shape keys pour ce personnage")
+            return {'CANCELLED'}
+
+        data = expr_to_dict(meshes)
+        if not data:
+            self.report({'ERROR'}, "Toutes les shapes sont a zero")
+            return {'CANCELLED'}
+
+        if scene.rbm_expr_own:
+            folder = sub_dir(robot, D_EXPR, create=True)
+        else:
+            root = root_path()
+            folder = os.path.join(root, CREATIONS, PRESETS, D_EXPR)
+            os.makedirs(folder, exist_ok=True)
+
+        if not folder:
+            self.report({'ERROR'}, "Dossier de destination introuvable")
+            return {'CANCELLED'}
+
+        path = os.path.join(folder, name + ".json")
+        if os.path.isfile(path) and not scene.rbm_overwrite:
+            self.report({'ERROR'}, "'{}' existe deja (cocher Ecraser)".format(name))
+            return {'CANCELLED'}
+
+        try:
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump({"name": name, "arkit": data}, f, indent=1)
+        except Exception as e:
+            self.report({'ERROR'}, "Ecriture impossible : {}".format(e))
+            return {'CANCELLED'}
+
+        # Vignette cadree sur les seuls meshes du visage
+        # Cadrage sur les petits meshes (yeux, dents, langue) : l'objet du
+        # visage porte le corps entier, il ferait dezoomer la vignette
+        small = sorted(meshes, key=lambda o: len(o.data.vertices))[:max(1, len(meshes) - 1)]
+        ok, err = render_thumbnail(context, meshes,
+                                   os.path.join(folder, name + ".png"),
+                                   scene.rbm_thumb_size,
+                                   frame_on=small, zoom=2.2)
+        scan_all(context)
+
+        msg = "expression '{}' enregistree".format(name)
+        if not ok:
+            msg += " (vignette : {})".format(err)
+        self.report({'INFO'}, msg)
+        return {'FINISHED'}
+
+
+class RBM_OT_expr_reset(bpy.types.Operator):
+    bl_idname = "rbm.expr_reset"
+    bl_label = "Remettre a zero"
+    bl_description = "Remet toutes les shape keys du personnage a 0"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    def execute(self, context):
+        meshes = face_meshes(context)
+        if not meshes:
+            self.report({'ERROR'}, "Aucun mesh a shape keys pour ce personnage")
+            return {'CANCELLED'}
+
+        apply_expr(meshes, {}, context.scene.rbm_expr_keyframe)
+        self.report({'INFO'}, "shapes remises a zero")
+        return {'FINISHED'}
+
+
+class RBM_OT_expr_delete(bpy.types.Operator):
+    bl_idname = "rbm.expr_delete"
+    bl_label = "Supprimer l'expression"
+    bl_description = "Supprime ce preset et sa vignette"
+
+    name: bpy.props.StringProperty()
+
+    def invoke(self, context, event):
+        return context.window_manager.invoke_confirm(self, event)
+
+    def execute(self, context):
+        robot = robot_of(context.view_layer.objects.active) or context.scene.rbm_robot
+        entry = next((e for e in scan_expressions(robot) if e[0] == self.name), None)
+        if entry is None:
+            self.report({'ERROR'}, "Preset '{}' introuvable".format(self.name))
+            return {'CANCELLED'}
+
+        base = entry[1][:-5]
+        for path in (base + ".json", base + ".png"):
+            try:
+                if os.path.isfile(path):
+                    os.remove(path)
+            except Exception as e:
+                self.report({'ERROR'}, "Suppression impossible : {}".format(e))
+                return {'CANCELLED'}
+
+        scan_all(context)
+        self.report({'INFO'}, "expression '{}' supprimee".format(self.name))
+        return {'FINISHED'}
+
+
+class RBM_PT_expressions(bpy.types.Panel):
+    bl_label = "Expressions ARKit"
+    bl_idname = "RBM_PT_expressions"
+    bl_parent_id = "RBM_PT_panel"
+    bl_space_type = 'VIEW_3D'
+    bl_region_type = 'UI'
+    bl_category = "BD"
+    bl_options = {'DEFAULT_CLOSED'}
+
+    @classmethod
+    def poll(cls, context):
+        return has_arkit(context)
+
+    def draw(self, context):
+        layout = self.layout
+        scene = context.scene
+        robot = robot_of(context.view_layer.objects.active) or scene.rbm_robot
+
+        presets = scan_expressions(robot)
+        if presets:
+            grid = layout.grid_flow(row_major=True, columns=scene.rbm_columns,
+                                    even_columns=True, align=True)
+            for name, path, is_own in presets:
+                cell = grid.column(align=True)
+                icon = icon_of("expr/" + robot + "/" + name)
+                op = cell.operator("rbm.expr_apply", text="",
+                                   icon_value=icon, icon='SHAPEKEY_DATA' if not icon else 'NONE')
+                op.name = name
+
+                row = cell.row(align=True)
+                row.label(text=name, icon='USER' if is_own else 'WORLD')
+                row.operator("rbm.expr_delete", text="", icon='X').name = name
+        else:
+            layout.label(text="(aucune expression enregistree)", icon='INFO')
+
+        animated = shape_actions(face_meshes(context, robot))
+        if animated:
+            warn = layout.box()
+            warn.label(text="{} mesh(es) animes : valeurs pilotees".format(len(animated)),
+                       icon='ERROR')
+            warn.operator("rbm.expr_clear_anim", icon='UNLINKED')
+
+        layout.prop(scene, "rbm_expr_keyframe")
+        layout.operator("rbm.expr_reset", icon='LOOP_BACK')
+
+        box = layout.box()
+        box.label(text="Enregistrer l'etat courant :", icon='FILE_TICK')
+        box.prop(scene, "rbm_expr_name", text="")
+        row = box.row(align=True)
+        row.prop(scene, "rbm_expr_own")
+        row.prop(scene, "rbm_overwrite")
+        box.operator("rbm.expr_save", icon='ADD')
+        
 # ---------------------------------------------------------------------------
 # Enregistrement
 # ---------------------------------------------------------------------------
@@ -1653,6 +2009,12 @@ classes = (
     RBM_OT_open_shared_anims,
     RBM_OT_preview_gif,
     RBM_OT_duplicate_character,
+    RBM_OT_expr_apply,
+    RBM_OT_expr_clear_anim,
+    RBM_OT_expr_save,
+    RBM_OT_expr_reset,
+    RBM_OT_expr_delete,
+    RBM_PT_expressions,
 )
 
 
@@ -1704,6 +2066,15 @@ def register():
     S.rbm_scale = bpy.props.FloatProperty(name="Taille", default=4.0, min=1.0, max=10.0)
     S.rbm_thumb_size = bpy.props.IntProperty(name="Resolution vignette", default=256,
                                              min=64, max=512)
+    S.rbm_expr_name = bpy.props.StringProperty(name="Nom", default="expression_01")
+    S.rbm_expr_keyframe = bpy.props.BoolProperty(
+        name="Poser un keyframe", default=True,
+        description="Keyframe Constant sur toutes les shapes a la frame courante, "
+                    "pour que chaque camera garde son expression")
+    S.rbm_expr_own = bpy.props.BoolProperty(
+        name="Propre au perso", default=False,
+        description="Enregistre dans le dossier du personnage au lieu du dossier "
+                    "commun a la serie")
 
     if _on_load not in bpy.app.handlers.load_post:
         bpy.app.handlers.load_post.append(_on_load)
@@ -1730,7 +2101,7 @@ def unregister():
         _previews = None
 
     S = bpy.types.Scene
-    for prop in ("rbm_thumb_size", "rbm_scale", "rbm_columns", "rbm_edit", "rbm_follow",
+    for prop in ("rbm_expr_own", "rbm_expr_keyframe", "rbm_expr_name", "rbm_thumb_size", "rbm_scale", "rbm_columns", "rbm_edit", "rbm_follow",
                  "rbm_overwrite", "rbm_auto_rig", "rbm_auto_rest", "rbm_posture_name", "rbm_anim", "rbm_robot"):
         if hasattr(S, prop):
             delattr(S, prop)
