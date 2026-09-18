@@ -207,7 +207,7 @@ def anim_enum(self, context):
 # ---------------------------------------------------------------------------
 # Rendu de vignette : scene temporaire, moteur Workbench, fond transparent
 # ---------------------------------------------------------------------------
-def render_thumbnail(context, objects, path, size=256, front=True):
+def render_thumbnail(context, objects, path, size=256, front=True, frame_on=None, zoom=1.25):
     """Rend les objets donnes, dans leur etat evalue (pose comprise)."""
     if not objects:
         return False, "aucun objet"
