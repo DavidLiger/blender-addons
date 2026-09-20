@@ -35,7 +35,23 @@ READY_FILE = "ready.blend"
 D_EXPR = "expressions-arkit"
 PRESETS = "_presets"
 
-COLL_PREFIX = "ROBOT_"
+COLL_PREFIX = "PERSO_"
+COLL_PREFIXES = ("PERSO_", "ROBOT_")   # ROBOT_ : fichiers anterieurs
+
+
+def coll_name(coll_or_name):
+    """Nom du personnage, quel que soit le prefixe du fichier d'origine."""
+    n = coll_or_name if isinstance(coll_or_name, str) else coll_or_name.name
+    for p in COLL_PREFIXES:
+        if n.startswith(p):
+            return n[len(p):]
+    return n
+
+
+def is_char_coll(coll_or_name):
+    n = coll_or_name if isinstance(coll_or_name, str) else coll_or_name.name
+    return n.startswith(COLL_PREFIXES)
+
 K_ROBOT = "robot"
 K_ASSET = "rbm_asset"  # marque les materiaux/images importes par l'addon,
                        # pour ne jamais fusionner avec un datablock etranger
@@ -315,8 +331,8 @@ def robot_of(obj):
 
     # Repli : collection ROBOT_<nom>_NN posee a l'instanciation
     for coll in obj.users_collection:
-        if coll.name.startswith(COLL_PREFIX):
-            return re.sub(r"_\d+$", "", coll.name[len(COLL_PREFIX):])
+        if is_char_coll(coll):
+            return re.sub(r"_\d+$", "", coll_name(coll))
 
     parent = obj.parent
     return robot_of(parent) if parent is not None else ""
@@ -1016,8 +1032,7 @@ class RBM_OT_instantiate(bpy.types.Operator):
         if os.path.isfile(ready):
             try:
                 with bpy.data.libraries.load(ready, link=False) as (src, dst):
-                    dst.collections = [c for c in src.collections
-                                       if c.startswith(COLL_PREFIX)]
+                    dst.collections = [c for c in src.collections if is_char_coll(c)]
             except Exception as e:
                 self.report({'ERROR'}, "Import impossible : {}".format(e))
                 return {'CANCELLED'}
@@ -1335,10 +1350,29 @@ class RBM_OT_insert_keyframe(bpy.types.Operator):
     bl_options = {'REGISTER', 'UNDO'}
 
     def execute(self, context):
-        rig = find_control_rig(context)
+        rig = find_control_rig(context) or scene_armature(context)
         if rig is None:
-            self.report({'ERROR'}, "Aucun control rig trouve")
+            self.report({'ERROR'}, "Aucune armature trouvee")
             return {'CANCELLED'}
+
+        # Les animations livrees avec l'asset ne doivent pas recevoir les
+        # keyframes de mise en scene : on bascule sur une action dediee
+        switched = ""
+        assets = set(a.name for a in embedded_actions(context))
+        if assets:
+            if rig.animation_data is None:
+                rig.animation_data_create()
+
+            current = rig.animation_data.action
+            if current is None or current.name in assets:
+                own_name = "POSE_" + rig.name
+                own = bpy.data.actions.get(own_name)
+                if own is None:
+                    own = bpy.data.actions.new(own_name)
+                    own.use_fake_user = True
+                rig.animation_data.action = own
+                if current is not None:
+                    switched = " (animation '{}' mise de cote)".format(current.name)
 
         frame = context.scene.frame_current
         count = keyframe_pose(rig, frame)
@@ -1353,10 +1387,147 @@ class RBM_OT_insert_keyframe(bpy.types.Operator):
             if area.type in {'DOPESHEET_EDITOR', 'GRAPH_EDITOR', 'TIMELINE', 'VIEW_3D'}:
                 area.tag_redraw()
 
-        self.report({'INFO'}, "Keyframe posee sur {} os a la frame {}".format(count, frame))
+        self.report({'INFO'}, "Keyframe posee sur {} os a la frame {}{}".format(
+            count, frame, switched))
+        return {'FINISHED'}
+
+class RBM_Clip(bpy.types.PropertyGroup):
+    name: bpy.props.StringProperty(name="Nom", default="clip")
+    start: bpy.props.IntProperty(name="Debut", default=0, min=0)
+    end: bpy.props.IntProperty(name="Fin", default=0, min=0)
+
+
+class RBM_OT_clip_add(bpy.types.Operator):
+    bl_idname = "rbm.clip_add"
+    bl_label = "Ajouter le clip"
+    bl_description = ("Ajoute un clip aux bornes actuelles de la timeline "
+                      "(Start / End de la scene)")
+
+    def execute(self, context):
+        scene = context.scene
+        clip = scene.rbm_clips.add()
+        clip.name = "clip_{:02d}".format(len(scene.rbm_clips))
+        clip.start = scene.frame_start
+        clip.end = scene.frame_end
+        scene.rbm_clip_index = len(scene.rbm_clips) - 1
         return {'FINISHED'}
 
 
+class RBM_OT_clip_remove(bpy.types.Operator):
+    bl_idname = "rbm.clip_remove"
+    bl_label = "Retirer le clip"
+
+    index: bpy.props.IntProperty()
+
+    def execute(self, context):
+        scene = context.scene
+        if 0 <= self.index < len(scene.rbm_clips):
+            scene.rbm_clips.remove(self.index)
+            scene.rbm_clip_index = max(0, self.index - 1)
+        return {'FINISHED'}
+
+
+class RBM_OT_clip_preview(bpy.types.Operator):
+    bl_idname = "rbm.clip_preview"
+    bl_label = "Voir le clip"
+    bl_description = "Cale la timeline sur les bornes de ce clip"
+
+    index: bpy.props.IntProperty()
+
+    def execute(self, context):
+        scene = context.scene
+        if not (0 <= self.index < len(scene.rbm_clips)):
+            return {'CANCELLED'}
+
+        clip = scene.rbm_clips[self.index]
+        scene.frame_start = clip.start
+        scene.frame_end = clip.end
+        scene.frame_current = clip.start
+        return {'FINISHED'}
+
+
+class RBM_OT_split_action(bpy.types.Operator):
+    bl_idname = "rbm.split_action"
+    bl_label = "Decouper en actions"
+    bl_description = ("Cree une action par clip a partir de l'action concatenee. "
+                      "Chaque clip repart a la frame 0")
+    bl_options = {'REGISTER', 'UNDO'}
+
+    def execute(self, context):
+        scene = context.scene
+        src = bpy.data.actions.get(scene.rbm_source_action)
+
+        if src is None:
+            self.report({'ERROR'}, "Action source introuvable")
+            return {'CANCELLED'}
+        if not scene.rbm_clips:
+            self.report({'ERROR'}, "Aucun clip defini")
+            return {'CANCELLED'}
+
+        made = []
+        for clip in scene.rbm_clips:
+            name = safe_name(clip.name) or "clip"
+            if clip.end <= clip.start:
+                self.report({'WARNING'}, "'{}' ignore : bornes invalides".format(name))
+                continue
+            if name in bpy.data.actions:
+                self.report({'WARNING'}, "'{}' existe deja, ignore".format(name))
+                continue
+
+            act = bpy.data.actions.new(name)
+            act.use_fake_user = True
+
+            for fc in src.fcurves:
+                nfc = act.fcurves.new(
+                    fc.data_path, index=fc.array_index,
+                    action_group=fc.group.name if fc.group else "")
+                pts = [kp for kp in fc.keyframe_points
+                       if clip.start <= kp.co.x <= clip.end]
+                nfc.keyframe_points.add(len(pts))
+                for i, kp in enumerate(pts):
+                    n = nfc.keyframe_points[i]
+                    n.co = (kp.co.x - clip.start, kp.co.y)
+                    n.interpolation = kp.interpolation
+                nfc.update()
+
+            made.append(name)
+
+        if not made:
+            self.report({'ERROR'}, "Aucune action creee")
+            return {'CANCELLED'}
+
+        self.report({'INFO'}, "{} action(s) creee(s) : {}".format(
+            len(made), ", ".join(made)))
+        return {'FINISHED'}
+
+
+class RBM_OT_drop_source_action(bpy.types.Operator):
+    bl_idname = "rbm.drop_source_action"
+    bl_label = "Supprimer l'action source"
+    bl_description = ("Supprime l'action concatenee et mute les pistes NLA, "
+                      "une fois le decoupage verifie")
+
+    def invoke(self, context, event):
+        return context.window_manager.invoke_confirm(self, event)
+
+    def execute(self, context):
+        scene = context.scene
+        arm = scene_armature(context)
+        src = bpy.data.actions.get(scene.rbm_source_action)
+
+        if arm is not None and arm.animation_data:
+            for track in arm.animation_data.nla_tracks:
+                track.mute = True
+            if arm.animation_data.action is src:
+                arm.animation_data.action = None
+
+        if src is not None:
+            bpy.data.actions.remove(src)
+
+        scene.rbm_clips.clear()
+        self.report({'INFO'}, "Action source supprimee")
+        return {'FINISHED'}
+    
 class RBM_OT_load_animation(bpy.types.Operator):
     bl_idname = "rbm.load_animation"
     bl_label = "Charger l'animation"
@@ -1523,8 +1694,8 @@ def scene_armature(context, robot=None):
         return None
 
     colls = [c for c in bpy.data.collections
-             if c.name.startswith(COLL_PREFIX)
-             and re.sub(r"_\d+$", "", c.name[len(COLL_PREFIX):]) == robot]
+             if is_char_coll(c)
+             and re.sub(r"_\d+$", "", coll_name(c)) == robot]
     for coll in colls:
         for o in coll.all_objects:
             if o.type == 'ARMATURE' and not o.name.startswith("SRC_"):
@@ -1651,6 +1822,48 @@ class RBM_OT_save_pose_bones(bpy.types.Operator):
         self.report({'INFO'}, msg)
         return {'FINISHED'}
     
+class RBM_OT_set_family(bpy.types.Operator):
+    bl_idname = "rbm.set_family"
+    bl_label = "Changer la famille"
+    bl_description = "Corrige la famille du personnage dans character.json"
+
+    name: bpy.props.StringProperty()
+    family: bpy.props.EnumProperty(name="Famille", items=FAMILIES, default='ROBOT')
+
+    def invoke(self, context, event):
+        self.family = _families.get(self.name, 'ROBOT')
+        return context.window_manager.invoke_props_dialog(self, width=280)
+
+    def execute(self, context):
+        folder = robot_dir(self.name)
+        cfg = os.path.join(folder, CHARACTER_FILE) if folder else ""
+
+        if not cfg:
+            self.report({'ERROR'}, "Dossier introuvable")
+            return {'CANCELLED'}
+
+        data = {}
+        if os.path.isfile(cfg):
+            try:
+                with open(cfg, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+            except Exception:
+                pass
+
+        data["name"] = data.get("name", self.name)
+        data["family"] = self.family
+
+        try:
+            with open(cfg, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=1)
+        except Exception as e:
+            self.report({'ERROR'}, "Ecriture impossible : {}".format(e))
+            return {'CANCELLED'}
+
+        scan_all(context)
+        self.report({'INFO'}, "'{}' classe en {}".format(self.name, self.family))
+        return {'FINISHED'}
+    
 # ---------------------------------------------------------------------------
 # Panneau
 # ---------------------------------------------------------------------------
@@ -1672,9 +1885,15 @@ class RBM_PT_panel(bpy.types.Panel):
         row = box.row(align=True)
         row.label(text="Robots", icon='OUTLINER_OB_ARMATURE')
         row.operator("rbm.new_character", text="", icon='ADD')
-        row.prop(scene, "rbm_edit", text="", icon='TRASH', toggle=True)
+        row.prop(scene, "rbm_edit", text="", icon='GREASEPENCIL', toggle=True)
         row.operator("rbm.robot_thumb", text="", icon='RESTRICT_RENDER_OFF')
         row.operator("rbm.scan", text="", icon='FILE_REFRESH')
+
+        if scene.rbm_edit:
+            sub = box.row()
+            sub.scale_y = 0.7
+            sub.alert = True
+            sub.label(text="Mode gestion : famille et suppression", icon='INFO')
 
         if not root_path():
             box.label(text="Racine non definie (preferences)", icon='ERROR')
@@ -1712,6 +1931,8 @@ class RBM_PT_panel(bpy.types.Panel):
                 line.operator("rbm.duplicate_character", text="",
                               icon='DUPLICATE').source = name
                 if scene.rbm_edit:
+                    line.operator("rbm.set_family", text="",
+                                  icon='OUTLINER_OB_GROUP_INSTANCE').name = name
                     line.operator("rbm.delete_character", text="",
                                   icon='TRASH').name = name
                 label = FAMILY_LABEL.get(_families.get(name, 'ROBOT'), "")
@@ -1774,7 +1995,7 @@ class RBM_PT_panel(bpy.types.Panel):
         if poses:
             grid = box.grid_flow(row_major=True, columns=scene.rbm_columns,
                                  even_columns=True)
-            grid.enabled = rig is not None or scene_armature(context, robot) is not None
+            grid.enabled = rig is not None or arm is not None
             for name, path in poses:
                 cell = grid.box()
                 icon = icon_of("pose/" + robot + "/" + name)
@@ -1836,14 +2057,45 @@ class RBM_PT_panel(bpy.types.Panel):
         else:
             box.label(text="Aucune animation dans le dossier", icon='INFO')
 
+        # --- Decoupage d'une animation concatenee ---
+        if embedded:
+            box = layout.box()
+            box.prop(scene, "rbm_show_split",
+                     text="Decouper une animation concatenee",
+                     icon='TRIA_DOWN' if scene.rbm_show_split else 'TRIA_RIGHT',
+                     emboss=False)
+
+            if scene.rbm_show_split:
+                box.prop(scene, "rbm_source_action", text="Source")
+
+                sub = box.row()
+                sub.scale_y = 0.7
+                sub.label(text="Regler Start/End sur la timeline, puis Ajouter")
+
+                for i, clip in enumerate(scene.rbm_clips):
+                    line = box.row(align=True)
+                    line.prop(clip, "name", text="")
+                    line.prop(clip, "start", text="")
+                    line.prop(clip, "end", text="")
+                    line.operator("rbm.clip_preview", text="",
+                                  icon='PLAY').index = i
+                    line.operator("rbm.clip_remove", text="",
+                                  icon='X').index = i
+
+                box.operator("rbm.clip_add", icon='ADD')
+
+                if scene.rbm_clips:
+                    box.operator("rbm.split_action", icon='MOD_BUILD')
+                    box.operator("rbm.drop_source_action", icon='TRASH')
+
         # --- Keyframe manuelle ---
         box = layout.box()
-        box.enabled = rig is not None
+        box.enabled = rig is not None or arm is not None
         row = box.row(align=True)
         row.label(text="Keyframe", icon='KEY_HLT')
         sub = box.row()
         sub.scale_y = 0.7
-        sub.label(text="Pose du control rig entier, sans passer par le mode Pose")
+        sub.label(text="Pose de l'armature entiere, sans passer par le mode Pose")
         box.operator("rbm.insert_keyframe", icon='KEY_HLT',
                     text="Keyframer la posture (frame {})".format(scene.frame_current))
 
@@ -1898,8 +2150,8 @@ def face_meshes(context, robot=None):
         return []
 
     colls = [c for c in bpy.data.collections
-             if c.name.startswith(COLL_PREFIX)
-             and re.sub(r"_\d+$", "", c.name[len(COLL_PREFIX):]) == robot]
+             if is_char_coll(c)
+             and re.sub(r"_\d+$", "", coll_name(c)) == robot]
 
     # Plusieurs instances du meme perso : on prend celle de l'objet actif
     if len(colls) > 1 and obj is not None:
@@ -2218,7 +2470,14 @@ classes = (
     RBM_OT_load_animation,
     RBM_OT_clear_source,
     RBM_OT_load_embedded_anim,
-    RBM_OT_save_pose_bones,
+    RBM_OT_save_pose_bones,    
+    RBM_OT_set_family,
+    RBM_Clip,
+    RBM_OT_clip_add,
+    RBM_OT_clip_remove,
+    RBM_OT_clip_preview,
+    RBM_OT_split_action,
+    RBM_OT_drop_source_action,
     RBM_OT_page,
     RBM_PT_panel,
     RBM_OT_new_character,
@@ -2300,6 +2559,11 @@ def register():
         name="Propre au perso", default=False,
         description="Enregistre dans le dossier du personnage au lieu du dossier "
                     "commun a la serie")
+    S.rbm_clips = bpy.props.CollectionProperty(type=RBM_Clip)
+    S.rbm_clip_index = bpy.props.IntProperty(default=0)
+    S.rbm_show_split = bpy.props.BoolProperty(default=False)
+    S.rbm_source_action = bpy.props.EnumProperty(
+        name="Action source", items=action_enum)
 
     if _on_load not in bpy.app.handlers.load_post:
         bpy.app.handlers.load_post.append(_on_load)
@@ -2326,7 +2590,8 @@ def unregister():
         _previews = None
 
     S = bpy.types.Scene
-    for prop in ("rbm_embedded_anim", "rbm_page", "rbm_search", "rbm_family_filter", "rbm_expr_own", "rbm_expr_keyframe", "rbm_expr_name", 
+    for prop in ("rbm_source_action", "rbm_show_split", "rbm_clip_index",
+                 "rbm_clips", "rbm_clear_anim", "rbm_embedded_anim", "rbm_page", "rbm_search", "rbm_family_filter", "rbm_expr_own", "rbm_expr_keyframe", "rbm_expr_name", 
                  "rbm_thumb_size", "rbm_scale", "rbm_columns", "rbm_edit", "rbm_follow",
                  "rbm_overwrite", "rbm_auto_rig", "rbm_auto_rest", "rbm_posture_name", "rbm_anim", "rbm_robot"):
         if hasattr(S, prop):

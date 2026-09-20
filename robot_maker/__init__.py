@@ -30,7 +30,23 @@ except Exception:      # l'addon n'est pas installe ou pas active
 # Conventions de nommage
 # Robot-Manager s'appuiera dessus pour isoler les persos du rendu decor.
 # ---------------------------------------------------------------------------
-COLL_PREFIX = "ROBOT_"
+COLL_PREFIX = "PERSO_"
+COLL_PREFIXES = ("PERSO_", "ROBOT_")   # ROBOT_ : fichiers anterieurs
+
+
+def coll_name(coll_or_name):
+    """Nom du personnage, quel que soit le prefixe du fichier d'origine."""
+    n = coll_or_name if isinstance(coll_or_name, str) else coll_or_name.name
+    for p in COLL_PREFIXES:
+        if n.startswith(p):
+            return n[len(p):]
+    return n
+
+
+def is_char_coll(coll_or_name):
+    n = coll_or_name if isinstance(coll_or_name, str) else coll_or_name.name
+    return n.startswith(COLL_PREFIXES)
+
 SOCKET_PREFIX = "SKT_"
 TUBE_PREFIX = "TUBE_"
 
@@ -45,6 +61,8 @@ K_SRC_AUTHOR = "src_author"
 K_SRC_LICENSE = "src_license"
 K_SRC_URL = "src_url"
 K_SRC_ORIGINAL = "src_original"  # creation maison : aucun credit a rendre
+
+CHARACTER_FILE = "character.json"
 
 FACE_SLOTS = [('eyes', "Yeux"), ('mouth', "Bouche")]
 READY_FILE = "ready.blend"
@@ -62,7 +80,7 @@ SOCKET_PRESETS = [
 # Helpers
 # ---------------------------------------------------------------------------
 def robot_collections():
-    return [c for c in bpy.data.collections if c.name.startswith(COLL_PREFIX)]
+    return [c for c in bpy.data.collections if is_char_coll(c)]
 
 
 def active_robot_collection(context):
@@ -70,11 +88,15 @@ def active_robot_collection(context):
     name = context.scene.rm_robot
     if not name:
         return None
-    return bpy.data.collections.get(COLL_PREFIX + name)
+    for p in COLL_PREFIXES:
+        coll = bpy.data.collections.get(p + name)
+        if coll is not None:
+            return coll
+    return None
 
 
 def robot_enum(self, context):
-    items = [(c.name[len(COLL_PREFIX):], c.name[len(COLL_PREFIX):], "")
+    items = [(coll_name(c), coll_name(c), "")
              for c in robot_collections()]
     return items or [('', "(aucun robot)", "")]
 
@@ -1471,7 +1493,9 @@ def _place_skeleton(scene):
     coll = None
     name = scene.rm_robot
     if name:
-        coll = bpy.data.collections.get(COLL_PREFIX + name)
+        coll = next((bpy.data.collections.get(p + name)
+                     for p in COLL_PREFIXES
+                     if bpy.data.collections.get(p + name)), None)
     if coll is None:
         return 0
 
@@ -2883,6 +2907,7 @@ class RM_OT_ready_help(bpy.types.Operator):
             "Asset externe (glTF / FBX Sketchfab, animaux) :",
             "- importer le fichier, selectionner l'armature,",
             "- la collection ROBOT_<nom>_01 est creee automatiquement,",
+            "- Armature et mesh doivente être placés dans cette collection,",
             "- verifier l'echelle et appliquer les transformations (Ctrl+A),",
             "- renseigner les credits (nom d'origine, auteur, licence, URL).",
             "",
@@ -2895,6 +2920,47 @@ class RM_OT_ready_help(bpy.types.Operator):
                 col.separator()
 
     def execute(self, context):
+        return {'FINISHED'}
+    
+class RM_OT_load_credits(bpy.types.Operator):
+    bl_idname = "rm.load_credits"
+    bl_label = "Relire les credits"
+    bl_description = ("Recharge les credits enregistres dans character.json "
+                      "pour le personnage courant")
+
+    def execute(self, context):
+        scene = context.scene
+        robot = re.sub(r"_\d+$", "",
+                       scene.rm_robot or getattr(scene, "rbm_robot", ""))
+        if not robot:
+            self.report({'ERROR'}, "Aucun personnage selectionne")
+            return {'CANCELLED'}
+
+        folder = robot_dir(context, robot)
+        fiche = os.path.join(folder, CHARACTER_FILE) if folder else ""
+
+        if not fiche or not os.path.isfile(fiche):
+            self.report({'ERROR'}, "Fiche du personnage introuvable")
+            return {'CANCELLED'}
+
+        try:
+            with open(fiche, "r", encoding="utf-8") as f:
+                cc = json.load(f).get("credits", {})
+        except Exception as e:
+            self.report({'ERROR'}, "Lecture impossible : {}".format(e))
+            return {'CANCELLED'}
+
+        if not cc:
+            self.report({'WARNING'}, "Aucun credit enregistre pour ce personnage")
+            return {'CANCELLED'}
+
+        scene.rm_cc_original = bool(cc.get("original"))
+        scene.rm_cc_name = cc.get("src_name", "")
+        scene.rm_cc_author = cc.get("author", "")
+        scene.rm_cc_license = cc.get("license", "")
+        scene.rm_cc_url = cc.get("url", "")
+
+        self.report({'INFO'}, "Credits relus")
         return {'FINISHED'}
     
 class RM_OT_save_ready(bpy.types.Operator):
@@ -2912,7 +2978,7 @@ class RM_OT_save_ready(bpy.types.Operator):
             return {'CANCELLED'}
 
         coll = next((c for c in obj.users_collection
-                     if c.name.startswith(COLL_PREFIX)), None)
+                     if is_char_coll(c)), None)
 
         if coll is None:
             # Asset importe brut (glTF, FBX) : on cree la collection attendue
@@ -2938,7 +3004,7 @@ class RM_OT_save_ready(bpy.types.Operator):
         else:
             robot = re.sub(r"_\d+$", "",
                            scene.rm_robot or getattr(scene, "rbm_robot", "")
-                           or coll.name[len(COLL_PREFIX):])
+                           or coll_name(coll))
 
         folder = robot_dir(context, robot)
         if not folder or not os.path.isdir(folder):
@@ -2951,8 +3017,8 @@ class RM_OT_save_ready(bpy.types.Operator):
 
         # Les sprite sheets sont referencees par chemin : en absolu elles
         # restent trouvables depuis n'importe quel fichier
-        for obj in coll.all_objects:
-            for mat in (getattr(obj.data, "materials", None) or []):
+        for ob in coll.all_objects:
+            for mat in (getattr(ob.data, "materials", None) or []):
                 if mat is None or not mat.use_nodes:
                     continue
                 for node in mat.node_tree.nodes:
@@ -2963,6 +3029,47 @@ class RM_OT_save_ready(bpy.types.Operator):
                                 node.image.filepath)
                         except Exception:
                             pass
+
+        # Credits : un asset importe brut (glTF Sketchfab) n'a aucune cle
+        # src_*, le generateur de credits le classerait en inconnu
+        if scene.rm_cc_original:
+            for ob in coll.all_objects:
+                ob[K_SRC_ORIGINAL] = True
+        elif scene.rm_cc_author or scene.rm_cc_name:
+            for ob in coll.all_objects:
+                ob[K_SRC_NAME] = scene.rm_cc_name
+                ob[K_SRC_AUTHOR] = scene.rm_cc_author
+                ob[K_SRC_LICENSE] = scene.rm_cc_license
+                ob[K_SRC_URL] = scene.rm_cc_url
+
+        missing = [ob.name for ob in coll.all_objects
+                   if not ob.get(K_SRC_ORIGINAL)
+                   and not ob.get(K_SRC_AUTHOR)
+                   and not ob.get(K_SRC_NAME)]
+        if missing:
+            self.report({'WARNING'},
+                        "{} objet(s) sans credit : remplir les champs ou cocher "
+                        "Creation originale".format(len(missing)))
+
+        # Fiche du personnage : evite de ressaisir les credits au prochain
+        # enregistrement (bouton de relecture dans le panneau)
+        try:
+            fiche = os.path.join(folder, CHARACTER_FILE)
+            data = {}
+            if os.path.isfile(fiche):
+                with open(fiche, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+            data["credits"] = {
+                "original": scene.rm_cc_original,
+                "src_name": scene.rm_cc_name,
+                "author": scene.rm_cc_author,
+                "license": scene.rm_cc_license,
+                "url": scene.rm_cc_url,
+            }
+            with open(fiche, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=1)
+        except Exception:
+            pass
 
         try:
             bpy.data.libraries.write(os.path.join(folder, READY_FILE),
@@ -3562,6 +3669,18 @@ class RM_PT_panel(bpy.types.Panel):
         sub.scale_y = 0.7
         sub.label(text="Faces selectionnees + vue de face", icon='INFO')
         sub.label(text="Ajuster ensuite dans l'UV Editor")
+        cc = box.box()
+        head = cc.row(align=True)
+        head.label(text="Credits de l'asset", icon='COPY_ID')
+        head.operator("rm.load_credits", text="", icon='FILE_REFRESH')
+        cc.prop(scene, "rm_cc_original")
+        sub = cc.column(align=True)
+        sub.enabled = not scene.rm_cc_original
+        sub.prop(scene, "rm_cc_name", text="")
+        sub.prop(scene, "rm_cc_author", text="Auteur")
+        sub.prop(scene, "rm_cc_license", text="Licence")
+        sub.prop(scene, "rm_cc_url", text="URL")
+
         row = box.row(align=True)
         row.operator("rm.save_ready", icon='FILE_TICK')
         row.operator("rm.ready_help", text="", icon='QUESTION')
@@ -3636,6 +3755,7 @@ classes = (
     RM_OT_prepare_face,
     RM_OT_add_jaw,
     RM_OT_face_info,
+    RM_OT_load_credits,
     RM_OT_ready_help,
     RM_OT_save_ready,
     RM_OT_import_rigged,
@@ -3765,6 +3885,13 @@ def register():
         description="Les tubes reposes sont un peu plus larges que ceux du "
                     "montage, pour recouvrir ceux qui s'ecrasent")
     S.rm_ready_error = bpy.props.StringProperty(default="")
+    S.rm_cc_name = bpy.props.StringProperty(name="Nom d'origine", default="")
+    S.rm_cc_author = bpy.props.StringProperty(name="Auteur", default="")
+    S.rm_cc_license = bpy.props.StringProperty(name="Licence", default="")
+    S.rm_cc_url = bpy.props.StringProperty(name="URL", default="")
+    S.rm_cc_original = bpy.props.BoolProperty(
+        name="Creation originale", default=False,
+        description="Aucun credit a rendre : modele realise par mes soins")
 
 
 def unregister():
@@ -3791,7 +3918,9 @@ def unregister():
                  "rm_shoulder_w", "rm_shoulder_drop", "rm_hip_w", "rm_arm_upper",
                  "rm_arm_fore", "rm_arm_angle", "rm_leg_thigh", "rm_leg_shin", "rm_tube_res", "rm_tube_radius", "rm_tube_material",
                  "rm_socket_size", "rm_socket_custom", "rm_socket_name", "rm_category", "rm_robot",
-                 "rm_new_name", "rm_family", "rm_make_rig", "rm_rules", "rm_cat", "rm_sub", "rm_default_rules", "rm_cat", "rm_tube_grow", "rm_sub", "rm_ready_error"):
+                 "rm_new_name", "rm_family", "rm_make_rig", "rm_rules", "rm_cat", "rm_sub", "rm_default_rules", "rm_cat", 
+                 "rm_tube_grow", "rm_sub", "rm_ready_error", 
+                 "S.rm_cc_name", "S.rm_cc_author", "S.rm_cc_license", "S.rm_cc_url", "S.rm_cc_original"):
         if hasattr(S, prop):
             delattr(S, prop)
 
