@@ -2862,6 +2862,41 @@ class RM_OT_import_rigged(bpy.types.Operator):
         self.report({'INFO'}, msg)
         return {'FINISHED'}
                 
+class RM_OT_ready_help(bpy.types.Operator):
+    bl_idname = "rm.ready_help"
+    bl_label = "Comment enregistrer un personnage"
+    bl_description = "Rappelle la procedure d'enregistrement"
+
+    def invoke(self, context, event):
+        return context.window_manager.invoke_popup(self, width=420)
+
+    def draw(self, context):
+        col = self.layout.column(align=True)
+        col.label(text="Enregistrer un personnage pret", icon='QUESTION')
+        col.separator()
+
+        for line in (
+            "1. Selectionner le personnage dans la liste (champ Robot).",
+            "2. Selectionner son armature dans la scene.",
+            "3. Cliquer Enregistrer le personnage pret.",
+            "",
+            "Asset externe (glTF / FBX Sketchfab, animaux) :",
+            "- importer le fichier, selectionner l'armature,",
+            "- la collection ROBOT_<nom>_01 est creee automatiquement,",
+            "- verifier l'echelle et appliquer les transformations (Ctrl+A),",
+            "- renseigner les credits (nom d'origine, auteur, licence, URL).",
+            "",
+            "Le dossier du personnage doit exister dans creations/,",
+            "sans suffixe numerique : creations/raptor, pas raptor_01.",
+        ):
+            if line:
+                col.label(text=line)
+            else:
+                col.separator()
+
+    def execute(self, context):
+        return {'FINISHED'}
+    
 class RM_OT_save_ready(bpy.types.Operator):
     bl_idname = "rm.save_ready"
     bl_label = "Enregistrer le personnage pret"
@@ -2878,17 +2913,41 @@ class RM_OT_save_ready(bpy.types.Operator):
 
         coll = next((c for c in obj.users_collection
                      if c.name.startswith(COLL_PREFIX)), None)
-        if coll is None:
-            self.report({'ERROR'}, "Le personnage n'est pas dans une collection ROBOT_")
-            return {'CANCELLED'}
 
-        robot = (scene.rm_robot or getattr(scene, "rbm_robot", "")
-                 or re.sub(r"_\d+$", "", coll.name[len(COLL_PREFIX):]))
+        if coll is None:
+            # Asset importe brut (glTF, FBX) : on cree la collection attendue
+            # a partir du nom du personnage courant
+            robot = re.sub(r"_\d+$", "",
+                           scene.rm_robot or getattr(scene, "rbm_robot", ""))
+            if not robot:
+                self.report({'ERROR'},
+                            "Selectionner d'abord le personnage dans la liste")
+                return {'CANCELLED'}
+
+            coll = bpy.data.collections.new(COLL_PREFIX + robot + "_01")
+            context.scene.collection.children.link(coll)
+
+            roots = [o for o in context.selected_objects if o.parent is None]
+            for root in roots or [obj]:
+                for o in [root] + list(root.children_recursive):
+                    for old in list(o.users_collection):
+                        old.objects.unlink(o)
+                    coll.objects.link(o)
+
+            self.report({'INFO'}, "Collection '{}' creee".format(coll.name))
+        else:
+            robot = re.sub(r"_\d+$", "",
+                           scene.rm_robot or getattr(scene, "rbm_robot", "")
+                           or coll.name[len(COLL_PREFIX):])
 
         folder = robot_dir(context, robot)
         if not folder or not os.path.isdir(folder):
-            self.report({'ERROR'}, "Dossier de '{}' introuvable".format(robot))
+            scene.rm_ready_error = (
+                "Dossier de '{}' introuvable dans creations/".format(robot))
+            self.report({'ERROR'}, scene.rm_ready_error)
             return {'CANCELLED'}
+
+        scene.rm_ready_error = ""
 
         # Les sprite sheets sont referencees par chemin : en absolu elles
         # restent trouvables depuis n'importe quel fichier
@@ -3503,7 +3562,16 @@ class RM_PT_panel(bpy.types.Panel):
         sub.scale_y = 0.7
         sub.label(text="Faces selectionnees + vue de face", icon='INFO')
         sub.label(text="Ajuster ensuite dans l'UV Editor")
-        box.operator("rm.save_ready", icon='FILE_TICK')
+        row = box.row(align=True)
+        row.operator("rm.save_ready", icon='FILE_TICK')
+        row.operator("rm.ready_help", text="", icon='QUESTION')
+
+        if scene.rm_ready_error:
+            warn = box.box()
+            warn.alert = True
+            warn.label(text=scene.rm_ready_error, icon='ERROR')
+            warn.operator("rm.ready_help", text="Voir la procedure",
+                          icon='QUESTION')
 
         # --- Mixamo ---
         box = layout.box()
@@ -3568,6 +3636,7 @@ classes = (
     RM_OT_prepare_face,
     RM_OT_add_jaw,
     RM_OT_face_info,
+    RM_OT_ready_help,
     RM_OT_save_ready,
     RM_OT_import_rigged,
     RM_Rule,
@@ -3695,6 +3764,7 @@ def register():
         name="Elargissement", default=1.15, min=1.0, max=2.0,
         description="Les tubes reposes sont un peu plus larges que ceux du "
                     "montage, pour recouvrir ceux qui s'ecrasent")
+    S.rm_ready_error = bpy.props.StringProperty(default="")
 
 
 def unregister():
@@ -3721,7 +3791,7 @@ def unregister():
                  "rm_shoulder_w", "rm_shoulder_drop", "rm_hip_w", "rm_arm_upper",
                  "rm_arm_fore", "rm_arm_angle", "rm_leg_thigh", "rm_leg_shin", "rm_tube_res", "rm_tube_radius", "rm_tube_material",
                  "rm_socket_size", "rm_socket_custom", "rm_socket_name", "rm_category", "rm_robot",
-                 "rm_new_name", "rm_family", "rm_make_rig", "rm_rules", "rm_cat", "rm_sub", "rm_default_rules", "rm_cat", "rm_tube_grow", "rm_sub"):
+                 "rm_new_name", "rm_family", "rm_make_rig", "rm_rules", "rm_cat", "rm_sub", "rm_default_rules", "rm_cat", "rm_tube_grow", "rm_sub", "rm_ready_error"):
         if hasattr(S, prop):
             delattr(S, prop)
 

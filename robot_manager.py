@@ -529,7 +529,11 @@ CHARACTER_DIRS = ["prototype", D_RIGGED, D_ANIM, D_POSE, "expressions"]
 FAMILIES = [
     ('ROBOT', "Robot", "Corps mecanique, membres tubulaires"),
     ('HUMAN', "Humanoide", "Corps habille, pas de tubes de liaison"),
+    ('ANIMAL', "Animal", "Quadrupede, creature, asset pre-anime externe"),
 ]
+FAMILY_LABEL = {'ROBOT': "", 'HUMAN': "humanoide", 'ANIMAL': "animal"}
+FAMILY_FILTER = [('ALL', "Tous", "")] + [(k, lbl, d) for k, lbl, d in FAMILIES]
+PER_PAGE = 6
 CHARACTER_FILE = "character.json"
 
 class RBM_OT_new_character(bpy.types.Operator):
@@ -1167,8 +1171,14 @@ class RBM_OT_robot_thumb(bpy.types.Operator):
             return {'CANCELLED'}
 
         rig = find_control_rig(context)
-        meshes = rig_meshes(rig) if rig else [o for o in context.selected_objects
-                                              if o.type == 'MESH']
+        if rig:
+            meshes = rig_meshes(rig)
+        else:
+            arm = scene_armature(context, robot)
+            meshes = ([o for o in arm.children_recursive if o.type == 'MESH']
+                      if arm else [])
+            meshes = meshes or [o for o in context.selected_objects
+                                if o.type == 'MESH']
         if not meshes:
             self.report({'ERROR'}, "Selectionner le robot (ou son control rig)")
             return {'CANCELLED'}
@@ -1245,9 +1255,9 @@ class RBM_OT_apply_posture(bpy.types.Operator):
         scene = context.scene
         robot = scene.rbm_robot
 
-        rig = find_control_rig(context)
+        rig = find_control_rig(context) or scene_armature(context, robot)
         if rig is None:
-            self.report({'ERROR'}, "Aucun control rig trouve")
+            self.report({'ERROR'}, "Aucune armature trouvee")
             return {'CANCELLED'}
 
         path = next((p for n, p in _postures.get(robot, []) if n == self.posture), None)
@@ -1262,7 +1272,21 @@ class RBM_OT_apply_posture(bpy.types.Operator):
             self.report({'ERROR'}, "Lecture impossible : {}".format(e))
             return {'CANCELLED'}
 
-        applied, missing = dict_to_pose(rig, data)
+        if "bones" in data:
+            applied, missing = 0, 0
+            for bone_name, vals in data["bones"].items():
+                pb = rig.pose.bones.get(bone_name)
+                if pb is None:
+                    missing += 1
+                    continue
+                pb.rotation_mode = vals.get("rotation_mode", pb.rotation_mode)
+                pb.location = vals["location"]
+                pb.rotation_quaternion = vals["rotation_quaternion"]
+                pb.rotation_euler = vals["rotation_euler"]
+                pb.scale = vals["scale"]
+                applied += 1
+        else:
+            applied, missing = dict_to_pose(rig, data)
 
         msg = "'{}' appliquee ({} os)".format(self.posture, applied)
         if missing:
@@ -1480,7 +1504,153 @@ class RBM_OT_clear_source(bpy.types.Operator):
         self.report({'INFO'}, "{} supprimee".format(name))
         return {'FINISHED'}
 
+class RBM_OT_page(bpy.types.Operator):
+    bl_idname = "rbm.page"
+    bl_label = "Page"
+    bl_description = "Page suivante ou precedente de la grille"
 
+    delta: bpy.props.IntProperty(default=1)
+
+    def execute(self, context):
+        context.scene.rbm_page = max(0, context.scene.rbm_page + self.delta)
+        return {'FINISHED'}
+    
+def scene_armature(context, robot=None):
+    """Armature du personnage instancie, hors control rig."""
+    obj = context.view_layer.objects.active
+    robot = robot or robot_of(obj) or context.scene.rbm_robot
+    if not robot:
+        return None
+
+    colls = [c for c in bpy.data.collections
+             if c.name.startswith(COLL_PREFIX)
+             and re.sub(r"_\d+$", "", c.name[len(COLL_PREFIX):]) == robot]
+    for coll in colls:
+        for o in coll.all_objects:
+            if o.type == 'ARMATURE' and not o.name.startswith("SRC_"):
+                return o
+    return None
+
+
+def embedded_actions(context, robot=None):
+    """Actions presentes dans le fichier et compatibles avec l'armature."""
+    arm = scene_armature(context, robot)
+    if arm is None:
+        return []
+
+    bones = set(b.name for b in arm.pose.bones)
+    out = []
+    for act in bpy.data.actions:
+        if act.name.startswith("POSE_"):
+            continue
+        used = set()
+        for fc in act.fcurves:
+            if fc.data_path.startswith('pose.bones["'):
+                used.add(fc.data_path.split('"')[1])
+        if used and used & bones:
+            out.append(act)
+    return sorted(out, key=lambda a: a.name.lower())
+
+
+def action_enum(self, context):
+    items = [(a.name, a.name, "") for a in embedded_actions(context)]
+    return items or [('NONE', "(aucune)", "")]
+
+
+class RBM_OT_load_embedded_anim(bpy.types.Operator):
+    bl_idname = "rbm.load_embedded_anim"
+    bl_label = "Charger l'animation"
+    bl_description = ("Assigne l'action a l'armature et cale les bornes de la "
+                      "scene sur sa duree")
+    bl_options = {'REGISTER', 'UNDO'}
+
+    def execute(self, context):
+        scene = context.scene
+        arm = scene_armature(context)
+        act = bpy.data.actions.get(scene.rbm_embedded_anim)
+
+        if arm is None or act is None:
+            self.report({'ERROR'}, "Armature ou action introuvable")
+            return {'CANCELLED'}
+
+        if arm.animation_data is None:
+            arm.animation_data_create()
+
+        # Les pistes NLA importees se cumulent a l'action active
+        for track in arm.animation_data.nla_tracks:
+            track.mute = True
+
+        arm.animation_data.action = act
+
+        # Les frames issues du glTF sont souvent non entieres
+        start, end = act.frame_range
+        scene.frame_start = int(round(start))
+        scene.frame_end = int(round(end))
+        scene.frame_current = scene.frame_start
+
+        self.report({'INFO'}, "'{}' chargee ({} a {})".format(
+            act.name, scene.frame_start, scene.frame_end))
+        return {'FINISHED'}
+
+
+class RBM_OT_save_pose_bones(bpy.types.Operator):
+    bl_idname = "rbm.save_pose_bones"
+    bl_label = "Enregistrer la posture"
+    bl_description = ("Capture la pose de tous les os de l'armature, sans "
+                      "passer par un control rig")
+
+    def execute(self, context):
+        scene = context.scene
+        robot = scene.rbm_robot
+        arm = scene_armature(context, robot)
+        name = safe_name(scene.rbm_posture_name) or "posture"
+
+        if arm is None:
+            self.report({'ERROR'}, "Aucune armature pour ce personnage")
+            return {'CANCELLED'}
+
+        data = {}
+        for pb in arm.pose.bones:
+            data[pb.name] = {
+                "location": list(pb.location),
+                "rotation_mode": pb.rotation_mode,
+                "rotation_quaternion": list(pb.rotation_quaternion),
+                "rotation_euler": list(pb.rotation_euler),
+                "scale": list(pb.scale),
+            }
+
+        folder = sub_dir(robot, D_POSE, create=True)
+        if not folder:
+            self.report({'ERROR'}, "Dossier des postures introuvable")
+            return {'CANCELLED'}
+
+        path = os.path.join(folder, name + ".json")
+        if os.path.isfile(path) and not scene.rbm_overwrite:
+            self.report({'ERROR'}, "'{}' existe deja (cocher Ecraser)".format(name))
+            return {'CANCELLED'}
+
+        try:
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump({"name": name, "bones": data}, f, indent=1)
+        except Exception as e:
+            self.report({'ERROR'}, "Ecriture impossible : {}".format(e))
+            return {'CANCELLED'}
+
+        meshes = [o for o in arm.children_recursive if o.type == 'MESH']
+        ok, err = render_thumbnail(context, meshes or [arm],
+                                   os.path.join(folder, name + ".png"),
+                                   scene.rbm_thumb_size)
+
+        if scene.rbm_clear_anim and arm.animation_data:
+            arm.animation_data.action = None
+
+        scan_all(context)
+        msg = "posture '{}' enregistree".format(name)
+        if not ok:
+            msg += " (vignette : {})".format(err)
+        self.report({'INFO'}, msg)
+        return {'FINISHED'}
+    
 # ---------------------------------------------------------------------------
 # Panneau
 # ---------------------------------------------------------------------------
@@ -1503,6 +1673,7 @@ class RBM_PT_panel(bpy.types.Panel):
         row.label(text="Robots", icon='OUTLINER_OB_ARMATURE')
         row.operator("rbm.new_character", text="", icon='ADD')
         row.prop(scene, "rbm_edit", text="", icon='TRASH', toggle=True)
+        row.operator("rbm.robot_thumb", text="", icon='RESTRICT_RENDER_OFF')
         row.operator("rbm.scan", text="", icon='FILE_REFRESH')
 
         if not root_path():
@@ -1512,9 +1683,23 @@ class RBM_PT_panel(bpy.types.Panel):
         if not _robots:
             box.label(text="Aucun robot - relire les dossiers", icon='INFO')
         else:
+            filt = box.row(align=True)
+            filt.prop(scene, "rbm_family_filter", text="")
+            filt.prop(scene, "rbm_search", text="", icon='VIEWZOOM')
+
+            fam = scene.rbm_family_filter
+            needle = scene.rbm_search.lower()
+            shown = [(n, f) for n, f in _robots
+                     if (fam == 'ALL' or _families.get(n, 'ROBOT') == fam)
+                     and (not needle or needle in n.lower())]
+
+            pages = max(1, (len(shown) + PER_PAGE - 1) // PER_PAGE)
+            page = min(scene.rbm_page, pages - 1)
+            shown = shown[page * PER_PAGE:(page + 1) * PER_PAGE]
+
             grid = box.grid_flow(row_major=True, columns=scene.rbm_columns,
                                  even_columns=True)
-            for name, folder in _robots:
+            for name, folder in shown:
                 cell = grid.box()
                 icon = icon_of("robot/" + name)
                 if icon:
@@ -1529,10 +1714,21 @@ class RBM_PT_panel(bpy.types.Panel):
                 if scene.rbm_edit:
                     line.operator("rbm.delete_character", text="",
                                   icon='TRASH').name = name
-                if _families.get(name) == 'HUMAN':
+                label = FAMILY_LABEL.get(_families.get(name, 'ROBOT'), "")
+                if label:
                     tag = cell.row()
                     tag.scale_y = 0.6
-                    tag.label(text="humanoide")
+                    tag.label(text=label)
+
+            if pages > 1:
+                nav = box.row(align=True)
+                prev = nav.row(align=True)
+                prev.enabled = page > 0
+                prev.operator("rbm.page", text="", icon='TRIA_LEFT').delta = -1
+                nav.label(text="{} / {}".format(page + 1, pages))
+                nxt = nav.row(align=True)
+                nxt.enabled = page < pages - 1
+                nxt.operator("rbm.page", text="", icon='TRIA_RIGHT').delta = 1
 
             r = box.row(align=True)
             r.prop(scene, "rbm_columns", text="Colonnes")
@@ -1556,14 +1752,17 @@ class RBM_PT_panel(bpy.types.Panel):
         rig = find_control_rig(context)
         box = layout.box()
         row = box.row()
-        if rig is None:
+        arm = scene_armature(context, robot)
+        if rig is not None:
+            row.label(text="Rig : " + rig.name, icon='ARMATURE_DATA')
+        elif _families.get(robot) == 'ANIMAL' and arm is not None:
+            row.label(text="Armature : " + arm.name, icon='ARMATURE_DATA')
+        else:
             row.alert = True
             row.label(text="Aucun control rig actif", icon='ERROR')
             sub = box.row()
             sub.scale_y = 0.7
             sub.label(text="Onglet Mixamo > Create Control Rig")
-        else:
-            row.label(text="Rig : " + rig.name, icon='ARMATURE_DATA')
 
         # --- Postures ---
         box = layout.box()
@@ -1575,7 +1774,7 @@ class RBM_PT_panel(bpy.types.Panel):
         if poses:
             grid = box.grid_flow(row_major=True, columns=scene.rbm_columns,
                                  even_columns=True)
-            grid.enabled = rig is not None
+            grid.enabled = rig is not None or scene_armature(context, robot) is not None
             for name, path in poses:
                 cell = grid.box()
                 icon = icon_of("pose/" + robot + "/" + name)
@@ -1590,20 +1789,34 @@ class RBM_PT_panel(bpy.types.Panel):
             box.label(text="Aucune posture enregistree", icon='INFO')
 
         box.separator()
+        arm = scene_armature(context, robot)
         col = box.column(align=True)
-        col.enabled = rig is not None
+        col.enabled = rig is not None or arm is not None
         r = col.row(align=True)
         r.prop(scene, "rbm_posture_name", text="")
         r.prop(scene, "rbm_overwrite")
         col.prop(scene, "rbm_clear_anim")
         col.prop(scene, "rbm_thumb_size")
-        col.operator("rbm.save_posture", icon='ADD').clear_anim = scene.rbm_clear_anim
+        if rig is None and arm is not None:
+            col.operator("rbm.save_pose_bones", icon='ADD')
+        else:
+            col.operator("rbm.save_posture", icon='ADD').clear_anim = scene.rbm_clear_anim
 
         # --- Animations ---
         box = layout.box()
         row = box.row(align=True)
         row.label(text="Animations", icon='ANIM')
         row.operator("rbm.open_shared_anims", text="", icon='FILE_FOLDER')
+
+        embedded = embedded_actions(context, robot)
+        if embedded:
+            col = box.column(align=True)
+            col.prop(scene, "rbm_embedded_anim", text="")
+            col.operator("rbm.load_embedded_anim", icon='IMPORT')
+
+            sub = box.row()
+            sub.scale_y = 0.7
+            sub.label(text="{} animation(s) dans l'asset".format(len(embedded)))
 
         anims = _anims.get(robot, [])
         if anims:
@@ -1818,6 +2031,8 @@ class RBM_OT_expr_apply(bpy.types.Operator):
             return {'CANCELLED'}
 
         apply_expr(meshes, data, scene.rbm_expr_keyframe)
+        scene.rbm_expr_name = self.name
+        scene.rbm_overwrite = False
         msg = "'{}' appliquee".format(self.name)
         if scene.rbm_expr_keyframe:
             msg += " et keyframee a la frame {}".format(scene.frame_current)
@@ -1957,15 +2172,15 @@ class RBM_PT_expressions(bpy.types.Panel):
             grid = layout.grid_flow(row_major=True, columns=scene.rbm_columns,
                                     even_columns=True, align=True)
             for name, path, is_own in presets:
-                cell = grid.column(align=True)
+                cell = grid.box()
                 icon = icon_of("expr/" + robot + "/" + name)
-                op = cell.operator("rbm.expr_apply", text="",
-                                   icon_value=icon, icon='SHAPEKEY_DATA' if not icon else 'NONE')
-                op.name = name
+                if icon:
+                    cell.template_icon(icon_value=icon, scale=scene.rbm_scale)
 
-                row = cell.row(align=True)
-                row.label(text=name, icon='USER' if is_own else 'WORLD')
-                row.operator("rbm.expr_delete", text="", icon='X').name = name
+                line = cell.row(align=True)
+                line.operator("rbm.expr_apply", text=name,
+                              icon='USER' if is_own else 'WORLD').name = name
+                line.operator("rbm.expr_delete", text="", icon='X').name = name
         else:
             layout.label(text="(aucune expression enregistree)", icon='INFO')
 
@@ -2002,6 +2217,9 @@ classes = (
     RBM_OT_insert_keyframe,
     RBM_OT_load_animation,
     RBM_OT_clear_source,
+    RBM_OT_load_embedded_anim,
+    RBM_OT_save_pose_bones,
+    RBM_OT_page,
     RBM_PT_panel,
     RBM_OT_new_character,
     RBM_OT_edit_character,
@@ -2045,6 +2263,8 @@ def register():
     S = bpy.types.Scene
     S.rbm_robot = bpy.props.EnumProperty(name="Robot", items=robot_enum)
     S.rbm_anim = bpy.props.EnumProperty(name="Animation", items=anim_enum)
+    S.rbm_embedded_anim = bpy.props.EnumProperty(
+        name="Animation de l'asset", items=action_enum)
     S.rbm_posture_name = bpy.props.StringProperty(name="Nom", default="posture_01")
     S.rbm_overwrite = bpy.props.BoolProperty(name="Ecraser", default=False)
     S.rbm_clear_anim = bpy.props.BoolProperty(
@@ -2064,6 +2284,11 @@ def register():
                      "comme posture de reference"))
     S.rbm_columns = bpy.props.IntProperty(name="Colonnes", default=3, min=1, max=6)
     S.rbm_scale = bpy.props.FloatProperty(name="Taille", default=4.0, min=1.0, max=10.0)
+    S.rbm_family_filter = bpy.props.EnumProperty(
+        name="Famille", items=FAMILY_FILTER, default='ALL')
+    S.rbm_search = bpy.props.StringProperty(
+        name="Rechercher", default="", options={'TEXTEDIT_UPDATE'})
+    S.rbm_page = bpy.props.IntProperty(name="Page", default=0, min=0)
     S.rbm_thumb_size = bpy.props.IntProperty(name="Resolution vignette", default=256,
                                              min=64, max=512)
     S.rbm_expr_name = bpy.props.StringProperty(name="Nom", default="expression_01")
@@ -2101,7 +2326,8 @@ def unregister():
         _previews = None
 
     S = bpy.types.Scene
-    for prop in ("rbm_expr_own", "rbm_expr_keyframe", "rbm_expr_name", "rbm_thumb_size", "rbm_scale", "rbm_columns", "rbm_edit", "rbm_follow",
+    for prop in ("rbm_embedded_anim", "rbm_page", "rbm_search", "rbm_family_filter", "rbm_expr_own", "rbm_expr_keyframe", "rbm_expr_name", 
+                 "rbm_thumb_size", "rbm_scale", "rbm_columns", "rbm_edit", "rbm_follow",
                  "rbm_overwrite", "rbm_auto_rig", "rbm_auto_rest", "rbm_posture_name", "rbm_anim", "rbm_robot"):
         if hasattr(S, prop):
             delattr(S, prop)
