@@ -566,6 +566,11 @@ class RBM_OT_new_character(bpy.types.Operator):
                     "sans fermer le fichier courant")
 
     def invoke(self, context, event):
+        # La famille suit le filtre de la grille : creer un perso en etant sur
+        # "Humanoide" doit produire un humanoide
+        filt = context.scene.rbm_family_filter
+        if filt != 'ALL':
+            self.family = filt
         return context.window_manager.invoke_props_dialog(self, width=340)
 
     def execute(self, context):

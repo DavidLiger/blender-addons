@@ -3789,6 +3789,8 @@ def _on_load_character(dummy=None):
         family = data.get("family")
         if family in {'ROBOT', 'HUMAN'}:
             bpy.context.scene.rm_default_rules = family
+        elif family == 'ANIMAL':
+            bpy.context.scene.rm_default_rules = 'HUMAN'   # pas de tubes
 
         if al is not None:
             al.scan(bpy.context)
