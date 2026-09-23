@@ -3090,6 +3090,28 @@ class RM_OT_save_ready(bpy.types.Operator):
         self.report({'INFO'}, msg)
         return {'FINISHED'}
 
+def mixamo_gray_links(objects):
+    """Textures en niveaux de gris branchees directement sur un Principled.
+    Elles partent dans le FBX et font echouer l'auto-rigger de Mixamo.
+    Blender charge toute image sur 4 canaux : seule la profondeur d'origine
+    (8 ou 16 bits) revele une image a un seul canal."""
+    found = []
+    seen = set()
+    for obj in objects:
+        for slot in getattr(obj, "material_slots", []):
+            mat = slot.material
+            if mat is None or mat.name in seen or not mat.use_nodes:
+                continue
+            seen.add(mat.name)
+            for link in mat.node_tree.links:
+                src, dst = link.from_node, link.to_node
+                if src.type != 'TEX_IMAGE' or dst.type != 'BSDF_PRINCIPLED':
+                    continue
+                if src.image is not None and src.image.depth in (8, 16):
+                    found.append((mat, src.name, link.from_socket.identifier,
+                                  dst.name, link.to_socket.identifier))
+    return found
+
 class RM_OT_prepare_mixamo(bpy.types.Operator):
     bl_idname = "rm.prepare_mixamo"
     bl_label = "Preparer pour Mixamo"
@@ -3188,13 +3210,98 @@ class RM_OT_prepare_mixamo(bpy.types.Operator):
             except Exception as e:
                 self.report({'WARNING'}, "Positions des tubes non ecrites : {}".format(e))
 
+        # --- Humanoides : pieces separees, sans parent ---
+        # Chaque piece est copiee a sa position reelle et detachee de son
+        # repere : sous une hierarchie d'empties, Mixamo ne garde qu'un mesh.
+        # Pas de fusion : un corps complet habille, fusionne, est refuse.
+        if scene.rm_default_rules != 'ROBOT':
+            context.view_layer.update()
+            depsgraph = context.evaluated_depsgraph_get()
+
+            temp = []
+            for obj in sources:
+                if not obj.visible_get():
+                    continue
+                try:
+                    mesh = bpy.data.meshes.new_from_object(obj.evaluated_get(depsgraph))
+                except Exception:
+                    continue
+                if mesh is None or len(mesh.vertices) == 0:
+                    if mesh is not None:
+                        bpy.data.meshes.remove(mesh)
+                    continue
+                dup = bpy.data.objects.new(obj.name, mesh)
+                dup.matrix_world = obj.matrix_world.copy()
+                context.scene.collection.objects.link(dup)
+                temp.append(dup)
+
+            if not temp:
+                self.report({'ERROR'}, "Aucune geometrie visible a exporter")
+                return {'CANCELLED'}
+
+            deselect_all(context)
+            for dup in temp:
+                dup.select_set(True)
+            context.view_layer.objects.active = temp[0]
+
+            # Une piece miroir porte une echelle negative : figee dans les
+            # vertices, elle sortirait retournee
+            flipped = [d for d in temp if d.matrix_world.determinant() < 0]
+            bpy.ops.object.transform_apply(location=True, rotation=True, scale=True)
+            for d in flipped:
+                d.data.flip_normals()
+
+            # Textures en gris debranchees le temps de l'export, puis rebranchees
+            gray = mixamo_gray_links(temp)
+            for mat, src, out_id, dst, in_id in gray:
+                tree = mat.node_tree
+                for link in list(tree.links):
+                    if (link.from_node.name == src and link.to_node.name == dst
+                            and link.to_socket.identifier == in_id):
+                        tree.links.remove(link)
+
+            error = ""
+            try:
+                bpy.ops.export_scene.fbx(
+                    filepath=path,
+                    use_selection=True,
+                    object_types={'MESH'},
+                    apply_unit_scale=True,
+                )
+            except Exception as e:
+                error = str(e)
+            finally:
+                for mat, src, out_id, dst, in_id in gray:
+                    tree = mat.node_tree
+                    a, b = tree.nodes.get(src), tree.nodes.get(dst)
+                    if a is None or b is None:
+                        continue
+                    out = next((s for s in a.outputs if s.identifier == out_id), None)
+                    inp = next((s for s in b.inputs if s.identifier == in_id), None)
+                    if out and inp:
+                        tree.links.new(out, inp)
+
+                for dup in temp:
+                    data = dup.data
+                    bpy.data.objects.remove(dup)
+                    if data.users == 0:
+                        bpy.data.meshes.remove(data)
+
+            deselect_all(context)
+
+            if error:
+                self.report({'ERROR'}, "Export impossible : {}".format(error))
+                return {'CANCELLED'}
+
+            steps.append("{} piece(s) exportee(s)".format(len(temp)))
+            if gray:
+                steps.append("{} texture(s) en gris ignoree(s)".format(len(gray)))
+            self.report({'INFO'}, " - ".join(steps) + " -> " + path)
+            return {'FINISHED'}
+
+        # --- Robots : fusion en un seul maillage, comportement d'origine ---
         # Les pieces sont parentees aux reperes : exportees telles quelles, elles
         # perdraient leur position (les empties ne partent pas dans le FBX).
-        # On travaille donc sur des copies detachees, fusionnees en un seul
-        # maillage - ce que l'auto-rigger attend.
-        # Les originaux ne sont jamais touches : on evalue chaque objet
-        # (modifiers et hooks appliques, courbes converties en maillage)
-        # pour en tirer une copie figee, fusionnee ensuite en un seul mesh.
         context.view_layer.update()
         depsgraph = context.evaluated_depsgraph_get()
 
