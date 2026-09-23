@@ -1182,6 +1182,16 @@ class AL_OT_add(bpy.types.Operator):
             tmp.parent = None
             tmp.animation_data_clear()
 
+            # Sans hierarchie, l'asset ne doit dependre d'aucun autre objet :
+            # un modifier ou une contrainte tirerait l'armature avec lui
+            for mod in list(tmp.modifiers):
+                if any(getattr(mod, a, None) is not None
+                       for a in ("object", "target", "mirror_object", "offset_object")):
+                    tmp.modifiers.remove(mod)
+
+            for con in list(tmp.constraints):
+                tmp.constraints.remove(con)
+
             for k in ("robot", "robot_socket", "robot_tube",
                       "robot_part", "robot_slot", "mirror_of", "mirror_sig"):
                 if k in tmp:
@@ -1231,34 +1241,38 @@ class AL_OT_add(bpy.types.Operator):
                                             os.path.join(folder, name + ".png"))
         scn.collection.objects.unlink(cam)
 
-        # Les textures sont referencees par chemin : en relatif au .blend de
-        # l'asset, elles suivent le dossier si tu le deplaces
-        for mat in (tmp.data.materials if tmp.data else []):
-            if mat is None or not mat.use_nodes:
+        # Les textures sont embarquees dans le .blend de l'asset : il devient
+        # autonome, et l'image est deja la quand on replace l'asset ailleurs
+        packed_here = []
+        for obj in write_set:
+            if getattr(obj, "type", "") != 'MESH':
                 continue
-            for node in mat.node_tree.nodes:
-                if node.type != 'TEX_IMAGE' or node.image is None:
+            for mat in (obj.data.materials if obj.data else []):
+                if mat is None or not mat.use_nodes:
                     continue
-                src = bpy.path.abspath(node.image.filepath)
-                if not os.path.isfile(src):
-                    continue
-
-                dest_dir = os.path.join(folder, "textures")
-                dest = os.path.join(dest_dir, os.path.basename(src))
-                try:
-                    os.makedirs(dest_dir, exist_ok=True)
-                    if os.path.normcase(src) != os.path.normcase(dest):
-                        import shutil
-                        shutil.copy2(src, dest)
-                    node.image.filepath = bpy.path.relpath(dest, start=folder)
-                except Exception:
-                    pass
+                for node in mat.node_tree.nodes:
+                    if node.type != 'TEX_IMAGE' or node.image is None:
+                        continue
+                    if node.image.packed_file:
+                        continue
+                    try:
+                        node.image.pack()
+                        packed_here.append(node.image)
+                    except Exception:
+                        pass
 
         error = ""
         try:
             bpy.data.libraries.write(path, write_set, fake_user=True)
         except Exception as e:
             error = str(e)
+
+        # Le fichier de travail retrouve ses images en externe
+        for img in packed_here:
+            try:
+                img.unpack(method='REMOVE')
+            except Exception:
+                pass
         bpy.data.scenes.remove(scn)
         cam_data = cam.data
         bpy.data.objects.remove(cam)
