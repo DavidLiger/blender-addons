@@ -3399,6 +3399,285 @@ def draw_schema(layout, context, coll):
             for mark in links:
                 lr.label(text=mark)
 
+# ---------------------------------------------------------------------------
+# Hair cards : depliage automatique en bandes droites
+# ---------------------------------------------------------------------------
+def hc_iles(mesh):
+    """Listes d'index de polygones connectes : une card = une ile."""
+    par_arete = {}
+    for p in mesh.polygons:
+        for cle in p.edge_keys:
+            par_arete.setdefault(cle, []).append(p.index)
+
+    voisins = {p.index: set() for p in mesh.polygons}
+    for faces in par_arete.values():
+        for a in faces:
+            for b in faces:
+                if a != b:
+                    voisins[a].add(b)
+
+    reste = set(p.index for p in mesh.polygons)
+    out = []
+    while reste:
+        depart = reste.pop()
+        groupe = [depart]
+        a_voir = [depart]
+        while a_voir:
+            i = a_voir.pop()
+            for j in voisins[i]:
+                if j in reste:
+                    reste.remove(j)
+                    groupe.append(j)
+                    a_voir.append(j)
+        out.append(groupe)
+    return out, voisins
+
+
+def hc_quad_de_depart(mesh, indices, voisins):
+    """Quad a une extremite de la bande : peu de voisins, loin du centre."""
+    quads = [i for i in indices if len(mesh.polygons[i].vertices) == 4]
+    if not quads:
+        return None
+
+    dans = set(indices)
+    centre = Vector()
+    for i in indices:
+        centre += mesh.polygons[i].center
+    centre /= len(indices)
+
+    def cle(i):
+        return (len(voisins[i] & dans),
+                -(mesh.polygons[i].center - centre).length)
+
+    return min(quads, key=cle)
+
+
+def hc_vue3d(context):
+    """Follow Active Quads lit la selection dans le contexte de la zone."""
+    for window in context.window_manager.windows:
+        for area in window.screen.areas:
+            if area.type != 'VIEW_3D':
+                continue
+            region = next((r for r in area.regions if r.type == 'WINDOW'), None)
+            if region:
+                return {"window": window, "area": area, "region": region}
+    return None
+
+
+def hc_etat(context):
+    """Ce qui empeche le depliage, pour l'afficher dans le panneau."""
+    obj = context.active_object
+    soucis = []
+
+    if obj is None or obj.type != 'MESH':
+        return None, ["Selectionner l'objet des cards (mesh)"]
+
+    if not obj.visible_get():
+        soucis.append("BLOQUANT : objet masque dans la vue (Alt+H pour "
+                      "l'afficher, ou reactiver sa collection)")
+
+    if len(obj.data.polygons) == 0:
+        soucis.append("BLOQUANT : le mesh n'a aucune face")
+
+    s = obj.scale
+    if abs(s.x - s.y) > 1e-5 or abs(s.y - s.z) > 1e-5:
+        soucis.append("Echelle non uniforme : appliquee a l'execution")
+
+    if not obj.data.uv_layers:
+        soucis.append("Aucune carte UV : elle sera creee")
+    elif len(obj.data.uv_layers) > 1:
+        soucis.append("{} cartes UV : seule l'active est modifiee".format(
+            len(obj.data.uv_layers)))
+
+    if obj.modifiers:
+        soucis.append("{} modifier(s) : le depliage ignore leur effet".format(
+            len(obj.modifiers)))
+
+    return obj, soucis
+
+
+class RM_OT_hair_cards_unwrap(bpy.types.Operator):
+    bl_idname = "rm.hair_cards_unwrap"
+    bl_label = "Deplier les hair cards"
+    bl_description = ("Deplie chaque card en bande droite verticale et les "
+                      "range cote a cote dans l'UV. Il reste a les deplacer "
+                      "sur les meches de l'atlas")
+    bl_options = {'REGISTER', 'UNDO'}
+
+    tris_to_quads: bpy.props.BoolProperty(
+        name="Convertir les triangles", default=True,
+        description="Follow Active Quads exige des quads")
+    largeur: bpy.props.FloatProperty(
+        name="Largeur dans l'UV", default=0.06, min=0.01, max=0.5)
+    marge: bpy.props.FloatProperty(
+        name="Marge", default=0.01, min=0.0, max=0.2)
+    par_ligne: bpy.props.IntProperty(
+        name="Cards par rangee", default=14, min=1, max=60)
+
+    def execute(self, context):
+        obj, _ = hc_etat(context)
+        if obj is None:
+            self.report({'ERROR'}, "Selectionner l'objet des cards (mesh)")
+            return {'CANCELLED'}
+
+        vue = hc_vue3d(context)
+        if vue is None:
+            self.report({'ERROR'}, "Aucune vue 3D ouverte")
+            return {'CANCELLED'}
+
+        if not obj.visible_get():
+            self.report({'ERROR'},
+                        "Objet masque dans la vue : Alt+H, ou reactiver sa "
+                        "collection dans l'outliner")
+            return {'CANCELLED'}
+
+        if len(obj.data.polygons) == 0:
+            self.report({'ERROR'}, "Le mesh n'a aucune face")
+            return {'CANCELLED'}
+
+        if context.mode != 'OBJECT':
+            bpy.ops.object.mode_set(mode='OBJECT')
+
+        s = obj.scale
+        if abs(s.x - s.y) > 1e-5 or abs(s.y - s.z) > 1e-5:
+            bpy.ops.object.transform_apply(location=False, rotation=False,
+                                           scale=True)
+
+        mesh = obj.data
+        if not mesh.uv_layers:
+            mesh.uv_layers.new(name="UVMap")
+
+        if self.tris_to_quads:
+            bpy.ops.object.mode_set(mode='EDIT')
+            bpy.ops.mesh.select_all(action='SELECT')
+            bpy.ops.mesh.tris_convert_to_quads(face_threshold=3.14159,
+                                               shape_threshold=3.14159)
+            bpy.ops.mesh.select_mode(type='FACE')
+            bpy.ops.object.mode_set(mode='OBJECT')
+
+        mesh = obj.data
+        groupes, voisins = hc_iles(mesh)
+
+        faits = sans_quad = echecs = 0
+
+        for indices in groupes:
+            depart = hc_quad_de_depart(mesh, indices, voisins)
+            if depart is None:
+                sans_quad += 1
+                continue
+
+            dans = set(indices)
+            for p in mesh.polygons:
+                p.select = p.index in dans
+            mesh.polygons.active = depart
+
+            bpy.ops.object.mode_set(mode='EDIT')
+            try:
+                with context.temp_override(**vue):
+                    bpy.ops.uv.follow_active_quads(mode='EVEN')
+                ok = True
+            except Exception:
+                ok = False
+            bpy.ops.object.mode_set(mode='OBJECT')
+
+            if not ok:
+                echecs += 1
+                continue
+
+            uv = mesh.uv_layers.active.data
+            boucles = [l for i in indices
+                       for l in range(mesh.polygons[i].loop_start,
+                                      mesh.polygons[i].loop_start
+                                      + mesh.polygons[i].loop_total)]
+
+            # Follow Active Quads oriente la bande selon l'arete de la face
+            # active : on la redresse sur la verticale (axe par covariance)
+            pts = [uv[l].uv for l in boucles]
+            cx = sum(p.x for p in pts) / len(pts)
+            cy = sum(p.y for p in pts) / len(pts)
+
+            sxx = syy = sxy = 0.0
+            for p in pts:
+                dx0, dy0 = p.x - cx, p.y - cy
+                sxx += dx0 * dx0
+                syy += dy0 * dy0
+                sxy += dx0 * dy0
+
+            rot = math.pi / 2.0 - 0.5 * math.atan2(2.0 * sxy, sxx - syy)
+            ca, sa = math.cos(rot), math.sin(rot)
+            for p in pts:
+                dx0, dy0 = p.x - cx, p.y - cy
+                p.x = cx + dx0 * ca - dy0 * sa
+                p.y = cy + dx0 * sa + dy0 * ca
+
+            xs = [uv[l].uv.x for l in boucles]
+            ys = [uv[l].uv.y for l in boucles]
+            larg = max(max(xs) - min(xs), 1e-6)
+            haut = max(max(ys) - min(ys), 1e-6)
+            echelle = min(self.largeur / larg, 0.96 / haut)
+
+            colonne = faits % self.par_ligne
+            dx = colonne * (self.largeur + self.marge) - min(xs) * echelle
+            dy = 0.02 - min(ys) * echelle
+
+            for l in boucles:
+                v = uv[l].uv
+                v.x = v.x * echelle + dx
+                v.y = v.y * echelle + dy
+
+            faits += 1
+
+        msg = "{} card(s) depliee(s)".format(faits)
+        if sans_quad:
+            msg += ", {} sans quad".format(sans_quad)
+        if echecs:
+            msg += ", {} en echec".format(echecs)
+
+        self.report({'WARNING'} if (sans_quad or echecs) else {'INFO'}, msg)
+        return {'FINISHED'}
+
+
+class RM_PT_hair_cards(bpy.types.Panel):
+    bl_label = "Hair cards"
+    bl_idname = "RM_PT_hair_cards"
+    bl_parent_id = "RM_PT_panel"
+    bl_space_type = 'VIEW_3D'
+    bl_region_type = 'UI'
+    bl_category = "BD"
+    bl_options = {'DEFAULT_CLOSED'}
+
+    def draw(self, context):
+        layout = self.layout
+        obj, soucis = hc_etat(context)
+
+        if obj is None:
+            box = layout.box()
+            box.alert = True
+            box.label(text=soucis[0], icon='ERROR')
+            return
+
+        info = layout.row()
+        info.scale_y = 0.7
+        info.label(text="{} : {} face(s)".format(obj.name, len(obj.data.polygons)),
+                   icon='MESH_DATA')
+
+        bloquant = False
+        for texte in soucis:
+            ligne = layout.box()
+            if texte.startswith("BLOQUANT"):
+                bloquant = True
+                ligne.alert = True
+                ligne.label(text=texte[10:], icon='ERROR')
+            else:
+                ligne.label(text=texte, icon='INFO')
+
+        bouton = layout.row()
+        bouton.enabled = not bloquant
+        bouton.operator("rm.hair_cards_unwrap", icon='UV')
+
+        aide = layout.row()
+        aide.scale_y = 0.7
+        aide.label(text="Ensuite : placer les bandes sur l'atlas (UV Editor)")
 
 # ---------------------------------------------------------------------------
 # Panneau
@@ -3825,6 +4104,7 @@ class RM_PT_panel(bpy.types.Panel):
 # Enregistrement
 # ---------------------------------------------------------------------------
 classes = (
+    RM_OT_hair_cards_unwrap,
     RM_CreditFolder,
     RM_UL_credit_folders,
     RM_OT_credit_folder_add,
@@ -3858,6 +4138,7 @@ classes = (
     RM_OT_prepare_mixamo,
     RM_OT_mixamo_info,
     RM_PT_panel,
+    RM_PT_hair_cards,
     RM_OT_setup_scene,
     RM_OT_prepare_face,
     RM_OT_add_jaw,
