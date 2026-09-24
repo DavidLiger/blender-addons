@@ -181,20 +181,8 @@ def scan_all(context=None):
         if _previews is not None and os.path.isfile(thumb):
             _previews.load("robot/" + name, thumb, 'IMAGE')
 
-        # Postures
-        poses = []
-        pdir = os.path.join(folder, D_POSE)
-        if os.path.isdir(pdir):
-            for fname in sorted(os.listdir(pdir)):
-                if not fname.lower().endswith(".json"):
-                    continue
-                base = fname[:-5]
-                poses.append((base, os.path.join(pdir, fname)))
-
-                png = os.path.join(pdir, base + ".png")
-                if _previews is not None and os.path.isfile(png):
-                    _previews.load("pose/" + name + "/" + base, png, 'IMAGE')
-        _postures[name] = poses
+        # Postures : communes a la serie, surchargeables par personnage
+        _postures[name] = scan_postures(name)
 
         _anims[name] = scan_animations(name, folder)
 
@@ -407,6 +395,9 @@ def pose_to_dict(rig):
             "mode": pb.rotation_mode,
             "loc": list(pb.location),
             "scale": list(pb.scale),
+            # Longueur de repos : une position de controleur IK est exprimee
+            # dans les unites du squelette d'origine
+            "len": round(pb.bone.length, 6),
         }
         if pb.rotation_mode == 'QUATERNION':
             entry["rot"] = list(pb.rotation_quaternion)
@@ -415,12 +406,52 @@ def pose_to_dict(rig):
         else:
             entry["rot"] = list(pb.rotation_euler)
         bones[pb.name] = entry
-    return {"rig": rig.name, "bones": bones}
+    # Reperes utiles au transfert vers un autre personnage : taille globale,
+    # et hauteur des pieds par rapport aux hanches (ce qui fait qu'une pose
+    # assise reste assise)
+    zs = [(rig.matrix_world @ b.bone.head_local).z for b in rig.pose.bones]
+    zs += [(rig.matrix_world @ b.bone.tail_local).z for b in rig.pose.bones]
+    hauteur = max(zs) - min(zs)
+
+    ancres = {}
+    hips = rig.pose.bones.get("Ctrl_Hips")
+    if hips is not None:
+        base = (rig.matrix_world @ hips.matrix.translation).z
+        for n in ("Ctrl_Foot_IK_Left", "Ctrl_Foot_IK_Right"):
+            pb = rig.pose.bones.get(n)
+            if pb is not None:
+                ancres[n] = round(
+                    (rig.matrix_world @ pb.matrix.translation).z - base, 6)
+
+    return {"rig": rig.name,
+            "height": round(hauteur, 6),
+            "anchors": ancres,
+            "obj_scale": round(rig.scale.x, 6),
+            "bones": bones}
 
 
-def dict_to_pose(rig, data):
+def dict_to_pose(rig, data, rot_only=False):
+    """rot_only : neutralise les echelles d'os, et ramene les positions des
+    controleurs a la taille du squelette cible. Sans cela, une posture prise
+    sur un personnage plus grand s'applique en trop faible amplitude."""
     bones = data.get("bones", {})
     applied, missing = 0, 0
+    
+    # Les longueurs d'os varient trop d'une morphologie a l'autre pour servir
+    # de ratio : seule la taille globale est transposable
+    ratio = 1.0
+    if rot_only:
+        src_h = data.get("height")
+        if src_h:
+            zs = [(rig.matrix_world @ b.bone.head_local).z for b in rig.pose.bones]
+            zs += [(rig.matrix_world @ b.bone.tail_local).z for b in rig.pose.bones]
+            h = max(zs) - min(zs)
+            if h:
+                ratio = h / src_h
+        else:
+            src_obj = data.get("obj_scale")
+            if src_obj:
+                ratio = rig.scale.x / src_obj
 
     for name, entry in bones.items():
         pb = rig.pose.bones.get(name)
@@ -428,8 +459,14 @@ def dict_to_pose(rig, data):
             missing += 1
             continue
 
-        pb.location = entry.get("loc", (0.0, 0.0, 0.0))
-        pb.scale = entry.get("scale", (1.0, 1.0, 1.0))
+        loc = entry.get("loc", (0.0, 0.0, 0.0))
+        if rot_only:
+            loc = [v * ratio for v in loc]
+            pb.scale = (1.0, 1.0, 1.0)
+        else:
+            pb.scale = entry.get("scale", (1.0, 1.0, 1.0))
+
+        pb.location = loc
 
         mode = entry.get("mode", pb.rotation_mode)
         rot = entry.get("rot")
@@ -448,6 +485,36 @@ def dict_to_pose(rig, data):
             pb.rotation_euler = rot
 
         applied += 1
+
+    # Recalage vertical des hanches : le ratio global place correctement les
+    # controleurs en X et Y, mais un torse de longueur differente empeche la
+    # pose de "s'asseoir" a la bonne hauteur. On descend les hanches jusqu'a
+    # ce que les pieds retrouvent leur hauteur relative d'origine.
+    ancres = data.get("anchors") or {}
+    hips = rig.pose.bones.get("Ctrl_Hips")
+
+    if rot_only and ancres and hips is not None:
+        bpy.context.view_layer.update()
+
+        ecarts = []
+        for n, dz_src in ancres.items():
+            pb = rig.pose.bones.get(n)
+            if pb is None:
+                continue
+            dz_now = ((rig.matrix_world @ pb.matrix.translation).z
+                      - (rig.matrix_world @ hips.matrix.translation).z)
+            ecarts.append(dz_now - dz_src * ratio)
+
+        if ecarts:
+            d = sum(ecarts) / len(ecarts)
+            if abs(d) > 1e-4:
+                M = (rig.matrix_world.to_3x3()
+                     @ hips.bone.matrix_local.to_3x3())
+                try:
+                    hips.location = hips.location + (
+                        M.inverted() @ Vector((0.0, 0.0, d)))
+                except ValueError:
+                    pass
 
     return applied, missing
 
@@ -498,7 +565,35 @@ def save_posture(context, robot, rig, name, overwrite=False):
         return False, "robot ou control rig manquant"
 
     name = safe_name(name) or "posture"
-    folder = sub_dir(robot, D_POSE, create=True)
+    scene = context.scene
+    root = root_path()
+    commun = os.path.join(root, CREATIONS, PRESETS, D_POSE) if root else ""
+    chemin_commun = os.path.join(commun, name + ".json") if commun else ""
+
+    # Une posture commune n'est modifiable que depuis le personnage qui l'a
+    # creee : ses positions de controleurs sont exprimees a ses proportions.
+    # Depuis un autre perso, on enregistre forcement une variation.
+    auteur = ""
+    if chemin_commun and os.path.isfile(chemin_commun):
+        try:
+            with open(chemin_commun, "r", encoding="utf-8") as f:
+                auteur = json.load(f).get("owner", "")
+        except Exception:
+            auteur = ""
+
+    # Auteur disparu de la bibliotheque : le perso courant en reprend la main
+    noms = set(n for n, _f in _robots)
+    if auteur and auteur not in noms:
+        auteur = ""
+
+    force_perso = bool(auteur) and auteur != robot
+
+    if scene.rbm_pose_own or force_perso:
+        folder = sub_dir(robot, D_POSE, create=True)
+    else:
+        folder = commun
+        if folder:
+            os.makedirs(folder, exist_ok=True)
     if not folder:
         return False, "dossier du robot introuvable"
 
@@ -506,9 +601,13 @@ def save_posture(context, robot, rig, name, overwrite=False):
     if os.path.isfile(path) and not overwrite:
         return False, "'{}' existe deja (cocher Ecraser)".format(name)
 
+    data = pose_to_dict(rig)
+    if folder == commun:
+        data["owner"] = robot
+
     try:
         with open(path, "w", encoding="utf-8") as f:
-            json.dump(pose_to_dict(rig), f, indent=1)
+            json.dump(data, f, indent=1)
     except Exception as e:
         return False, "ecriture impossible : {}".format(e)
 
@@ -517,7 +616,10 @@ def save_posture(context, robot, rig, name, overwrite=False):
                                context.scene.rbm_thumb_size)
     scan_all(context)
 
-    msg = "posture '{}' enregistree".format(name)
+    msg = "posture '{}' enregistree ({})".format(
+        name, "commune" if folder == commun else "propre a " + robot)
+    if force_perso:
+        msg += " - la commune appartient a '{}'".format(auteur)
     if not ok:
         msg += " (vignette : {})".format(err)
     return True, msg
@@ -1165,7 +1267,7 @@ class RBM_OT_instantiate(bpy.types.Operator):
 
                 # Premiere instanciation : on fige la pose de repos, point de
                 # retour entre deux essais de posture
-                if scene.rbm_auto_rest and not _postures.get(robot):
+                if scene.rbm_auto_rest and not any(o for _n, _p, o in _postures.get(robot, [])):
                     try:
                         ok, info = save_posture(context, robot, rig, REST_POSTURE, False)
                     except Exception as e:
@@ -1280,7 +1382,7 @@ class RBM_OT_apply_posture(bpy.types.Operator):
             self.report({'ERROR'}, "Aucune armature trouvee")
             return {'CANCELLED'}
 
-        path = next((p for n, p in _postures.get(robot, []) if n == self.posture), None)
+        path = next((p for n, p, _o in _postures.get(robot, []) if n == self.posture), None)
         if path is None or not os.path.isfile(path):
             self.report({'ERROR'}, "Posture introuvable : relire les dossiers")
             return {'CANCELLED'}
@@ -1292,21 +1394,32 @@ class RBM_OT_apply_posture(bpy.types.Operator):
             self.report({'ERROR'}, "Lecture impossible : {}".format(e))
             return {'CANCELLED'}
 
-        if "bones" in data:
+        bones = data.get("bones")
+        detaille = isinstance(bones, dict) and any(
+            isinstance(v, dict) and "location" in v for v in bones.values())
+
+        if detaille:
             applied, missing = 0, 0
-            for bone_name, vals in data["bones"].items():
+            for bone_name, vals in bones.items():
                 pb = rig.pose.bones.get(bone_name)
-                if pb is None:
+                if pb is None or not isinstance(vals, dict):
                     missing += 1
                     continue
                 pb.rotation_mode = vals.get("rotation_mode", pb.rotation_mode)
-                pb.location = vals["location"]
-                pb.rotation_quaternion = vals["rotation_quaternion"]
-                pb.rotation_euler = vals["rotation_euler"]
-                pb.scale = vals["scale"]
+                if "location" in vals:
+                    pb.location = vals["location"]
+                if "rotation_quaternion" in vals:
+                    pb.rotation_quaternion = vals["rotation_quaternion"]
+                if "rotation_euler" in vals:
+                    pb.rotation_euler = vals["rotation_euler"]
+                if "scale" in vals:
+                    pb.scale = vals["scale"]
                 applied += 1
         else:
-            applied, missing = dict_to_pose(rig, data)
+            applied, missing = dict_to_pose(rig, data, scene.rbm_pose_rot_only)
+
+        scene.rbm_posture_name = self.posture
+        scene.rbm_overwrite = False
 
         msg = "'{}' appliquee ({} os)".format(self.posture, applied)
         if missing:
@@ -1327,7 +1440,7 @@ class RBM_OT_delete_posture(bpy.types.Operator):
 
     def execute(self, context):
         robot = context.scene.rbm_robot
-        path = next((p for n, p in _postures.get(robot, []) if n == self.posture), None)
+        path = next((p for n, p, _o in _postures.get(robot, []) if n == self.posture), None)
 
         if path is None:
             self.report({'ERROR'}, "Posture introuvable")
@@ -1795,6 +1908,8 @@ class RBM_OT_save_pose_bones(bpy.types.Operator):
                 "scale": list(pb.scale),
             }
 
+        # On ecrase la posture reellement lue, pas l'autre copie
+        # Postures d'animaux : os propres a l'asset, jamais partageables
         folder = sub_dir(robot, D_POSE, create=True)
         if not folder:
             self.report({'ERROR'}, "Dossier des postures introuvable")
@@ -1872,6 +1987,39 @@ class RBM_OT_set_family(bpy.types.Operator):
 # ---------------------------------------------------------------------------
 # Panneau
 # ---------------------------------------------------------------------------
+class RBM_OT_pose_page(bpy.types.Operator):
+    bl_idname = "rbm.pose_page"
+    bl_label = "Page"
+    bl_description = "Page suivante ou precedente des postures"
+
+    delta: bpy.props.IntProperty(default=1)
+
+    def execute(self, context):
+        context.scene.rbm_pose_page = max(0, context.scene.rbm_pose_page + self.delta)
+        return {'FINISHED'}
+
+
+class RBM_OT_clear_pose(bpy.types.Operator):
+    bl_idname = "rbm.clear_pose"
+    bl_label = "Retirer la posture"
+    bl_description = "Remet tous les os a leur position de repos"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    def execute(self, context):
+        rig = find_control_rig(context) or scene_armature(context)
+        if rig is None:
+            self.report({'ERROR'}, "Aucune armature trouvee")
+            return {'CANCELLED'}
+
+        for pb in rig.pose.bones:
+            pb.location = (0.0, 0.0, 0.0)
+            pb.rotation_quaternion = (1.0, 0.0, 0.0, 0.0)
+            pb.rotation_euler = (0.0, 0.0, 0.0)
+            pb.scale = (1.0, 1.0, 1.0)
+
+        self.report({'INFO'}, "{} os remis au repos".format(len(rig.pose.bones)))
+        return {'FINISHED'}
+
 class RBM_PT_panel(bpy.types.Panel):
     bl_label = "Character Manager"
     bl_idname = "RBM_PT_panel"
@@ -1996,23 +2144,54 @@ class RBM_PT_panel(bpy.types.Panel):
         row.label(text="Postures", icon='POSE_HLT')
         row.prop(scene, "rbm_edit", text="", icon='TRASH', toggle=True)
 
-        poses = _postures.get(robot, [])
+        toutes = _postures.get(robot, [])
+
+        filt = box.row(align=True)
+        filt.prop(scene, "rbm_pose_filter", text="")
+        filt.prop(scene, "rbm_pose_search", text="", icon='VIEWZOOM')
+
+        f = scene.rbm_pose_filter
+        motif = scene.rbm_pose_search.lower()
+        poses = [e for e in toutes
+                 if (f == 'ALL' or (f == 'OWN') == e[2])
+                 and (not motif or motif in e[0].lower())]
+
+        pages = max(1, (len(poses) + PER_PAGE - 1) // PER_PAGE)
+        page = min(scene.rbm_pose_page, pages - 1)
+        poses = poses[page * PER_PAGE:(page + 1) * PER_PAGE]
+
         if poses:
             grid = box.grid_flow(row_major=True, columns=scene.rbm_columns,
                                  even_columns=True)
             grid.enabled = rig is not None or arm is not None
-            for name, path in poses:
+            for name, path, is_own in poses:
                 cell = grid.box()
-                icon = icon_of("pose/" + robot + "/" + name)
+                key = ("pose/" + robot + "/" + name) if is_own else ("pose/_/" + name)
+                icon = icon_of(key)
                 if icon:
                     cell.template_icon(icon_value=icon, scale=scene.rbm_scale)
                 line = cell.row(align=True)
-                line.operator("rbm.apply_posture", text=name).posture = name
+                line.operator("rbm.apply_posture", text=name,
+                              icon='USER' if is_own else 'WORLD').posture = name
                 if scene.rbm_edit:
                     line.operator("rbm.delete_posture", text="",
                                   icon='TRASH').posture = name
         else:
-            box.label(text="Aucune posture enregistree", icon='INFO')
+            box.label(text="Aucune posture", icon='INFO')
+
+        if pages > 1:
+            nav = box.row(align=True)
+            prec = nav.row(align=True)
+            prec.enabled = page > 0
+            prec.operator("rbm.pose_page", text="", icon='TRIA_LEFT').delta = -1
+            nav.label(text="{} / {}".format(page + 1, pages))
+            suiv = nav.row(align=True)
+            suiv.enabled = page < pages - 1
+            suiv.operator("rbm.pose_page", text="", icon='TRIA_RIGHT').delta = 1
+
+        ligne = box.row(align=True)
+        ligne.prop(scene, "rbm_pose_rot_only")
+        ligne.operator("rbm.clear_pose", text="", icon='LOOP_BACK')
 
         box.separator()
         arm = scene_armature(context, robot)
@@ -2021,6 +2200,7 @@ class RBM_PT_panel(bpy.types.Panel):
         r = col.row(align=True)
         r.prop(scene, "rbm_posture_name", text="")
         r.prop(scene, "rbm_overwrite")
+        r.prop(scene, "rbm_pose_own")
         col.prop(scene, "rbm_clear_anim")
         col.prop(scene, "rbm_thumb_size")
         if rig is None and arm is not None:
@@ -2112,6 +2292,39 @@ class RBM_PT_panel(bpy.types.Panel):
 # ---------------------------------------------------------------------------
 ARKIT_PROBE = "jawOpen"   # presence = personnage bake par Faceit
 
+def pose_dirs(robot):
+    """(dossier commun, dossier du perso)."""
+    root = root_path()
+    shared = os.path.join(root, CREATIONS, PRESETS, D_POSE) if root else ""
+    own = sub_dir(robot, D_POSE) if robot else ""
+    return shared, own
+
+
+def scan_postures(robot):
+    """[(nom, chemin, propre_au_perso)] : le perso ecrase le commun."""
+    found = {}
+    shared, own = pose_dirs(robot)
+
+    # Un animal a une armature importee : les postures Mixamo communes ne
+    # correspondraient a aucun de ses os
+    sources = ((own, True),) if _families.get(robot) == 'ANIMAL' \
+        else ((shared, False), (own, True))
+
+    for folder, is_own in sources:
+        if not folder or not os.path.isdir(folder):
+            continue
+        for fname in sorted(os.listdir(folder)):
+            if not fname.lower().endswith(".json"):
+                continue
+            base = fname[:-5]
+            found[base] = (base, os.path.join(folder, fname), is_own)
+
+            key = ("pose/" + robot + "/" + base) if is_own else ("pose/_/" + base)
+            png = os.path.join(folder, base + ".png")
+            if _previews is not None and key not in _previews and os.path.isfile(png):
+                _previews.load(key, png, 'IMAGE')
+
+    return [found[k] for k in sorted(found)]
 
 def expr_dirs(robot):
     """(dossier commun, dossier du perso). L'un ou l'autre peut etre vide."""
@@ -2483,6 +2696,8 @@ classes = (
     RBM_OT_clip_preview,
     RBM_OT_split_action,
     RBM_OT_drop_source_action,
+    RBM_OT_pose_page,   
+    RBM_OT_clear_pose,
     RBM_OT_page,
     RBM_PT_panel,
     RBM_OT_new_character,
@@ -2530,6 +2745,22 @@ def register():
     S.rbm_embedded_anim = bpy.props.EnumProperty(
         name="Animation de l'asset", items=action_enum)
     S.rbm_posture_name = bpy.props.StringProperty(name="Nom", default="posture_01")
+    S.rbm_pose_own = bpy.props.BoolProperty(
+        name="Propre au perso", default=False,
+        description="Enregistre dans le dossier du personnage au lieu du "
+                    "dossier commun a la serie")
+    S.rbm_pose_filter = bpy.props.EnumProperty(
+        name="Origine", default='ALL',
+        items=[('ALL', "Toutes", ""), ('SHARED', "Communes", ""),
+               ('OWN', "Du perso", "")])
+    S.rbm_pose_search = bpy.props.StringProperty(
+        name="Rechercher", default="", options={'TEXTEDIT_UPDATE'})
+    S.rbm_pose_page = bpy.props.IntProperty(name="Page", default=0, min=0)
+    S.rbm_pose_rot_only = bpy.props.BoolProperty(
+        name="Adapter au squelette", default=True,
+        description="Neutralise les echelles d'os et ramene les positions des "
+                    "controleurs a la taille du personnage. A decocher pour "
+                    "reappliquer une posture a l'identique sur son perso d'origine")
     S.rbm_overwrite = bpy.props.BoolProperty(name="Ecraser", default=False)
     S.rbm_clear_anim = bpy.props.BoolProperty(
         name="Supprimer l'animation apres enregistrement", default=False,
@@ -2595,7 +2826,7 @@ def unregister():
         _previews = None
 
     S = bpy.types.Scene
-    for prop in ("rbm_source_action", "rbm_show_split", "rbm_clip_index",
+    for prop in ("rbm_pose_rot_only", "rbm_pose_page", "rbm_pose_search", "rbm_pose_filter", "rbm_pose_own", "rbm_source_action", "rbm_show_split", "rbm_clip_index",
                  "rbm_clips", "rbm_clear_anim", "rbm_embedded_anim", "rbm_page", "rbm_search", "rbm_family_filter", "rbm_expr_own", "rbm_expr_keyframe", "rbm_expr_name", 
                  "rbm_thumb_size", "rbm_scale", "rbm_columns", "rbm_edit", "rbm_follow",
                  "rbm_overwrite", "rbm_auto_rig", "rbm_auto_rest", "rbm_posture_name", "rbm_anim", "rbm_robot"):
