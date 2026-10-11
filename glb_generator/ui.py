@@ -118,6 +118,7 @@ class GLBG_PT_report(bpy.types.Panel):
         row = layout.row(align=True)
         row.operator("glbg.check", icon='VIEWZOOM')
         row.operator("glbg.apply", icon='FILE_TICK')
+        layout.operator("glbg.export", icon='EXPORT')
         layout.operator("glbg.fix_names", icon='SORTALPHA')
         report = context.scene.glbg.report
         if not len(report):

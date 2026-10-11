@@ -10,13 +10,17 @@ bl_info = {
 
 # Rechargement (F3 > Reload Scripts) : recharge aussi les sous-modules.
 _reloading = "bpy" in locals()
-from . import core, prefs, props, serialize, checks, ops, ui
+from . import core, prefs, props, serialize, checks, verify, gltf_hook, ops, ui
 if _reloading:
     import importlib
-    for _m in (core, prefs, props, serialize, checks, ops, ui):
+    for _m in (core, prefs, props, serialize, checks, verify, gltf_hook, ops, ui):
         importlib.reload(_m)
 
 import bpy
+
+# Noms cherchés par l'exportateur glTF dans le module de chaque addon activé.
+glTF2ExportUserExtension = gltf_hook.GLBG_GltfExtension
+glTF2_pre_export_callback = gltf_hook.pre_export_callback
 
 classes = (
     *props.classes,
@@ -29,6 +33,7 @@ classes = (
     ops.GLBG_OT_apply,
     ops.GLBG_OT_check,
     ops.GLBG_OT_fix_names,
+    ops.GLBG_OT_export,
     ui.GLBG_PT_main,
     ui.GLBG_PT_scene,
     ui.GLBG_UL_actions,
