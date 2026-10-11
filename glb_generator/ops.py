@@ -2,7 +2,7 @@ import os
 
 import bpy
 
-from . import core, prefs
+from . import core, prefs, serialize
 
 
 class GLBG_OT_root_ensure(bpy.types.Operator):
@@ -154,4 +154,29 @@ class GLBG_OT_pick_asset(bpy.types.Operator):
             if not 0 <= self.index < len(s.actions):
                 return {'CANCELLED'}
             setattr(s.actions[self.index], "icon" if self.target == 'ICON' else "sound", rel)
+        return {'FINISHED'}
+
+
+def get_root(scene):
+    """GLBI_ROOT utilisable (unique, empty, dans la scène) ou None."""
+    cands = core.root_candidates()
+    if len(cands) == 1 and cands[0].name == core.ROOT_NAME and cands[0].type == 'EMPTY' \
+            and cands[0].name in scene.objects:
+        return cands[0]
+    return None
+
+
+class GLBG_OT_apply(bpy.types.Operator):
+    """Écrit glbi_version et glbi_config sur GLBI_ROOT"""
+    bl_idname = "glbg.apply"
+    bl_label = "Appliquer"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    def execute(self, context):
+        root = get_root(context.scene)
+        if root is None:
+            self.report({'ERROR'}, "GLBI_ROOT absent ou à réparer")
+            return {'CANCELLED'}
+        serialize.write_root(root, context.scene)
+        self.report({'INFO'}, "glbi_config écrit sur GLBI_ROOT")
         return {'FINISHED'}

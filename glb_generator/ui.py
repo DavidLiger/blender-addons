@@ -103,3 +103,16 @@ class GLBG_PT_animations(bpy.types.Panel):
             op.target = target
             op.index = s.actions_index
         box.prop(item, "loop")
+
+
+class GLBG_PT_report(bpy.types.Panel):
+    bl_label = "Rapport"
+    bl_idname = "GLBG_PT_report"
+    bl_space_type = 'VIEW_3D'
+    bl_region_type = 'UI'
+    bl_category = core.TAB
+    bl_parent_id = "GLBG_PT_main"
+
+    def draw(self, context):
+        row = self.layout.row(align=True)
+        row.operator("glbg.apply", icon='FILE_TICK')
