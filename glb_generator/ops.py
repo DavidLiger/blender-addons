@@ -2,7 +2,7 @@ import os
 
 import bpy
 
-from . import core, prefs, serialize
+from . import checks, core, prefs, serialize
 
 
 class GLBG_OT_root_ensure(bpy.types.Operator):
@@ -173,10 +173,69 @@ class GLBG_OT_apply(bpy.types.Operator):
     bl_options = {'REGISTER', 'UNDO'}
 
     def execute(self, context):
-        root = get_root(context.scene)
-        if root is None:
-            self.report({'ERROR'}, "GLBI_ROOT absent ou à réparer")
-            return {'CANCELLED'}
-        serialize.write_root(root, context.scene)
-        self.report({'INFO'}, "glbi_config écrit sur GLBI_ROOT")
+        return apply(self, context.scene)
+
+
+def _verify(op, scene):
+    """Lance les contrôles, remplit le rapport ; renvoie le nombre d'erreurs."""
+    results = checks.run_checks(scene)
+    checks.store_report(scene, results)
+    n_err = len(checks.errors(results))
+    n_warn = sum(1 for r in results if r[1] == checks.WARNING)
+    op.report({'ERROR'} if n_err else {'INFO'},
+              f"{n_err} erreur(s), {n_warn} avertissement(s) — détail dans le panneau Rapport")
+    return n_err
+
+
+def apply(op, scene):
+    """Contrôles puis écriture sur GLBI_ROOT, seulement si aucune erreur (spec addon §3)."""
+    if _verify(op, scene):
+        return {'CANCELLED'}
+    serialize.write_root(get_root(scene), scene)
+    op.report({'INFO'}, "glbi_config écrit sur GLBI_ROOT")
+    return {'FINISHED'}
+
+
+class GLBG_OT_check(bpy.types.Operator):
+    """Lance les contrôles et affiche le rapport"""
+    bl_idname = "glbg.check"
+    bl_label = "Vérifier"
+
+    def execute(self, context):
+        _verify(self, context.scene)
+        return {'FINISHED'}
+
+
+class GLBG_OT_fix_names(bpy.types.Operator):
+    """Remplace les caractères interdits par _ dans les noms des objets de la scène et des Actions déclarées, sans jamais créer de collision"""
+    bl_idname = "glbg.fix_names"
+    bl_label = "Corriger les noms"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    def execute(self, context):
+        scene = context.scene
+        roots = set(core.root_candidates())
+        objs = [o for o in scene.objects if o not in roots]
+        acts = [a for a in dict.fromkeys(a for _, _, a in checks._declared(scene.glbg)) if a is not None]
+        renamed, skipped = [], []
+        for ids, pool in ((objs, bpy.data.objects), (acts, bpy.data.actions)):
+            for id_block in ids:
+                old = id_block.name
+                if checks.BLENDER_NAME_RE.fullmatch(old):
+                    continue
+                new = checks.normalize_name(old)
+                if pool.get(new) is not None:
+                    skipped.append(f"{old} (→ {new} existe déjà)")
+                    continue
+                id_block.name = new
+                renamed.append(f"{old} → {new}")
+        for line in renamed:
+            print("GLBG renommé :", line)
+        for line in skipped:
+            print("GLBG non renommé :", line)
+        msg = f"{len(renamed)} renommé(s)"
+        if skipped:
+            msg += f", {len(skipped)} non renommé(s) : " + " ; ".join(skipped)
+        self.report({'WARNING'} if skipped else {'INFO'}, msg)
+        _verify(self, scene)
         return {'FINISHED'}

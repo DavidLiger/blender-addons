@@ -10,10 +10,10 @@ bl_info = {
 
 # Rechargement (F3 > Reload Scripts) : recharge aussi les sous-modules.
 _reloading = "bpy" in locals()
-from . import core, prefs, props, serialize, ops, ui
+from . import core, prefs, props, serialize, checks, ops, ui
 if _reloading:
     import importlib
-    for _m in (core, prefs, props, serialize, ops, ui):
+    for _m in (core, prefs, props, serialize, checks, ops, ui):
         importlib.reload(_m)
 
 import bpy
@@ -27,6 +27,8 @@ classes = (
     ops.GLBG_OT_action_move,
     ops.GLBG_OT_pick_asset,
     ops.GLBG_OT_apply,
+    ops.GLBG_OT_check,
+    ops.GLBG_OT_fix_names,
     ui.GLBG_PT_main,
     ui.GLBG_PT_scene,
     ui.GLBG_UL_actions,

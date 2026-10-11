@@ -114,5 +114,21 @@ class GLBG_PT_report(bpy.types.Panel):
     bl_parent_id = "GLBG_PT_main"
 
     def draw(self, context):
-        row = self.layout.row(align=True)
+        layout = self.layout
+        row = layout.row(align=True)
+        row.operator("glbg.check", icon='VIEWZOOM')
         row.operator("glbg.apply", icon='FILE_TICK')
+        layout.operator("glbg.fix_names", icon='SORTALPHA')
+        report = context.scene.glbg.report
+        if not len(report):
+            layout.label(text="Pas encore vérifié")
+            return
+        col = layout.column(align=True)
+        for item in list(report)[:_MAX_LINES]:
+            col.label(text=f"{item.code} — {item.message}", icon=_LEVEL_ICONS[item.level])
+        if len(report) > _MAX_LINES:
+            col.label(text=f"… {len(report) - _MAX_LINES} ligne(s) de plus")
+
+
+_MAX_LINES = 40
+_LEVEL_ICONS = {'ERROR': 'ERROR', 'WARNING': 'INFO', 'INFO': 'BLANK1'}
