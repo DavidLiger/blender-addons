@@ -21,3 +21,44 @@ def scene_has_root(scene):
 
 def scene_armatures(scene):
     return [o for o in scene.objects if o.type == 'ARMATURE']
+
+
+# ---------------------------------------------------------------------------
+# Actions « de l'armature » (spec addon §5) : Action dont un slot OBJECT anime
+# au moins un os existant dans l'armature. API des Actions à slots (4.4+).
+# ---------------------------------------------------------------------------
+_BONE_PATH = re.compile(r'^pose\.bones\["((?:[^"\\]|\\.)*)"\]')
+
+
+def _slot_fcurves(action, slot):
+    for layer in action.layers:
+        for strip in layer.strips:
+            if strip.type != 'KEYFRAME':
+                continue
+            channelbag = strip.channelbag(slot)
+            if channelbag is not None:
+                yield from channelbag.fcurves
+
+
+def animated_bones(action):
+    """Noms des os animés par les slots OBJECT de l'Action."""
+    names = set()
+    for slot in action.slots:
+        if slot.target_id_type != 'OBJECT':
+            continue
+        for fcurve in _slot_fcurves(action, slot):
+            match = _BONE_PATH.match(fcurve.data_path)
+            if match:
+                names.add(bpy.utils.unescape_identifier(match.group(1)))
+    return names
+
+
+def is_armature_action(action, arm):
+    if action is None or arm is None or arm.type != 'ARMATURE':
+        return False
+    return not animated_bones(action).isdisjoint(arm.data.bones.keys())
+
+
+def armature_actions(arm):
+    """Actions de l'armature, triées par nom."""
+    return sorted((a for a in bpy.data.actions if is_armature_action(a, arm)), key=lambda a: a.name)

@@ -1,3 +1,5 @@
+import os
+
 import bpy
 
 
@@ -23,3 +25,17 @@ def book_root():
     """Dossier du livre en chemin absolu, ou chaîne vide s'il n'est pas défini."""
     path = get_prefs().book_root.strip()
     return bpy.path.abspath(path) if path else ""
+
+
+def default_output_path(scene_id):
+    root = book_root()
+    sid = scene_id.strip()
+    if not root or not sid:
+        return ""
+    return os.path.join(root, "scenes", sid + ".glb")
+
+
+def output_path(settings):
+    """Fichier GLB de sortie : le champ s'il est rempli, sinon <dossier du livre>/scenes/<id>.glb."""
+    path = settings.output_path.strip()
+    return bpy.path.abspath(path) if path else default_output_path(settings.scene_id)

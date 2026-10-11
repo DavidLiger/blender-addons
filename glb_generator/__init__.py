@@ -8,27 +8,38 @@ bl_info = {
     "category": "Import-Export",
 }
 
-if "bpy" in locals():
+# Rechargement (F3 > Reload Scripts) : recharge aussi les sous-modules.
+_reloading = "bpy" in locals()
+from . import core, prefs, props, ops, ui
+if _reloading:
     import importlib
-    for _m in (core, prefs, ops, ui):
+    for _m in (core, prefs, props, ops, ui):
         importlib.reload(_m)
-else:
-    from . import core, prefs, ops, ui
 
 import bpy
 
 classes = (
+    *props.classes,
     prefs.GLBG_Preferences,
     ops.GLBG_OT_root_ensure,
+    ops.GLBG_OT_action_add,
+    ops.GLBG_OT_action_remove,
+    ops.GLBG_OT_action_move,
+    ops.GLBG_OT_pick_asset,
     ui.GLBG_PT_main,
+    ui.GLBG_PT_scene,
+    ui.GLBG_UL_actions,
+    ui.GLBG_PT_animations,
 )
 
 
 def register():
     for cls in classes:
         bpy.utils.register_class(cls)
+    bpy.types.Scene.glbg = bpy.props.PointerProperty(type=props.GLBG_SceneSettings)
 
 
 def unregister():
+    del bpy.types.Scene.glbg
     for cls in reversed(classes):
         bpy.utils.unregister_class(cls)
