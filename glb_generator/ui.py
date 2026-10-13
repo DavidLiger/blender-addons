@@ -39,16 +39,22 @@ class GLBG_PT_scene(bpy.types.Panel):
 
     def draw(self, context):
         layout = self.layout
-        s = context.scene.glbg
-        layout.prop(s, "scene_id")
-        col = layout.column(align=True)
-        col.prop(s, "name_fr")
-        col.prop(s, "name_en")
-        col.prop(s, "name_es")
-        row = layout.row(align=True)
-        row.prop(s, "loader_image")
-        op = row.operator("glbg.pick_asset", text="", icon='FILEBROWSER')
-        op.target = 'LOADER'
+        layout.prop(context.scene.glbg, "scene_id")
+        layout.label(text="Nom, image, textes, sons : atelier (scenes/<id>.edit.json)", icon='INFO')
+
+
+class GLBG_PT_camera(bpy.types.Panel):
+    bl_label = "Caméra"
+    bl_idname = "GLBG_PT_camera"
+    bl_space_type = 'VIEW_3D'
+    bl_region_type = 'UI'
+    bl_category = core.TAB
+    bl_parent_id = "GLBG_PT_main"
+
+    def draw(self, context):
+        layout = self.layout
+        layout.prop(context.scene.glbg, "camera_target")
+        layout.label(text="Sans cible : pas de module caméra. Cadrage : atelier", icon='INFO')
 
 
 class GLBG_UL_actions(bpy.types.UIList):
@@ -92,16 +98,6 @@ class GLBG_PT_animations(bpy.types.Panel):
         box.prop(item, "ident")
         box.prop(item, "obj")
         box.prop(item, "action")
-        col = box.column(align=True)
-        col.prop(item, "label_fr")
-        col.prop(item, "label_en")
-        col.prop(item, "label_es")
-        for field, target in (("icon", 'ICON'), ("sound", 'SOUND')):
-            row = box.row(align=True)
-            row.prop(item, field)
-            op = row.operator("glbg.pick_asset", text="", icon='FILEBROWSER')
-            op.target = target
-            op.index = s.actions_index
         box.prop(item, "loop")
 
 

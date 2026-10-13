@@ -9,7 +9,7 @@ class GLBG_Preferences(bpy.types.AddonPreferences):
     book_root: bpy.props.StringProperty(
         name="Dossier du livre",
         description="Dossier source du livre (celui qui contient book.json) ; "
-                    "tous les chemins d'assets sont relatifs à ce dossier",
+                    "le GLB est écrit dans scenes/<id>.glb sous ce dossier",
         subtype='DIR_PATH',
     )
 

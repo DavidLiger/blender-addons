@@ -104,59 +104,6 @@ class GLBG_OT_action_move(bpy.types.Operator):
         return {'FINISHED'}
 
 
-_PICK_FILTERS = {
-    'LOADER': "*.webp;*.png;*.jpg;*.jpeg;*.avif",
-    'ICON': "*.webp;*.png;*.jpg;*.jpeg;*.avif",
-    'SOUND': "*.mp3;*.ogg;*.opus;*.m4a;*.aac;*.wav",
-}
-
-
-class GLBG_OT_pick_asset(bpy.types.Operator):
-    """Choisit un fichier sous le dossier du livre et écrit son chemin relatif"""
-    bl_idname = "glbg.pick_asset"
-    bl_label = "Choisir un fichier"
-    bl_options = {'REGISTER', 'UNDO'}
-
-    target: bpy.props.EnumProperty(items=(
-        ('LOADER', "Image de chargement", ""), ('ICON', "Icône", ""), ('SOUND', "Son", "")),
-        options={'SKIP_SAVE'})
-    index: bpy.props.IntProperty(default=-1, options={'SKIP_SAVE'})
-    filepath: bpy.props.StringProperty(subtype='FILE_PATH', options={'SKIP_SAVE'})
-    filter_glob: bpy.props.StringProperty(options={'HIDDEN', 'SKIP_SAVE'})
-
-    def invoke(self, context, event):
-        root = prefs.book_root()
-        if not root:
-            self.report({'ERROR'}, "Dossier du livre non défini (préférences de l'addon)")
-            return {'CANCELLED'}
-        self.filter_glob = _PICK_FILTERS[self.target]
-        self.filepath = os.path.join(root, "")
-        context.window_manager.fileselect_add(self)
-        return {'RUNNING_MODAL'}
-
-    def execute(self, context):
-        root = prefs.book_root()
-        if not root:
-            self.report({'ERROR'}, "Dossier du livre non défini (préférences de l'addon)")
-            return {'CANCELLED'}
-        try:
-            rel = os.path.relpath(bpy.path.abspath(self.filepath), root)
-        except ValueError:  # autre lecteur sous Windows
-            rel = ".."
-        if rel.startswith("..") or os.path.isabs(rel):
-            self.report({'ERROR'}, "Le fichier doit être sous le dossier du livre")
-            return {'CANCELLED'}
-        rel = rel.replace(os.sep, "/")
-        s = context.scene.glbg
-        if self.target == 'LOADER':
-            s.loader_image = rel
-        else:
-            if not 0 <= self.index < len(s.actions):
-                return {'CANCELLED'}
-            setattr(s.actions[self.index], "icon" if self.target == 'ICON' else "sound", rel)
-        return {'FINISHED'}
-
-
 def get_root(scene):
     """GLBI_ROOT utilisable (unique, empty, dans la scène) ou None."""
     cands = core.root_candidates()

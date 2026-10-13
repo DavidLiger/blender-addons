@@ -12,6 +12,11 @@ def _poll_action(self, action):
     return core.is_armature_action(action, self.obj)
 
 
+def _poll_target(self, obj):
+    scene = bpy.context.scene
+    return obj.type == 'EMPTY' and obj.name != core.ROOT_NAME and scene is not None and obj.name in scene.objects
+
+
 class GLBG_ReportItem(bpy.types.PropertyGroup):
     code: bpy.props.IntProperty()
     level: bpy.props.EnumProperty(items=(
@@ -31,21 +36,14 @@ class GLBG_ActionItem(bpy.types.PropertyGroup):
     ident: bpy.props.StringProperty(name="id", description="Identifiant de l'action (lettres, chiffres, _ et -)")
     obj: bpy.props.PointerProperty(name="Objet", type=bpy.types.Object, poll=_poll_armature)
     action: bpy.props.PointerProperty(name="Clip", type=bpy.types.Action, poll=_poll_action)
-    label_fr: bpy.props.StringProperty(name="Libellé FR")
-    label_en: bpy.props.StringProperty(name="Libellé EN")
-    label_es: bpy.props.StringProperty(name="Libellé ES")
-    icon: bpy.props.StringProperty(name="Icône", description="Chemin relatif au dossier du livre (facultatif)")
-    sound: bpy.props.StringProperty(name="Son", description="Chemin relatif au dossier du livre (facultatif)")
     loop: bpy.props.BoolProperty(name="Boucle", default=False)
 
 
 class GLBG_SceneSettings(bpy.types.PropertyGroup):
     scene_id: bpy.props.StringProperty(name="id", description="Nom technique de la scène, égal au nom du fichier GLB")
-    name_fr: bpy.props.StringProperty(name="Nom FR")
-    name_en: bpy.props.StringProperty(name="Nom EN")
-    name_es: bpy.props.StringProperty(name="Nom ES")
-    loader_image: bpy.props.StringProperty(name="Image de chargement",
-                                           description="Chemin relatif au dossier du livre (facultatif)")
+    camera_target: bpy.props.PointerProperty(
+        name="Cible", type=bpy.types.Object, poll=_poll_target,
+        description="Empty visé par la caméra du lecteur (facultatif : sans cible, pas de module caméra)")
     output_path: bpy.props.StringProperty(name="Fichier GLB", subtype='FILE_PATH',
                                           description="Vide : <dossier du livre>/scenes/<id>.glb")
     idle: bpy.props.PointerProperty(type=GLBG_Idle)

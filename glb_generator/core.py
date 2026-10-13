@@ -5,7 +5,7 @@ import bpy
 
 ROOT_NAME = "GLBI_ROOT"
 TAB = "BD"
-GLBI_VERSION = 1
+GLBI_VERSION = 2  # version de la couche 3D (D-8.9)
 
 _ROOT_RE = re.compile(re.escape(ROOT_NAME) + r"(\.\d+)?")
 
