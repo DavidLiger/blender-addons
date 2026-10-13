@@ -159,6 +159,18 @@ def check_17(scene):
             for key in actions if key not in idents]
 
 
+def check_18(scene):
+    """D-8.10 : l'éclairage vient du GLB ; sans lampe exportable, le lecteur pose un éclairage neutre de secours."""
+    out = []
+    ignored = [o.name for o in scene.objects if o.type == 'LIGHT' and o.data is not None
+               and o.data.type not in core.EXPORTED_LIGHT_TYPES]
+    if ignored:
+        out.append((18, WARNING, "lampe(s) Area ou Hemi non exportée(s) par glTF : " + ", ".join(ignored)))
+    if not core.scene_lights(scene):
+        out.append((18, WARNING, "scène sans lumière (Point, Spot ou Sun) : éclairage neutre de secours du lecteur"))
+    return out
+
+
 def check_13(scene):
     arms = core.scene_armatures(scene)
     if len(arms) > 1:
@@ -201,7 +213,7 @@ _NOT_APPLICABLE = [
 def run_checks(scene):
     results = []
     for check in (check_1, check_2, check_3, check_4, check_8, check_13, check_15, check_16,
-                  check_10, check_11, check_17):
+                  check_10, check_11, check_17, check_18):
         results += check(scene)
     results += _NOT_APPLICABLE
     order = {ERROR: 0, WARNING: 1, INFO: 2}

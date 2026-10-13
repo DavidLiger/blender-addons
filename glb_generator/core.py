@@ -19,6 +19,16 @@ def scene_has_root(scene):
     return any(o.name == ROOT_NAME for o in scene.objects)
 
 
+# Types de lampes exportés en KHR_lights_punctual (Area et Hemi ne sont pas pris en charge par glTF).
+EXPORTED_LIGHT_TYPES = ('POINT', 'SPOT', 'SUN')
+
+
+def scene_lights(scene):
+    """Lampes de la scène exportées par l'exportateur glTF."""
+    return [o for o in scene.objects if o.type == 'LIGHT' and o.data is not None
+            and o.data.type in EXPORTED_LIGHT_TYPES]
+
+
 def scene_armatures(scene):
     return [o for o in scene.objects if o.type == 'ARMATURE']
 

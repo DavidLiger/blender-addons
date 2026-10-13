@@ -17,7 +17,7 @@ def read_glb_json(path):
     return json.loads(data[20:20 + chunk_len].decode("utf-8"))
 
 
-def verify_glb(path, clips, config_text):
+def verify_glb(path, clips, config_text, n_lights=0):
     """Liste des écarts entre le GLB et ce qui était attendu (vide si conforme)."""
     try:
         gltf = read_glb_json(path)
@@ -44,6 +44,9 @@ def verify_glb(path, clips, config_text):
         problems.append("clips non déclarés dans le GLB : " + ", ".join(map(str, extra)))
     if dup:
         problems.append("clips en double dans le GLB : " + ", ".join(dup))
+    lit = [n.get("name") for n in gltf.get("nodes", []) if "KHR_lights_punctual" in (n.get("extensions") or {})]
+    if len(lit) != n_lights:
+        problems.append(f"{len(lit)} lampe(s) dans le GLB (KHR_lights_punctual), {n_lights} attendue(s)")
     for scene in gltf.get("scenes", []):
         foreign = [k for k in (scene.get("extras") or {}) if not k.startswith("glbi_")]
         if foreign:

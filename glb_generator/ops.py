@@ -200,6 +200,8 @@ EXPORT_SETTINGS = dict(
     use_visible=False,
     use_renderable=False,
     use_active_collection=False,
+    export_lights=True,                              # D-8.10 : l'éclairage de la scène vient du GLB
+    export_import_convert_lighting_mode='SPEC',      # « Standard » : unités physiques glTF
 )
 
 
@@ -263,7 +265,7 @@ class GLBG_OT_export(bpy.types.Operator):
         if 'FINISHED' not in result:
             self.report({'ERROR'}, "L'exportateur glTF a échoué (voir la console)")
             return {'CANCELLED'}
-        problems = verify.verify_glb(out, clips, config_text)
+        problems = verify.verify_glb(out, clips, config_text, len(core.scene_lights(scene)))
         report = scene.glbg.report
         for message in problems:
             item = report.add()
