@@ -1,7 +1,9 @@
 # Contrôles de la spec addon §5. Chaque contrôle renvoie des tuples (code, niveau, message).
+import json
+import os
 import re
 
-from . import core, schema_check, serialize
+from . import core, prefs, schema_check, serialize
 
 ERROR, WARNING, INFO = 'ERROR', 'WARNING', 'INFO'
 
@@ -111,6 +113,52 @@ def check_16(scene):
     return out
 
 
+def _same_path(a, b):
+    return os.path.normcase(os.path.abspath(a)) == os.path.normcase(os.path.abspath(b))
+
+
+def check_15(scene):
+    """Fichier de sortie = <dossier du livre>/scenes/<scene.id>.glb, seul emplacement lu par le build (spec extras §11)."""
+    root = prefs.book_root()
+    if not root:
+        return [(15, ERROR, "dossier du livre non défini (préférences de l'addon)")]
+    if not os.path.isdir(root):
+        return [(15, ERROR, f"dossier du livre introuvable : {root}")]
+    sid = scene.glbg.scene_id.strip()
+    if not sid:
+        return []  # id manquant : contrôle 16
+    expected = prefs.default_output_path(sid)
+    actual = prefs.output_path(scene.glbg)
+    if _same_path(actual, expected):
+        return []
+    return [(15, ERROR, f"fichier de sortie « {actual} » : le build lit « {expected} » (vider le champ Fichier GLB)")]
+
+
+def check_17(scene):
+    """Lecture seule de scenes/<id>.edit.json : id d'actions édités dans l'atelier mais absents de Blender."""
+    root = prefs.book_root()
+    sid = scene.glbg.scene_id.strip()
+    if not root or not sid:
+        return []
+    rel = f"scenes/{sid}.edit.json"
+    path = os.path.join(root, "scenes", sid + ".edit.json")
+    if not os.path.isfile(path):
+        return []
+    try:
+        with open(path, encoding="utf-8-sig") as f:
+            data = json.load(f)
+    except (OSError, ValueError) as exc:
+        return [(17, WARNING, f"{rel} illisible ({exc}) : id orphelins non vérifiés")]
+    actions = data.get("modules") if isinstance(data, dict) else None
+    actions = actions.get("animations") if isinstance(actions, dict) else None
+    actions = actions.get("actions") if isinstance(actions, dict) else None
+    if not isinstance(actions, dict):
+        return []
+    idents = {item.ident.strip() for item in scene.glbg.actions}
+    return [(17, WARNING, f"{rel} : action « {key} » absente de Blender (à rattacher ou supprimer dans l'atelier)")
+            for key in actions if key not in idents]
+
+
 def check_13(scene):
     arms = core.scene_armatures(scene)
     if len(arms) > 1:
@@ -152,7 +200,8 @@ _NOT_APPLICABLE = [
 
 def run_checks(scene):
     results = []
-    for check in (check_1, check_2, check_3, check_4, check_8, check_13, check_16, check_10, check_11):
+    for check in (check_1, check_2, check_3, check_4, check_8, check_13, check_15, check_16,
+                  check_10, check_11, check_17):
         results += check(scene)
     results += _NOT_APPLICABLE
     order = {ERROR: 0, WARNING: 1, INFO: 2}
