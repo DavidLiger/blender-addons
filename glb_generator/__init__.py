@@ -10,10 +10,10 @@ bl_info = {
 
 # Rechargement (F3 > Reload Scripts) : recharge aussi les sous-modules.
 _reloading = "bpy" in locals()
-from . import core, prefs, props, serialize, checks, verify, gltf_hook, ops, ui
+from . import core, prefs, props, serialize, schema_check, checks, verify, gltf_hook, ops, ui
 if _reloading:
     import importlib
-    for _m in (core, prefs, props, serialize, checks, verify, gltf_hook, ops, ui):
+    for _m in (core, prefs, props, serialize, schema_check, checks, verify, gltf_hook, ops, ui):
         importlib.reload(_m)
 
 import bpy

@@ -1,13 +1,12 @@
 # Contrôles de la spec addon §5. Chaque contrôle renvoie des tuples (code, niveau, message).
 import re
 
-from . import core
+from . import core, schema_check, serialize
 
 ERROR, WARNING, INFO = 'ERROR', 'WARNING', 'INFO'
 
-# Règles du schéma Zod (src/schema/glbi.ts, commit 028623f)
+# Règle de nommage Blender de spec-extras-blender.md §3 (contrôle 2, sur tous les objets de la scène).
 BLENDER_NAME_RE = re.compile(r"[A-Za-z0-9_]+")
-ID_RE = re.compile(r"[a-z0-9][a-z0-9_-]*", re.IGNORECASE)
 
 
 def normalize_name(name):
@@ -89,21 +88,26 @@ def check_4(scene):
 
 
 def check_8(scene):
-    s = scene.glbg
-    out = []
-    sid = s.scene_id.strip()
-    if not ID_RE.fullmatch(sid):
-        out.append((8, ERROR, f"id de scène « {sid} » : lettres, chiffres, _ et -, sans commencer par _ ou -"))
-    if not len(s.actions):
-        out.append((8, ERROR, "aucune action : le schéma en exige au moins une"))
-    seen = set()
-    for i, it in enumerate(s.actions):
+    """Identifiants d'action en double (règle du Zod perdue par le JSON Schema) ; la forme est vérifiée par le 16."""
+    out, seen = [], set()
+    for i, it in enumerate(scene.glbg.actions):
         ident = it.ident.strip()
-        if not ID_RE.fullmatch(ident):
-            out.append((8, ERROR, f"action {i + 1} : id « {ident} » invalide (lettres, chiffres, _ et -)"))
-        elif ident in seen:
+        if ident and ident in seen:
             out.append((8, ERROR, f"action {i + 1} : id « {ident} » en double"))
         seen.add(ident)
+    return out
+
+
+def check_16(scene):
+    """Couche 3D validée par le JSON Schema exporté de GLBInterpreter (spec-atelier-glbi.md §6)."""
+    try:
+        schema = schema_check.load()
+    except schema_check.SchemaError as exc:
+        return [(16, ERROR, f"JSON Schema : {exc} ; dans GLBInterpreter : "
+                            "npm run schema:export -- --addon <dossier glb_generator>")]
+    out = [(16, INFO, f"JSON Schema : {schema.get('$id', '(sans $id)')}")]
+    for where, message in schema_check.validate(serialize.build_config(scene), schema):
+        out.append((16, ERROR, f"couche 3D {where} : {message}"))
     return out
 
 
@@ -148,7 +152,7 @@ _NOT_APPLICABLE = [
 
 def run_checks(scene):
     results = []
-    for check in (check_1, check_2, check_3, check_4, check_8, check_13, check_10, check_11):
+    for check in (check_1, check_2, check_3, check_4, check_8, check_13, check_16, check_10, check_11):
         results += check(scene)
     results += _NOT_APPLICABLE
     order = {ERROR: 0, WARNING: 1, INFO: 2}

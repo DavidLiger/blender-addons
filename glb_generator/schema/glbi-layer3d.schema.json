@@ -1,0 +1,131 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:glbinterpreter:schema:layer3d/2",
+  "$comment": "généré par npm run schema:export (src/schema/glbi.ts, layer3dSchema), ne pas éditer",
+  "type": "object",
+  "properties": {
+    "version": {
+      "type": "number",
+      "const": 2
+    },
+    "scene": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "additionalProperties": false
+    },
+    "modules": {
+      "type": "object",
+      "properties": {
+        "camera": {
+          "type": "object",
+          "properties": {
+            "target": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_]+$"
+            }
+          },
+          "required": [
+            "target"
+          ],
+          "additionalProperties": false
+        },
+        "animations": {
+          "type": "object",
+          "properties": {
+            "mode": {
+              "type": "string",
+              "const": "buttons"
+            },
+            "idle": {
+              "type": "object",
+              "properties": {
+                "object": {
+                  "type": "string",
+                  "pattern": "^[A-Za-z0-9_]+$"
+                },
+                "clip": {
+                  "type": "string",
+                  "pattern": "^[A-Za-z0-9_]+$"
+                },
+                "loop": {
+                  "default": true,
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "object",
+                "clip"
+              ],
+              "additionalProperties": false
+            },
+            "actions": {
+              "minItems": 1,
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$"
+                  },
+                  "object": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9_]+$"
+                  },
+                  "type": {
+                    "type": "string",
+                    "enum": [
+                      "armature",
+                      "mesh"
+                    ]
+                  },
+                  "clip": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9_]+$"
+                  },
+                  "trigger": {
+                    "type": "string",
+                    "const": "button"
+                  },
+                  "loop": {
+                    "default": false,
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "id",
+                  "object",
+                  "type",
+                  "clip",
+                  "trigger"
+                ],
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": [
+            "mode",
+            "idle",
+            "actions"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "version",
+    "scene",
+    "modules"
+  ],
+  "additionalProperties": false
+}
