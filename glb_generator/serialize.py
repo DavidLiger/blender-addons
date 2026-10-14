@@ -42,6 +42,15 @@ def declared_clips(scene):
     return list(dict.fromkeys(names))
 
 
+def declared_armature_actions(scene):
+    """[(armature, [Actions déclarées qui l'animent])] pour les armatures déclarées (idle et actions)."""
+    s = scene.glbg
+    actions = [a for a in dict.fromkeys([s.idle.action, *(i.action for i in s.actions)]) if a is not None]
+    arms = [o for o in dict.fromkeys([s.idle.obj, *(i.obj for i in s.actions)])
+            if o is not None and o.type == 'ARMATURE']
+    return [(arm, [a for a in actions if core.is_armature_action(a, arm)]) for arm in arms]
+
+
 def write_root(root, scene):
     """Écrit glbi_version (entier 2) et glbi_config (chaîne JSON) ; renvoie la chaîne écrite."""
     text = to_json(build_config(scene))

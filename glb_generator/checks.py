@@ -3,7 +3,7 @@ import json
 import os
 import re
 
-from . import core, prefs, schema_check, serialize
+from . import core, posefix, prefs, schema_check, serialize
 
 ERROR, WARNING, INFO = 'ERROR', 'WARNING', 'INFO'
 
@@ -171,6 +171,21 @@ def check_18(scene):
     return out
 
 
+def check_19(scene):
+    """Pose non enregistrée dans les Actions (posefix). Les canaux statiques sont enregistrés automatiquement à
+    l'export (information après export) ; un canal hors repos animé par une autre Action mais pas par l'Action
+    exportée sort au repos : avertissement."""
+    out = []
+    for arm, acts in serialize.declared_armature_actions(scene):
+        for act, (_static, ambiguous) in posefix.analyse(arm, acts).items():
+            if ambiguous:
+                bones = sorted({path.split('"')[1] for path, _i in ambiguous})
+                out.append((19, WARNING, f"Action « {act.name} » : {len(ambiguous)} valeur(s) de pose hors repos animée(s) "
+                                         f"par une autre Action mais pas par celle-ci, exportée(s) au repos : "
+                                         + ", ".join(bones[:6]) + (" …" if len(bones) > 6 else "")))
+    return out
+
+
 def check_13(scene):
     arms = core.scene_armatures(scene)
     if len(arms) > 1:
@@ -213,7 +228,7 @@ _NOT_APPLICABLE = [
 def run_checks(scene):
     results = []
     for check in (check_1, check_2, check_3, check_4, check_8, check_13, check_15, check_16,
-                  check_10, check_11, check_17, check_18):
+                  check_10, check_11, check_17, check_18, check_19):
         results += check(scene)
     results += _NOT_APPLICABLE
     order = {ERROR: 0, WARNING: 1, INFO: 2}

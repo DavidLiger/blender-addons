@@ -2,7 +2,7 @@ import os
 
 import bpy
 
-from . import checks, core, gltf_hook, prefs, serialize, verify
+from . import checks, core, gltf_hook, posefix, prefs, serialize, verify
 
 
 class GLBG_OT_root_ensure(bpy.types.Operator):
@@ -256,17 +256,30 @@ class GLBG_OT_export(bpy.types.Operator):
         clips = serialize.declared_clips(scene)
         os.makedirs(os.path.dirname(out), exist_ok=True)
         snapshot = _snapshot_poses(scene)
+        temp_keys, pose_summary = [], {}
         gltf_hook.set_clip_filter(clips)
         try:
+            # Pose non enregistrée dans les Actions : F-curves temporaires (posefix), retirées dans le finally.
+            for arm, acts in serialize.declared_armature_actions(scene):
+                created, summary = posefix.add_temporary_keys(arm, acts)
+                temp_keys += created
+                pose_summary.update(summary)
             result = bpy.ops.export_scene.gltf(filepath=out, **EXPORT_SETTINGS)
         finally:
             gltf_hook.set_clip_filter(None)
+            posefix.remove_temporary_keys(temp_keys)
             _restore_poses(scene, snapshot)
         if 'FINISHED' not in result:
             self.report({'ERROR'}, "L'exportateur glTF a échoué (voir la console)")
             return {'CANCELLED'}
         problems = verify.verify_glb(out, clips, config_text, len(core.scene_lights(scene)))
         report = scene.glbg.report
+        for name, (static, _ambiguous) in pose_summary.items():
+            if static:
+                item = report.add()
+                item.code, item.level = 19, 'INFO'
+                item.message = (f"Action « {name} » : {len(static)} valeur(s) de pose non clé(s) enregistrée(s) "
+                                f"pour l'export ({posefix.describe(static)})")
         for message in problems:
             item = report.add()
             item.code, item.level, item.message = 0, 'ERROR', "GLB exporté : " + message
