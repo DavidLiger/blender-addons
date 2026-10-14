@@ -59,8 +59,8 @@ def pre_export_callback(export_settings):
         problems.append("Animation > Mode doit être Actions (animations activées)")
     if not export_settings.get('gltf_lights'):
         problems.append("Include > Data > Punctual Lights doit être coché")
-    if export_settings.get('gltf_lighting_mode') != 'SPEC':
-        problems.append("Data > Lighting > Lighting Mode doit être Standard")
+    if export_settings.get('gltf_lighting_mode') != 'COMPAT':
+        problems.append("Data > Lighting > Lighting Mode doit être Unitless")
     if not problems:
         return
     frame = _state.get("frame")

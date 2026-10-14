@@ -201,7 +201,7 @@ EXPORT_SETTINGS = dict(
     use_renderable=False,
     use_active_collection=False,
     export_lights=True,                              # D-8.10 : l'éclairage de la scène vient du GLB
-    export_import_convert_lighting_mode='SPEC',      # « Standard » : unités physiques glTF
+    export_import_convert_lighting_mode='COMPAT',    # « Unitless » : force Blender conservée (D-8.10 amendée)
 )
 
 
