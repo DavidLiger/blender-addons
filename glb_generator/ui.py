@@ -22,7 +22,17 @@ class GLBG_PT_main(bpy.types.Panel):
         else:
             row.label(text=f"GLBI_ROOT à réparer ({len(cands)})", icon='ERROR')
         row.operator("glbg.root_ensure", text="", icon='EMPTY_AXIS')
-        layout.prop(prefs.get_prefs(), "book_root")
+        root, origin = prefs.book_location()
+        box = layout.box()
+        if root:
+            box.label(text="Livre : " + root, icon='FILE_FOLDER')
+            box.label(text="Origine : " + prefs.ORIGIN_LABELS[origin])
+        else:
+            box.label(text="Dossier du livre non trouvé", icon='ERROR')
+            box.label(text=prefs.NOT_FOUND_HINT[0].upper() + prefs.NOT_FOUND_HINT[1:])
+        col = box.column()
+        col.active = origin != prefs.ORIGIN_BLEND  # préférence sans effet quand le dossier est déduit du .blend
+        col.prop(prefs.get_prefs(), "book_root", text="Préférence (repli)")
         s = context.scene.glbg
         layout.prop(s, "output_path")
         out = prefs.output_path(s)

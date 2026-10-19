@@ -248,7 +248,8 @@ class GLBG_OT_export(bpy.types.Operator):
         scene = context.scene
         out = prefs.output_path(scene.glbg)
         if not out:
-            self.report({'ERROR'}, "Fichier GLB non défini : dossier du livre ou id de scène manquant")
+            reason = "id de scène manquant" if prefs.book_root() else "dossier du livre non trouvé (" + prefs.NOT_FOUND_HINT + ")"
+            self.report({'ERROR'}, "Fichier GLB non défini : " + reason)
             return {'CANCELLED'}
         if apply(self, scene) != {'FINISHED'}:
             return {'CANCELLED'}

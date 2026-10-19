@@ -3,6 +3,8 @@ import json
 import os
 import re
 
+import bpy
+
 from . import core, posefix, prefs, schema_check, serialize
 
 ERROR, WARNING, INFO = 'ERROR', 'WARNING', 'INFO'
@@ -121,7 +123,7 @@ def check_15(scene):
     """Fichier de sortie = <dossier du livre>/scenes/<scene.id>.glb, seul emplacement lu par le build (spec extras §11)."""
     root = prefs.book_root()
     if not root:
-        return [(15, ERROR, "dossier du livre non défini (préférences de l'addon)")]
+        return [(15, ERROR, "dossier du livre non trouvé ni défini : " + prefs.NOT_FOUND_HINT)]
     if not os.path.isdir(root):
         return [(15, ERROR, f"dossier du livre introuvable : {root}")]
     sid = scene.glbg.scene_id.strip()
@@ -186,6 +188,20 @@ def check_19(scene):
     return out
 
 
+def check_20(scene):
+    """DP-2 : le .blend de la scène <id> est blender/<id>.blend (le studio l'ouvre par ce nom). Seulement pour un
+    .blend rangé directement dans <livre>/blender/ (ni sous-dossier, ni repli sur la préférence)."""
+    sid = scene.glbg.scene_id.strip()
+    if not sid or not prefs.blend_in_book_blender_dir():
+        return []  # id manquant : contrôle 16
+    name = os.path.basename(bpy.data.filepath)
+    stem = os.path.splitext(name)[0]
+    if stem == sid:
+        return []
+    return [(20, WARNING, f"fichier « {name} » : le .blend de la scène « {sid} » doit s'appeler "
+                          f"blender/{sid}.blend (Enregistrer sous, Remap Relative coché)")]
+
+
 def check_13(scene):
     arms = core.scene_armatures(scene)
     if len(arms) > 1:
@@ -228,7 +244,7 @@ _NOT_APPLICABLE = [
 def run_checks(scene):
     results = []
     for check in (check_1, check_2, check_3, check_4, check_8, check_13, check_15, check_16,
-                  check_10, check_11, check_17, check_18, check_19):
+                  check_10, check_11, check_17, check_18, check_19, check_20):
         results += check(scene)
     results += _NOT_APPLICABLE
     order = {ERROR: 0, WARNING: 1, INFO: 2}
