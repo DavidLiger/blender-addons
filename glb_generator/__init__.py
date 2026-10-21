@@ -1,7 +1,7 @@
 bl_info = {
     "name": "GLB Generator",
     "author": "David",
-    "version": (0, 1, 0),
+    "version": (0, 3, 0),
     "blender": (4, 5, 0),
     "location": "View3D > Sidebar (N) > BD > GLBI — GLB Generator",
     "description": "Configuration GLBInterpreter d'une scène de livre (GLBI_ROOT) et export GLB",

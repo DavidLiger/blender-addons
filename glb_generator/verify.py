@@ -17,8 +17,23 @@ def read_glb_json(path):
     return json.loads(data[20:20 + chunk_len].decode("utf-8"))
 
 
-def verify_glb(path, clips, config_text, n_lights=0):
-    """Liste des écarts entre le GLB et ce qui était attendu (vide si conforme)."""
+def _animated_objects(gltf, animation):
+    """Noms des nœuds animés par le clip et de tous leurs ancêtres (un os animé compte pour son armature)."""
+    nodes = gltf.get("nodes", [])
+    parent = {c: i for i, n in enumerate(nodes) for c in n.get("children", [])}
+    names = set()
+    for ch in animation.get("channels", []):
+        i = ch.get("target", {}).get("node")
+        while i is not None:
+            names.add(nodes[i].get("name"))
+            i = parent.get(i)
+    return names
+
+
+def verify_glb(path, clips, config_text, n_lights=0, clip_objects=None):
+    """Liste des écarts entre le GLB et ce qui était attendu (vide si conforme).
+    clip_objects (pistes NLA) : {clip: [armatures qui portent une piste de ce nom]}, chacune doit être animée par le clip
+    commun (regroupement par nom de piste)."""
     try:
         gltf = read_glb_json(path)
     except (OSError, ValueError, struct.error) as exc:
@@ -31,7 +46,7 @@ def verify_glb(path, clips, config_text, n_lights=0):
         extras = roots[0].get("extras") or {}
         version = extras.get("glbi_version")
         if type(version) is not int or version != core.GLBI_VERSION:
-            problems.append(f"glbi_version vaut {json.dumps(version)} (entier 1 attendu)")
+            problems.append(f"glbi_version vaut {json.dumps(version)} (entier {core.GLBI_VERSION} attendu)")
         if extras.get("glbi_config") != config_text:
             problems.append("glbi_config du GLB différent de celui écrit sur GLBI_ROOT")
     names = [a.get("name") for a in gltf.get("animations", [])]
@@ -44,6 +59,12 @@ def verify_glb(path, clips, config_text, n_lights=0):
         problems.append("clips non déclarés dans le GLB : " + ", ".join(map(str, extra)))
     if dup:
         problems.append("clips en double dans le GLB : " + ", ".join(dup))
+    for anim in gltf.get("animations", []):
+        expected = (clip_objects or {}).get(anim.get("name"))
+        if expected:
+            missing_objs = sorted(set(expected) - _animated_objects(gltf, anim))
+            if missing_objs:
+                problems.append(f"clip « {anim.get('name')} » : non commun, sans " + ", ".join(missing_objs))
     lit = [n.get("name") for n in gltf.get("nodes", []) if "KHR_lights_punctual" in (n.get("extensions") or {})]
     if len(lit) != n_lights:
         problems.append(f"{len(lit)} lampe(s) dans le GLB (KHR_lights_punctual), {n_lights} attendue(s)")

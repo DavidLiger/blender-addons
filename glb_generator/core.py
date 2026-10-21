@@ -72,3 +72,54 @@ def is_armature_action(action, arm):
 def armature_actions(arm):
     """Actions de l'armature, triées par nom."""
     return sorted((a for a in bpy.data.actions if is_armature_action(a, arm)), key=lambda a: a.name)
+
+
+# ---------------------------------------------------------------------------
+# Source des clips (v0.3) : Actions (une armature, mode Actions de l'exportateur) ou pistes NLA
+# (plusieurs armatures : un clip glTF commun par nom de piste, mode NLA Tracks de l'exportateur, test de tête
+# du 21/10 : en mode Actions, une piste de plusieurs bandes est ignorée et la position des bandes est perdue).
+# ---------------------------------------------------------------------------
+SOURCE_ACTIONS = 'ACTIONS'
+SOURCE_NLA = 'NLA'
+# Noms de piste que l'exportateur ne regroupe jamais en clip commun (io_scene_gltf2, tracks.py).
+DEFAULT_TRACK_PREFIXES = ("NlaTrack", "[Action Stash]")
+
+
+def is_default_track_name(name):
+    return name.startswith(DEFAULT_TRACK_PREFIXES)
+
+
+def nla_tracks(obj):
+    ad = obj.animation_data if obj is not None else None
+    return list(ad.nla_tracks) if ad is not None else []
+
+
+def tracks_named(obj, name):
+    return [t for t in nla_tracks(obj) if t.name == name]
+
+
+def scene_track_objects(scene):
+    """Objets de la scène qui portent au moins une piste NLA (armatures, empties…)."""
+    return [o for o in scene.objects if nla_tracks(o)]
+
+
+def scene_track_names(scene):
+    """Noms des pistes NLA des objets de la scène, triés (menu des clips)."""
+    return sorted({t.name for o in scene_track_objects(scene) for t in nla_tracks(o)})
+
+
+def track_range(track):
+    """(première image, dernière image) d'une piste, comme l'exportateur (première et dernière bande)."""
+    strips = list(track.strips)
+    if not strips:
+        return None
+    return int(strips[0].frame_start), int(strips[-1].frame_end)
+
+
+def track_actions(track):
+    return [s.action for s in track.strips if s.action is not None]
+
+
+def scene_fps(scene):
+    """Diviseur des instants de l'exportateur glTF 4.5 : t = image / (fps × fps_base) (test de tête du 21/10)."""
+    return scene.render.fps * scene.render.fps_base

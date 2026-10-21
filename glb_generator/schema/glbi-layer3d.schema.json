@@ -98,6 +98,34 @@
                   "loop": {
                     "default": false,
                     "type": "boolean"
+                  },
+                  "transition": {
+                    "type": "string",
+                    "enum": [
+                      "fade",
+                      "cut"
+                    ]
+                  },
+                  "events": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "type": "string",
+                          "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$"
+                        },
+                        "time": {
+                          "type": "number",
+                          "minimum": 0
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "time"
+                      ],
+                      "additionalProperties": false
+                    }
                   }
                 },
                 "required": [

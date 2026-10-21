@@ -67,11 +67,19 @@ class GLBG_PT_camera(bpy.types.Panel):
         layout.label(text="Sans cible : pas de module caméra. Cadrage : atelier", icon='INFO')
 
 
+def _clip_prop(scene):
+    """Champ du clip : pointeur d'Action, ou nom de piste NLA (v0.3)."""
+    return "track" if scene.glbg.clip_source == core.SOURCE_NLA else "action"
+
+
 class GLBG_UL_actions(bpy.types.UIList):
     def draw_item(self, context, layout, data, item, icon, active_data, active_propname, index):
         row = layout.row()
         row.label(text=item.ident or "(sans id)", icon='PLAY')
-        row.label(text=item.action.name if item.action else "(pas de clip)")
+        if _clip_prop(context.scene) == "track":
+            row.label(text=item.track or "(pas de piste)", icon='NLA')
+        else:
+            row.label(text=item.action.name if item.action else "(pas de clip)")
 
 
 class GLBG_PT_animations(bpy.types.Panel):
@@ -85,11 +93,16 @@ class GLBG_PT_animations(bpy.types.Panel):
     def draw(self, context):
         layout = self.layout
         s = context.scene.glbg
+        clip = _clip_prop(context.scene)
+
+        layout.prop(s, "clip_source", expand=True)
+        if clip == "track":
+            layout.label(text="Un clip = un nom de piste, commun à toutes les armatures", icon='INFO')
 
         box = layout.box()
         box.label(text="Repos (idle, en boucle)")
         box.prop(s.idle, "obj")
-        box.prop(s.idle, "action")
+        box.prop(s.idle, clip)
 
         layout.label(text="Actions (boutons)")
         row = layout.row()
@@ -106,8 +119,8 @@ class GLBG_PT_animations(bpy.types.Panel):
         item = s.actions[s.actions_index]
         box = layout.box()
         box.prop(item, "ident")
-        box.prop(item, "obj")
-        box.prop(item, "action")
+        box.prop(item, "obj", text="Acteur" if clip == "track" else "Objet")
+        box.prop(item, clip)
         box.prop(item, "loop")
 
 

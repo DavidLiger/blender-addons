@@ -52,7 +52,8 @@ def book_location():
         return found, ORIGIN_BLEND
     path = get_prefs().book_root.strip()
     if path:
-        return bpy.path.abspath(path), ORIGIN_PREF
+        # Chemin relatif (//…) résolu par rapport au .blend puis normalisé (« //../livre » → « …/livre »).
+        return os.path.normpath(bpy.path.abspath(path)), ORIGIN_PREF
     return "", ""
 
 

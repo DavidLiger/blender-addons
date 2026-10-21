@@ -163,8 +163,24 @@ class GLBG_OT_fix_names(bpy.types.Operator):
         scene = context.scene
         roots = set(core.root_candidates())
         objs = [o for o in scene.objects if o not in roots]
-        acts = [a for a in dict.fromkeys(a for _, _, a in checks._declared(scene.glbg)) if a is not None]
+        acts = checks._declared_actions(scene)
         renamed, skipped = [], []
+        # Pistes NLA déclarées : renommées sur tous les objets de la scène, et dans les champs Piste de l'addon.
+        items = [it for _, it in checks._declared_items(scene.glbg)]
+        for old in checks._declared_tracks(scene):
+            if checks.BLENDER_NAME_RE.fullmatch(old) or core.is_default_track_name(old):
+                continue
+            new = checks.normalize_name(old)
+            if new in core.scene_track_names(scene):
+                skipped.append(f"piste {old} (→ {new} existe déjà)")
+                continue
+            for obj in core.scene_track_objects(scene):
+                for track in core.tracks_named(obj, old):
+                    track.name = new
+            for it in items:
+                if it.track.strip() == old:
+                    it.track = new
+            renamed.append(f"piste {old} → {new}")
         for ids, pool in ((objs, bpy.data.objects), (acts, bpy.data.actions)):
             for id_block in ids:
                 old = id_block.name
@@ -188,13 +204,16 @@ class GLBG_OT_fix_names(bpy.types.Operator):
         return {'FINISHED'}
 
 
-# Réglages imposés quand l'addon exporte lui-même (spec addon §6).
+# Réglages imposés quand l'addon exporte lui-même (spec addon §6). Mode d'animation selon la source des clips :
+# Actions (une armature) ou NLA Tracks (pistes NLA, clips communs regroupés par nom de piste ; v0.3).
 EXPORT_SETTINGS = dict(
     export_format='GLB',
     export_extras=True,
     export_animations=True,
-    export_animation_mode='ACTIONS',
     export_anim_single_armature=True,
+    export_anim_slide_to_zero=False,   # base de temps des événements : t = image / (fps × fps_base)
+    export_frame_range=False,
+    export_frame_step=1,
     use_active_scene=True,
     use_selection=False,
     use_visible=False,
@@ -239,6 +258,22 @@ def _restore_poses(scene, snapshot):
     bpy.context.view_layer.update()
 
 
+ANIMATION_MODES = {core.SOURCE_ACTIONS: 'ACTIONS', core.SOURCE_NLA: 'NLA_TRACKS'}
+
+
+def export_settings(scene):
+    return dict(EXPORT_SETTINGS, export_animation_mode=ANIMATION_MODES[scene.glbg.clip_source])
+
+
+def expected_clip_objects(scene):
+    """Pistes NLA : {clip: [armatures qui portent une piste de ce nom]}, pour la relecture ; None en source Actions.
+    Les autres objets (empty cible) sont exclus : l'exportateur retire l'animation d'un objet immobile."""
+    if not serialize.is_nla(scene):
+        return None
+    return {clip: [o.name for o in serialize.clip_objects(scene, clip) if o.type == 'ARMATURE']
+            for clip in serialize.declared_clips(scene)}
+
+
 class GLBG_OT_export(bpy.types.Operator):
     """Contrôles, écriture de glbi_config, puis export GLB aux réglages imposés"""
     bl_idname = "glbg.export"
@@ -265,7 +300,7 @@ class GLBG_OT_export(bpy.types.Operator):
                 created, summary = posefix.add_temporary_keys(arm, acts)
                 temp_keys += created
                 pose_summary.update(summary)
-            result = bpy.ops.export_scene.gltf(filepath=out, **EXPORT_SETTINGS)
+            result = bpy.ops.export_scene.gltf(filepath=out, **export_settings(scene))
         finally:
             gltf_hook.set_clip_filter(None)
             posefix.remove_temporary_keys(temp_keys)
@@ -273,7 +308,8 @@ class GLBG_OT_export(bpy.types.Operator):
         if 'FINISHED' not in result:
             self.report({'ERROR'}, "L'exportateur glTF a échoué (voir la console)")
             return {'CANCELLED'}
-        problems = verify.verify_glb(out, clips, config_text, len(core.scene_lights(scene)))
+        problems = verify.verify_glb(out, clips, config_text, len(core.scene_lights(scene)),
+                                     expected_clip_objects(scene))
         report = scene.glbg.report
         for name, (static, _ambiguous) in pose_summary.items():
             if static:

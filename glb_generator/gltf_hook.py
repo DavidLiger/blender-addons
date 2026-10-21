@@ -29,8 +29,15 @@ class GLBG_GltfExtension:
             kept = {k: v for k, v in extras.items() if k.startswith("glbi_")}
             gltf2_scene.extras = kept or None
 
+    def gather_tracks_hook(self, blender_object, tracks_data, export_settings):
+        # Source « pistes NLA » (mode NLA Tracks) : filtre sur les noms de piste, exactement idle + actions[].clip.
+        allowed = _state["clips"]
+        if allowed is None:
+            return
+        tracks_data.tracks = [t for t in tracks_data.tracks if t.name in allowed]
+
     def gather_actions_hook(self, blender_object, actions, export_settings):
-        # Filtre d'Actions : exactement idle + actions[].clip quand l'addon exporte.
+        # Source « Actions » (mode Actions) : filtre d'Actions, exactement idle + actions[].clip quand l'addon exporte.
         allowed = _state["clips"]
         if allowed is None:
             return
@@ -50,13 +57,16 @@ def pre_export_callback(export_settings):
         scenes = [bpy.context.scene]
     else:
         scenes = list(bpy.data.scenes)
-    if not any(core.scene_has_root(s) for s in scenes):
+    glbi_scenes = [s for s in scenes if core.scene_has_root(s)]
+    if not glbi_scenes:
         return
     problems = []
     if not export_settings.get('gltf_extras'):
         problems.append("Include > Custom Properties doit être coché")
-    if export_settings.get('gltf_animation_mode') != 'ACTIONS':
-        problems.append("Animation > Mode doit être Actions (animations activées)")
+    nla = any(s.glbg.clip_source == core.SOURCE_NLA for s in glbi_scenes)
+    expected, label = ('NLA_TRACKS', "NLA Tracks (clips : pistes NLA)") if nla else ('ACTIONS', "Actions")
+    if export_settings.get('gltf_animation_mode') != expected:
+        problems.append(f"Animation > Mode doit être {label} (animations activées)")
     if not export_settings.get('gltf_lights'):
         problems.append("Include > Data > Punctual Lights doit être coché")
     if export_settings.get('gltf_lighting_mode') != 'COMPAT':
