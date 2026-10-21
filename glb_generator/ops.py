@@ -224,40 +224,6 @@ EXPORT_SETTINGS = dict(
 )
 
 
-_POSE_CHANNELS = ("location", "rotation_quaternion", "rotation_euler", "rotation_axis_angle", "scale")
-
-
-def _snapshot_poses(scene):
-    """Pose de chaque armature de la scène (canaux bruts de chaque os) et image courante."""
-    poses = []
-    for ob in core.scene_armatures(scene):
-        bones = {pb.name: (pb.rotation_mode, tuple(tuple(getattr(pb, c)) for c in _POSE_CHANNELS))
-                 for pb in ob.pose.bones}
-        poses.append((ob, bones))
-    return scene.frame_current, poses
-
-
-def _restore_poses(scene, snapshot):
-    """L'exportateur glTF remet à zéro les os entre deux Actions (reset_bone_matrix) et ne
-    restaure que l'Action active : les os qu'elle n'anime pas restent à la pose de repos.
-    On réévalue l'image d'origine, puis on remet chaque os tel qu'il était avant l'export."""
-    frame, poses = snapshot
-    scene.frame_set(frame)
-    for ob, bones in poses:
-        try:
-            pose_bones = ob.pose.bones
-        except ReferenceError:
-            continue
-        for pb in pose_bones:
-            saved = bones.get(pb.name)
-            if saved is None:
-                continue
-            pb.rotation_mode = saved[0]
-            for channel, value in zip(_POSE_CHANNELS, saved[1]):
-                setattr(pb, channel, value)
-    bpy.context.view_layer.update()
-
-
 ANIMATION_MODES = {core.SOURCE_ACTIONS: 'ACTIONS', core.SOURCE_NLA: 'NLA_TRACKS'}
 
 
@@ -291,7 +257,7 @@ class GLBG_OT_export(bpy.types.Operator):
         config_text = get_root(scene)["glbi_config"]
         clips = serialize.declared_clips(scene)
         os.makedirs(os.path.dirname(out), exist_ok=True)
-        snapshot = _snapshot_poses(scene)
+        snapshot = core.snapshot_poses(scene)
         temp_keys, pose_summary = [], {}
         gltf_hook.set_clip_filter(clips)
         try:
@@ -304,7 +270,7 @@ class GLBG_OT_export(bpy.types.Operator):
         finally:
             gltf_hook.set_clip_filter(None)
             posefix.remove_temporary_keys(temp_keys)
-            _restore_poses(scene, snapshot)
+            core.restore_poses(scene, snapshot)
         if 'FINISHED' not in result:
             self.report({'ERROR'}, "L'exportateur glTF a échoué (voir la console)")
             return {'CANCELLED'}

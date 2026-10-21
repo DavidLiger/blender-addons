@@ -19,17 +19,62 @@ def clip_of(scene, item):
     return item.track.strip() if is_nla(scene) else _name(item.action)
 
 
-def build_config(scene):
-    """Couche 3D, clés dans l'ordre du contrat ; sans cible caméra, pas de module caméra."""
-    s = scene.glbg
-    actions = [{
+MARKER_SEP = ":"
+
+
+def marker_events(scene):
+    """Marqueurs de la timeline de la scène nommés <id d'action>:<id d'événement> (DP-6).
+    Renvoie ({id d'action déclarée: [(id d'événement, instant en s, image, nom du marqueur)] triés par instant},
+             [(nom du marqueur, raison)] des marqueurs ignorés).
+    Instant = image / (fps × fps_base), la base de temps des clés écrites par l'exportateur (test de tête du 21/10),
+    arrondi à la milliseconde."""
+    fps = core.scene_fps(scene)
+    declared = {item.ident.strip() for item in scene.glbg.actions if item.ident.strip()}
+    events, ignored = {}, []
+    for m in sorted(scene.timeline_markers, key=lambda m: (m.frame, m.name)):
+        action_id, sep, event_id = m.name.partition(MARKER_SEP)
+        action_id, event_id = action_id.strip(), event_id.strip()
+        if not sep:
+            ignored.append((m.name, f"sans « {MARKER_SEP} » (nom attendu <action>{MARKER_SEP}<événement>)"))
+        elif action_id not in declared:
+            reason = ("pas d'événements sur idle" if action_id == "idle"
+                      else f"action « {action_id} » non déclarée")
+            ignored.append((m.name, reason))
+        else:
+            events.setdefault(action_id, []).append((event_id, round(m.frame / fps, 3), m.frame, m.name))
+    for evs in events.values():
+        evs.sort(key=lambda e: (e[1], e[0]))
+    return events, ignored
+
+
+def _action_entry(scene, item, events):
+    entry = {
         "id": item.ident.strip(),
         "object": _name(item.obj),
         "type": "armature",
         "clip": clip_of(scene, item),
         "trigger": "button",
         "loop": bool(item.loop),
-    } for item in s.actions]
+    }
+    if item.cut:
+        entry["transition"] = "cut"  # absent = fondu (DP-8)
+    evs = events.get(entry["id"])
+    if evs:
+        entry["events"] = [{"id": e[0], "time": e[1]} for e in evs]
+    return entry
+
+
+def build_config(scene):
+    """Couche 3D, clés dans l'ordre du contrat ; sans cible caméra, pas de module caméra."""
+    s = scene.glbg
+    events, _ignored = marker_events(scene)
+    # Un id d'action en double (contrôle 8) ne reçoit ses événements qu'une fois.
+    seen = set()
+    actions = []
+    for item in s.actions:
+        ident = item.ident.strip()
+        actions.append(_action_entry(scene, item, {} if ident in seen else events))
+        seen.add(ident)
 
     modules = {}
     if s.camera_target is not None:

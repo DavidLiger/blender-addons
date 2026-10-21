@@ -5,7 +5,7 @@ import re
 
 import bpy
 
-from . import core, posefix, prefs, schema_check, serialize
+from . import clipeval, core, posefix, prefs, schema_check, serialize
 
 ERROR, WARNING, INFO = 'ERROR', 'WARNING', 'INFO'
 
@@ -124,6 +124,9 @@ def _check_4_nla(scene):
     """Clip déclaré = nom de piste : la piste existe une fois sur l'acteur principal ; partout où elle existe, elle a des
     bandes en mode Replace (l'exportateur fusionne une piste Add, Subtract… avec la piste du dessous)."""
     out = []
+    for obj in core.tweaking_objects(scene):
+        out.append((4, ERROR, f"« {obj.name} » : bande NLA en édition (Tab dans l'éditeur NLA pour en sortir) ; "
+                              "l'exportateur ne peut pas exporter les pistes"))
     for label, item in _declared_items(scene.glbg):
         name, obj = item.track.strip(), item.obj
         if not name:
@@ -301,6 +304,111 @@ def check_11(scene):
     return out
 
 
+# Tolérance sur les bornes du clip, comme EVENT_TIME_TOLERANCE_S du build (arrondi à la milliseconde, Float32).
+EVENT_TIME_TOLERANCE_S = 0.0005
+# Avertissement 24 : distance à la position d'idle, en part du rayon de la scène (spec-actions-combinees.md §9).
+IDLE_DISTANCE_RATIO = 0.10
+
+
+def _seconds(t):
+    return f"{t:.3f}".replace(".", ",")
+
+
+def _dec2(d):
+    return f"{d:.2f}".replace(".", ",")
+
+
+def check_21(scene):
+    """id d'événement en double dans une action (règle du Zod perdue à l'export du JSON Schema)."""
+    events, _ignored = serialize.marker_events(scene)
+    out = []
+    for action_id, evs in sorted(events.items()):
+        names = [e[0] for e in evs]
+        for dup in sorted({n for n in names if names.count(n) > 1}):
+            frames = ", ".join(str(e[2]) for e in evs if e[0] == dup)
+            out.append((21, ERROR, f"action « {action_id} » : événement « {dup} » en double (marqueurs aux images "
+                                   f"{frames})"))
+    return out
+
+
+def check_22(scene):
+    """Instant d'un événement hors de son clip (entre la première et la dernière image exportées)."""
+    events, _ignored = serialize.marker_events(scene)
+    fps = core.scene_fps(scene)
+    out = []
+    for item in scene.glbg.actions:
+        ident = item.ident.strip()
+        clip = serialize.clip_of(scene, item)
+        rng = serialize.clip_frame_range(scene, clip)
+        if rng is None:
+            continue  # clip manquant : contrôle 4
+        t0, t1 = rng[0] / fps, rng[1] / fps
+        for event_id, time, frame, _name in events.get(ident, []):
+            if t0 - EVENT_TIME_TOLERANCE_S <= time <= t1 + EVENT_TIME_TOLERANCE_S:
+                continue
+            out.append((22, ERROR, f"action « {ident} » : événement « {event_id} » (image {frame}) à {_seconds(time)} s, "
+                                   f"hors du clip « {clip} » (images {rng[0]} à {rng[1]}, {_seconds(t0)} à "
+                                   f"{_seconds(t1)} s)"))
+        events.pop(ident, None)  # id en double : un seul passage (contrôle 8)
+    return out
+
+
+def check_23(scene):
+    """Marqueurs de la timeline ignorés : sans « : », action non déclarée, idle."""
+    _events, ignored = serialize.marker_events(scene)
+    return [(23, WARNING, f"marqueur « {name} » ignoré : {reason}") for name, reason in ignored]
+
+
+def _clip_armatures(scene, item):
+    if serialize.is_nla(scene):
+        return core.scene_armatures(scene)
+    return [item.obj] if item.obj is not None and item.obj.type == 'ARMATURE' else []
+
+
+def check_24(scene):
+    """Personnage loin de sa position d'idle à la première ou à la dernière image d'une action sans coupe au noir :
+    le fondu de 0,25 s le ferait glisser (spec-actions-combinees.md §9)."""
+    s = scene.glbg
+    todo = [it for it in s.actions if not it.cut and serialize.clip_of(scene, it)]
+    idle_clip = serialize.clip_of(scene, s.idle)
+    if not todo or not idle_clip:
+        return []
+    if scene.is_nla_tweakmode or core.tweaking_objects(scene):
+        return [(24, INFO, "position des personnages non vérifiée : une bande NLA est en édition (Tab dans l'éditeur NLA)")]
+    try:
+        return _check_24(scene, todo, idle_clip)
+    except (RuntimeError, AttributeError, TypeError) as exc:
+        return [(24, WARNING, f"position des personnages non vérifiée : {exc}")]
+
+
+def _check_24(scene, todo, idle_clip):
+    out = []
+    with clipeval.ClipPlayer(scene) as player:
+        arms = core.scene_armatures(scene)
+        radius = player.radius_at_idle_start(idle_clip, arms)
+        if not radius:
+            return []
+        rest = {arm: first for arm, (first, _last) in player.positions(idle_clip, arms).items()}
+        limit = IDLE_DISTANCE_RATIO * radius
+        for item in todo:
+            clip = serialize.clip_of(scene, item)
+            for arm, ends in sorted(player.positions(clip, _clip_armatures(scene, item)).items(),
+                                    key=lambda kv: kv[0].name):
+                ref = rest.get(arm)
+                if ref is None:
+                    continue
+                far = [(where, (p - ref).length) for where, p in zip(("première", "dernière"), ends)]
+                far = [(where, d) for where, d in far if d > limit]
+                if not far:
+                    continue
+                where = " et ".join(w for w, _ in far)
+                dist = max(d for _, d in far)
+                out.append((24, WARNING, f"action « {item.ident.strip()} » : « {arm.name} » à {_dec2(dist)} m de sa "
+                                         f"position d'idle à la {where} image (seuil {_dec2(limit)} m, 10 % du "
+                                         "rayon de la scène) : cocher « Coupe au noir » ou rapprocher la pose"))
+    return out
+
+
 def check_25(scene):
     """Pistes NLA : chaque armature de la scène a une piste de chaque clip déclaré ; sinon elle n'est pas animée
     pendant ce clip et sa pose dans le lecteur n'est pas garantie."""
@@ -349,7 +457,7 @@ def check_27(scene):
             out.append((27, ERROR, f"clip « {name} » : commence à l'image {start} ; images négatives non prises en "
                                    "charge (décalage différent par armature à l'export)"))
         elif start > 1:
-            held = f"{start / fps:.2f}".replace(".", ",")
+            held = _dec2(start / fps)
             out.append((27, WARNING, f"clip « {name} » : commence à l'image {start}, première pose tenue {held} s "
                                      "au début dans le lecteur (commencer à l'image 0 ou 1)"))
     return out
@@ -363,7 +471,8 @@ _NOT_APPLICABLE = [
 def run_checks(scene):
     results = []
     for check in (check_1, check_2, check_3, check_4, check_8, check_13, check_15, check_16,
-                  check_10, check_11, check_17, check_18, check_19, check_20, check_25, check_26, check_27):
+                  check_10, check_11, check_17, check_18, check_19, check_20, check_21, check_22, check_23,
+                  check_24, check_25, check_26, check_27):
         results += check(scene)
     results += _NOT_APPLICABLE
     order = {ERROR: 0, WARNING: 1, INFO: 2}

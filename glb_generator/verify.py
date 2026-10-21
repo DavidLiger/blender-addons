@@ -30,6 +30,39 @@ def _animated_objects(gltf, animation):
     return names
 
 
+EVENT_TIME_TOLERANCE_S = 0.0005  # comme le build (book:check)
+
+
+def _clip_durations(gltf):
+    """Durée de chaque clip = dernier instant de ses pistes (comme three.js et book:check)."""
+    acc = gltf.get("accessors", [])
+    out = {}
+    for anim in gltf.get("animations", []):
+        ends = [acc[s["input"]].get("max", [0])[0] for s in anim.get("samplers", [])]
+        out[anim.get("name")] = max(ends, default=0.0)
+    return out
+
+
+def _event_problems(gltf, config_text):
+    """Instants des événements de la couche 3D au-delà de la durée du clip dans le GLB (erreur du build)."""
+    try:
+        actions = json.loads(config_text)["modules"]["animations"]["actions"]
+    except (ValueError, KeyError, TypeError):
+        return []
+    durations = _clip_durations(gltf)
+    out = []
+    for a in actions:
+        d = durations.get(a.get("clip"))
+        if d is None:
+            continue
+        for ev in a.get("events", []):
+            if ev["time"] > d + EVENT_TIME_TOLERANCE_S:
+                t, dur = f"{ev['time']:.3f}".replace(".", ","), f"{d:.3f}".replace(".", ",")
+                out.append(f"action « {a['id']} » : événement « {ev['id']} » à {t} s, clip « {a['clip']} » de {dur} s "
+                           "dans le GLB")
+    return out
+
+
 def verify_glb(path, clips, config_text, n_lights=0, clip_objects=None):
     """Liste des écarts entre le GLB et ce qui était attendu (vide si conforme).
     clip_objects (pistes NLA) : {clip: [armatures qui portent une piste de ce nom]}, chacune doit être animée par le clip
@@ -65,6 +98,7 @@ def verify_glb(path, clips, config_text, n_lights=0, clip_objects=None):
             missing_objs = sorted(set(expected) - _animated_objects(gltf, anim))
             if missing_objs:
                 problems.append(f"clip « {anim.get('name')} » : non commun, sans " + ", ".join(missing_objs))
+    problems += _event_problems(gltf, config_text)
     lit = [n.get("name") for n in gltf.get("nodes", []) if "KHR_lights_punctual" in (n.get("extensions") or {})]
     if len(lit) != n_lights:
         problems.append(f"{len(lit)} lampe(s) dans le GLB (KHR_lights_punctual), {n_lights} attendue(s)")

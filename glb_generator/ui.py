@@ -1,6 +1,6 @@
 import bpy
 
-from . import core, prefs
+from . import core, prefs, serialize
 
 
 class GLBG_PT_main(bpy.types.Panel):
@@ -122,6 +122,15 @@ class GLBG_PT_animations(bpy.types.Panel):
         box.prop(item, "obj", text="Acteur" if clip == "track" else "Objet")
         box.prop(item, clip)
         box.prop(item, "loop")
+        box.prop(item, "cut")
+        events, _ignored = serialize.marker_events(context.scene)
+        evs = events.get(item.ident.strip(), [])
+        col = box.column(align=True)
+        col.label(text=f"Événements : marqueurs « {item.ident.strip() or '<id>'}:<événement> »", icon='MARKER')
+        for event_id, time, frame, _name in evs:
+            col.label(text=f"{event_id} — image {frame} — {time:.3f} s".replace(".", ","))
+        if not evs:
+            col.label(text="(aucun)")
 
 
 class GLBG_PT_report(bpy.types.Panel):

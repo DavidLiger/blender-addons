@@ -52,6 +52,11 @@ class GLBG_ActionItem(bpy.types.PropertyGroup):
     action: bpy.props.PointerProperty(name="Clip", type=bpy.types.Action, poll=_poll_action)
     track: bpy.props.StringProperty(name="Piste", description=_TRACK_DESC, search=_search_track)
     loop: bpy.props.BoolProperty(name="Boucle", default=False)
+    cut: bpy.props.BoolProperty(
+        name="Coupe au noir",
+        description="Passage par le noir à l'entrée et à la sortie de l'action (clip qui commence ou finit loin de "
+                    "la pose de repos) ; décoché : fondu de poses",
+        default=False)
 
 
 class GLBG_SceneSettings(bpy.types.PropertyGroup):
