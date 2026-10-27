@@ -65,6 +65,7 @@ class GLBG_PT_camera(bpy.types.Panel):
         layout = self.layout
         layout.prop(context.scene.glbg, "camera_target")
         layout.label(text="Sans cible : pas de module caméra. Cadrage : atelier", icon='INFO')
+        layout.label(text="Position pendant une action : panneau Animations", icon='INFO')
 
 
 def _clip_prop(scene):
@@ -123,6 +124,7 @@ class GLBG_PT_animations(bpy.types.Panel):
         box.prop(item, clip)
         box.prop(item, "loop")
         box.prop(item, "cut")
+        box.prop(item, "camera_position")
         events, _ignored = serialize.marker_events(context.scene)
         evs = events.get(item.ident.strip(), [])
         col = box.column(align=True)

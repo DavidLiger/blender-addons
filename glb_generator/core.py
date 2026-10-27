@@ -63,6 +63,20 @@ def animated_bones(action):
     return names
 
 
+def slot_location_keyed(action, slot):
+    """Le slot de l'Action anime-t-il la position (location) avec au moins deux valeurs différentes ? Des clés toutes
+    égales ne sortent pas dans le GLB (l'exportateur retire l'animation d'un objet immobile)."""
+    if action is None or slot is None:
+        return False
+    for fcurve in _slot_fcurves(action, slot):
+        if fcurve.data_path != "location":
+            continue
+        values = [k.co[1] for k in fcurve.keyframe_points]
+        if values and max(values) - min(values) > 1e-6:
+            return True
+    return False
+
+
 def is_armature_action(action, arm):
     if action is None or arm is None or arm.type != 'ARMATURE':
         return False

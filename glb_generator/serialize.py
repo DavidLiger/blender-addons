@@ -58,6 +58,8 @@ def _action_entry(scene, item, events):
     }
     if item.cut:
         entry["transition"] = "cut"  # absent = fondu (DP-8)
+    if item.camera_position is not None:
+        entry["cameraPosition"] = item.camera_position.name  # absent = caméra libre (DP-19)
     evs = events.get(entry["id"])
     if evs:
         entry["events"] = [{"id": e[0], "time": e[1]} for e in evs]
@@ -122,6 +124,22 @@ def declared_armature_actions(scene):
     arms = [o for o in dict.fromkeys([s.idle.obj, *(i.obj for i in s.actions)])
             if o is not None and o.type == 'ARMATURE']
     return [(arm, [a for a in actions if core.is_armature_action(a, arm)]) for arm in arms]
+
+
+def camera_position_keyed(scene, item):
+    """L'empty de position de l'action est-il animé par ses propres clés de position dans le clip, tel que
+    l'exportateur l'échantillonne ? Pistes NLA : bandes de sa piste du nom du clip. Actions : l'exportateur n'exporte
+    l'animation d'un empty que pour son Action active (essai du 26/10), donc seulement si c'est l'Action du clip."""
+    empty = item.camera_position
+    if empty is None or empty.animation_data is None:
+        return False
+    if is_nla(scene):
+        clip = clip_of(scene, item)
+        return any(core.slot_location_keyed(st.action, st.action_slot)
+                   for t in core.tracks_named(empty, clip) for st in t.strips
+                   if st.action is not None and not st.mute)  # bande coupée : ignorée par l'exportateur
+    ad = empty.animation_data
+    return item.action is not None and ad.action == item.action and core.slot_location_keyed(ad.action, ad.action_slot)
 
 
 def clip_frame_range(scene, clip):

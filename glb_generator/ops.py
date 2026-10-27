@@ -256,6 +256,8 @@ class GLBG_OT_export(bpy.types.Operator):
             return {'CANCELLED'}
         config_text = get_root(scene)["glbi_config"]
         clips = serialize.declared_clips(scene)
+        keyed = [it.ident.strip() for it in scene.glbg.actions
+                 if it.camera_position is not None and serialize.camera_position_keyed(scene, it)]
         os.makedirs(os.path.dirname(out), exist_ok=True)
         snapshot = core.snapshot_poses(scene)
         temp_keys, pose_summary = [], {}
@@ -275,7 +277,7 @@ class GLBG_OT_export(bpy.types.Operator):
             self.report({'ERROR'}, "L'exportateur glTF a échoué (voir la console)")
             return {'CANCELLED'}
         problems = verify.verify_glb(out, clips, config_text, len(core.scene_lights(scene)),
-                                     expected_clip_objects(scene))
+                                     expected_clip_objects(scene), keyed)
         report = scene.glbg.report
         for name, (static, _ambiguous) in pose_summary.items():
             if static:

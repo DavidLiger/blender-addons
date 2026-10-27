@@ -299,9 +299,32 @@ def check_11(scene):
             mods = [m for m in obj.modifiers if m.type == 'ARMATURE']
             if not any(m.object is not None and m.object.name in scene.objects for m in mods):
                 out.append((11, WARNING, f"« {obj.name} » : skin orphelin (groupes de sommets sans armature)"))
+            else:
+                out += _unmatched_groups(obj, mods)
         if obj.data is not None and not len(obj.data.vertices):
             out.append((11, WARNING, f"« {obj.name} » : maillage vide"))
     return out
+
+
+def _unmatched_groups(obj, mods):
+    """Maillage skinné dont aucun groupe de sommets ne porte le nom d'un os de son armature : l'exportateur le lie à
+    son os neutre (neutral_bone), immobile, sans message. Mêmes règles que l'exportateur 4.5 (gather_skin) : dernier
+    modificateur Armature, au moins un sommet dans un groupe, pas de parenté à un os de cette armature."""
+    arm = mods[-1].object
+    if arm is None or arm.type != 'ARMATURE':
+        return []
+    if obj.parent == arm and obj.parent_type == 'BONE':
+        return []
+    bones = set(arm.data.bones.keys())
+    if any(g.name in bones for g in obj.vertex_groups):
+        return []
+    if obj.data is None or not any(len(v.groups) for v in obj.data.vertices):
+        return []
+    names = sorted(g.name for g in obj.vertex_groups)
+    return [(11, WARNING, f"« {obj.name} » : aucun groupe de sommets ne porte le nom d'un os de « {arm.name} » ("
+                          + ", ".join(names[:4]) + (" …" if len(names) > 4 else "")
+                          + ") : maillage lié à l'os neutre de l'exportateur, immobile dans le lecteur ; renommer les "
+                            "groupes comme les os")]
 
 
 # Tolérance sur les bornes du clip, comme EVENT_TIME_TOLERANCE_S du build (arrondi à la milliseconde, Float32).
@@ -463,6 +486,71 @@ def check_27(scene):
     return out
 
 
+def _camera_positions(scene):
+    """(libellé, action, empty) des actions qui déclarent une position de caméra (DP-19)."""
+    for i, item in enumerate(scene.glbg.actions):
+        if item.camera_position is not None:
+            yield f"action « {item.ident.strip() or i + 1} »", item, item.camera_position
+
+
+def check_28(scene):
+    """Position de la caméra (DP-19) : empty de la scène, distinct de la cible caméra, qui est exigée (règles du build,
+    merge.ts et book:check, AC2)."""
+    target = scene.glbg.camera_target
+    out = []
+    for label, _item, empty in _camera_positions(scene):
+        where = f"{label} : position de caméra « {empty.name} »"
+        if empty.name not in scene.objects:
+            out.append((28, ERROR, f"{where} : l'objet n'est pas dans la scène"))
+        elif empty.type != 'EMPTY':
+            out.append((28, ERROR, f"{where} : n'est pas un empty"))
+        elif target is None:
+            out.append((28, ERROR, f"{where} sans cible caméra (panneau Caméra) : la caméra regarde la cible"))
+        elif empty == target:
+            out.append((28, ERROR, f"{where} : identique à la cible caméra (deux empties distincts attendus)"))
+    return out
+
+
+def check_29(scene):
+    """Empty de position sans clés de position dans le clip de l'action : caméra fixe pendant l'action. Un empty parenté
+    suit son parent : pas d'avertissement."""
+    out = []
+    for label, item, empty in _camera_positions(scene):
+        if empty.name not in scene.objects or empty.type != 'EMPTY' or empty.parent is not None:
+            continue  # contrôle 28 ; parent animé possible
+        if serialize.camera_position_keyed(scene, item):
+            continue
+        clip = serialize.clip_of(scene, item)
+        if not clip:
+            continue  # contrôle 4
+        if serialize.is_nla(scene):
+            how = (f"pas de piste « {clip} »" if not core.tracks_named(empty, clip)
+                   else f"piste « {clip} » sans clés de position (ou clés toutes égales)")
+            hint = f"animer l'empty par des clés de position dans une piste « {clip} »"
+        else:
+            how = f"non animé dans le clip « {clip} »"
+            hint = (f"en source Actions, l'exportateur n'anime un empty que dans son Action active ; choisir Clips = "
+                    f"Pistes NLA et animer l'empty dans une piste « {clip} »")
+        out.append((29, WARNING, f"{label} : position de caméra « {empty.name} » : {how} : caméra fixe pendant "
+                                 f"l'action ; {hint}"))
+    return out
+
+
+def check_30(scene):
+    """Empty de position animé par une contrainte : la contrainte ne sort pas dans le GLB (comme le contrôle 26)."""
+    out = []
+    for label, _item, empty in _camera_positions(scene):
+        if empty.name not in scene.objects:
+            continue
+        active = [c.name for c in empty.constraints if c.enabled]
+        if active:
+            out.append((30, WARNING, f"{label} : position de caméra « {empty.name} » : contrainte(s) "
+                                     f"{', '.join(active)} non exportée(s) ; animer l'empty par des clés de position "
+                                     "dans une piste du même nom que le clip (Objet > Animation > Bake Action, Visual "
+                                     "Keying)"))
+    return out
+
+
 _NOT_APPLICABLE = [
     (9, INFO, "réglages d'export : imposés par Exporter, contrôlés lors d'un export manuel"),
 ]
@@ -472,7 +560,7 @@ def run_checks(scene):
     results = []
     for check in (check_1, check_2, check_3, check_4, check_8, check_13, check_15, check_16,
                   check_10, check_11, check_17, check_18, check_19, check_20, check_21, check_22, check_23,
-                  check_24, check_25, check_26, check_27):
+                  check_24, check_25, check_26, check_27, check_28, check_29, check_30):
         results += check(scene)
     results += _NOT_APPLICABLE
     order = {ERROR: 0, WARNING: 1, INFO: 2}

@@ -63,10 +63,41 @@ def _event_problems(gltf, config_text):
     return out
 
 
-def verify_glb(path, clips, config_text, n_lights=0, clip_objects=None):
+def _camera_problems(gltf, config_text, keyed):
+    """Position de la caméra (DP-19) : l'empty cité par la couche 3D est un nœud du GLB (erreur du build sinon) ; s'il
+    est animé par ses clés dans Blender, sa position est animée par le clip de l'action."""
+    try:
+        actions = json.loads(config_text)["modules"]["animations"]["actions"]
+    except (ValueError, KeyError, TypeError):
+        return []
+    nodes = gltf.get("nodes", [])
+    names = {n.get("name") for n in nodes}
+    anims = {a.get("name"): a for a in gltf.get("animations", [])}
+    out = []
+    for a in actions:
+        empty = a.get("cameraPosition")
+        if not empty:
+            continue
+        if empty not in names:
+            out.append(f"action « {a['id']} » : position de caméra « {empty} » absente du GLB")
+            continue
+        if a.get("id") not in keyed:
+            continue
+        anim = anims.get(a.get("clip"))
+        moved = anim is not None and any(
+            nodes[ch["target"]["node"]].get("name") == empty and ch["target"].get("path") == "translation"
+            for ch in anim.get("channels", []) if "node" in ch.get("target", {}))
+        if not moved:
+            out.append(f"action « {a['id']} » : position de caméra « {empty} » non animée par le clip « {a['clip']} » "
+                       "dans le GLB")
+    return out
+
+
+def verify_glb(path, clips, config_text, n_lights=0, clip_objects=None, keyed_camera_positions=()):
     """Liste des écarts entre le GLB et ce qui était attendu (vide si conforme).
     clip_objects (pistes NLA) : {clip: [armatures qui portent une piste de ce nom]}, chacune doit être animée par le clip
-    commun (regroupement par nom de piste)."""
+    commun (regroupement par nom de piste).
+    keyed_camera_positions : id des actions dont l'empty de position est animé par ses clés dans le clip."""
     try:
         gltf = read_glb_json(path)
     except (OSError, ValueError, struct.error) as exc:
@@ -99,6 +130,7 @@ def verify_glb(path, clips, config_text, n_lights=0, clip_objects=None):
             if missing_objs:
                 problems.append(f"clip « {anim.get('name')} » : non commun, sans " + ", ".join(missing_objs))
     problems += _event_problems(gltf, config_text)
+    problems += _camera_problems(gltf, config_text, set(keyed_camera_positions))
     lit = [n.get("name") for n in gltf.get("nodes", []) if "KHR_lights_punctual" in (n.get("extensions") or {})]
     if len(lit) != n_lights:
         problems.append(f"{len(lit)} lampe(s) dans le GLB (KHR_lights_punctual), {n_lights} attendue(s)")

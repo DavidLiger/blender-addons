@@ -17,6 +17,12 @@ def _poll_target(self, obj):
     return obj.type == 'EMPTY' and obj.name != core.ROOT_NAME and scene is not None and obj.name in scene.objects
 
 
+def _poll_camera_position(self, obj):
+    """Empties de la scène, sauf GLBI_ROOT et la cible caméra (DP-19)."""
+    scene = bpy.context.scene
+    return _poll_target(self, obj) and obj != scene.glbg.camera_target
+
+
 def _search_track(self, context, edit_text):
     """Menu des noms de piste NLA de la scène (les noms par défaut de Blender sont écartés)."""
     scene = context.scene
@@ -57,6 +63,10 @@ class GLBG_ActionItem(bpy.types.PropertyGroup):
         description="Passage par le noir à l'entrée et à la sortie de l'action (clip qui commence ou finit loin de "
                     "la pose de repos) ; décoché : fondu de poses",
         default=False)
+    camera_position: bpy.props.PointerProperty(
+        name="Position de la caméra", type=bpy.types.Object, poll=_poll_camera_position,
+        description="Empty animé où se place la caméra pendant l'action, qui regarde la cible (facultatif : vide, "
+                    "caméra libre) ; clés de position dans la piste du clip")
 
 
 class GLBG_SceneSettings(bpy.types.PropertyGroup):
