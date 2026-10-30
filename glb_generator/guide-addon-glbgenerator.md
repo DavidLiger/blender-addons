@@ -429,7 +429,7 @@ E = erreur (bloque Appliquer et l'export), A = avertissement (n'empêche rien), 
 | 36 | A | capsule de plus de 1,2 m de rayon (budget du jeu) | réduire l'échelle de l'entité, ou saisir une capsule plus petite |
 | 37 | A / I | **arène** : collisionneurs `COL_*` de plus de 5 000 triangles ; I : triangles comptés | simplifier les `COL_*`, surtout `COL_sol` |
 | 38 | A | **jeu** : texture de plus de 1024 px | réduire l'image à 1024 px |
-| 39 | A | **entité** : pieds loin de l'origine ; personnage décalé de l'axe de la capsule | ramener les pieds à l'origine et centrer le personnage, ou poser un empty `COLLIDER` |
+| 39 | A | **entité** : pieds loin de l'origine ; personnage décalé **en X** (en travers du corps) de l'axe de la capsule ; un décalage le long du corps (queue longue) n'est pas signalé | ramener les pieds à l'origine, centrer le personnage et vérifier qu'il regarde vers −Y, ou poser un empty `COLLIDER` |
 | 40 | A | **scène** en Clips = Actions : cible caméra animée, que la caméra ne suivra pas | passer en Pistes NLA et animer la cible dans une piste du nom du clip (§10.2) |
 
 ---
@@ -517,9 +517,12 @@ Les règles (durée, nombre de proies, vitesses), les textes et les sons du jeu 
 
 Une entité = **un personnage** : une armature et son maillage, animés par des Actions (comme au §8, étapes 1 à 5).
 
-- **Orientation** : le personnage regarde vers **−Y** (vue de face de Blender). **Pieds à l'origine** (sol à Z = 0), corps
-  centré sur l'axe vertical.
-- **Échelle** : 1 unité Blender = 1 m dans le jeu.
+- **Orientation** : le personnage regarde vers **−Y** (vue de face de Blender). En **vue de dessus** (pavé 7), la tête pointe
+  **droit vers le bas** de l'écran. **Pieds à l'origine** (sol à Z = 0), corps centré sur l'axe vertical.
+- **Échelle** : 1 unité Blender = 1 m dans le jeu. Un modèle repris d'une scène du livre peut être à une autre échelle (le
+  lecteur des scènes cadre sur la taille du modèle, le jeu non) : le raptor du livre de test mesurait 7,8 m.
+- **Corriger l'orientation ou l'échelle** : sur l'**armature** (R Z, S), **sans appliquer** (pas de Ctrl+A : les clés de
+  position des os seraient faussées). La rotation et l'échelle de l'objet sortent telles quelles dans le GLB.
 - **Une seule armature** dans le `.blend` (erreur 31).
 - **Lampes** : inutiles, elles ne sont pas exportées (le jeu est éclairé par l'arène).
 

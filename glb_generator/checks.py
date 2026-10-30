@@ -734,7 +734,9 @@ def check_38(scene):
 
 def check_39(scene):
     """Entité : sans COLLIDER, le moteur pose la capsule sur l'axe vertical de l'origine, pieds à l'origine ; avec
-    COLLIDER, centrée sur l'empty. Personnage loin de cette capsule : collisions décalées."""
+    COLLIDER, centrée sur l'empty. Personnage décalé de cette capsule : collisions décalées.
+    Décalage mesuré sur X seulement (en travers du corps, le personnage regardant vers −Y) : le long du corps (Y), une
+    queue plus longue que le cou décale le centre de la boîte sans défaut (batterie du 30/10, raptor)."""
     m = game.measure(scene)
     if m is None:
         return []
@@ -748,13 +750,13 @@ def check_39(scene):
         if abs(lo.z) > tol:
             out.append((39, WARNING, f"pieds à {_m(lo.z)} de hauteur (attendus à l'origine, z = 0) : la capsule part de "
                                      "l'origine ; déplacer le personnage ou poser un empty COLLIDER"))
-        ref, what = Vector((0.0, 0.0)), "de l'axe vertical de l'origine"
+        ref, what = 0.0, "de l'axe vertical de l'origine"
     else:
-        ref, what = col.xy, f"de l'empty {core.GAME_COLLIDER_NAME}"
-    off = (center.xy - ref).length
+        ref, what = col.x, f"de l'empty {core.GAME_COLLIDER_NAME}"
+    off = abs(center.x - ref)
     if radius and off > radius:
-        out.append((39, WARNING, f"personnage centré à {_m(off)} {what} (rayon de la capsule {_m(radius)}) : "
-                                 "collisions décalées ; recentrer le personnage"
+        out.append((39, WARNING, f"personnage décalé de {_m(off)} en X {what} (rayon de la capsule {_m(radius)}) : "
+                                 "collisions décalées ; recentrer le personnage (regard vers −Y)"
                                  + ("" if col is not None else " ou poser un empty COLLIDER")))
     return out
 
