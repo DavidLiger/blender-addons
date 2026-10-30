@@ -63,14 +63,20 @@ def pre_export_callback(export_settings):
     problems = []
     if not export_settings.get('gltf_extras'):
         problems.append("Include > Custom Properties doit être coché")
-    nla = any(s.glbg.clip_source == core.SOURCE_NLA for s in glbi_scenes)
-    expected, label = ('NLA_TRACKS', "NLA Tracks (clips : pistes NLA)") if nla else ('ACTIONS', "Actions")
-    if export_settings.get('gltf_animation_mode') != expected:
-        problems.append(f"Animation > Mode doit être {label} (animations activées)")
-    if not export_settings.get('gltf_lights'):
-        problems.append("Include > Data > Punctual Lights doit être coché")
-    if export_settings.get('gltf_lighting_mode') != 'COMPAT':
-        problems.append("Data > Lighting > Lighting Mode doit être Unitless")
+    # Mini-jeu (v0.4) : une entité exporte ses Actions, sans exigence de lampes (non exportées par le bouton) ; une
+    # arène exporte ses lampes, sans exigence d'animation. Scène : réglages inchangés.
+    animated = [s for s in glbi_scenes if s.glbg.kind != core.KIND_ARENA]
+    lit = [s for s in glbi_scenes if s.glbg.kind != core.KIND_ENTITY]
+    if animated:
+        nla = any(s.glbg.clip_source == core.SOURCE_NLA and s.glbg.kind == core.KIND_SCENE for s in animated)
+        expected, label = ('NLA_TRACKS', "NLA Tracks (clips : pistes NLA)") if nla else ('ACTIONS', "Actions")
+        if export_settings.get('gltf_animation_mode') != expected:
+            problems.append(f"Animation > Mode doit être {label} (animations activées)")
+    if lit:
+        if not export_settings.get('gltf_lights'):
+            problems.append("Include > Data > Punctual Lights doit être coché")
+        if export_settings.get('gltf_lighting_mode') != 'COMPAT':
+            problems.append("Data > Lighting > Lighting Mode doit être Unitless")
     if not problems:
         return
     frame = _state.get("frame")

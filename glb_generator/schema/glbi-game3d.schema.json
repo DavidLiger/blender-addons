@@ -1,0 +1,120 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:glbinterpreter:schema:game3d/1",
+  "$comment": "généré par npm run schema:export (src/schema/glbi.ts, game3dEntitySchema et game3dArenaSchema), ne pas éditer ; valider glbi_game_config d'une entité (game/<id>.glb) contre $defs.entity, celui de l'arène (game/arena.glb) contre $defs.arena",
+  "$defs": {
+    "entity": {
+      "type": "object",
+      "properties": {
+        "version": {
+          "type": "number",
+          "const": 1
+        },
+        "kind": {
+          "type": "string",
+          "const": "entity"
+        },
+        "id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$"
+        },
+        "role": {
+          "type": "string",
+          "enum": [
+            "player",
+            "prey"
+          ]
+        },
+        "object": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_]+$"
+        },
+        "clips": {
+          "type": "object",
+          "properties": {
+            "idle": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_]+$"
+            },
+            "walk": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_]+$"
+            },
+            "run": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_]+$"
+            },
+            "attack": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_]+$"
+            },
+            "caught": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_]+$"
+            },
+            "flee": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_]+$"
+            }
+          },
+          "additionalProperties": false
+        },
+        "capsule": {
+          "type": "object",
+          "properties": {
+            "radius": {
+              "type": "number",
+              "minimum": 0.01
+            },
+            "height": {
+              "type": "number",
+              "minimum": 0.02
+            }
+          },
+          "required": [
+            "radius",
+            "height"
+          ],
+          "additionalProperties": false
+        },
+        "collider": {
+          "type": "string",
+          "const": "COLLIDER"
+        }
+      },
+      "required": [
+        "version",
+        "kind",
+        "id",
+        "role",
+        "object",
+        "clips",
+        "capsule"
+      ],
+      "additionalProperties": false
+    },
+    "arena": {
+      "type": "object",
+      "properties": {
+        "version": {
+          "type": "number",
+          "const": 1
+        },
+        "kind": {
+          "type": "string",
+          "const": "arena"
+        },
+        "id": {
+          "type": "string",
+          "const": "arena"
+        }
+      },
+      "required": [
+        "version",
+        "kind",
+        "id"
+      ],
+      "additionalProperties": false
+    }
+  }
+}

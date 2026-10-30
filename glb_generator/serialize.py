@@ -3,7 +3,7 @@ import json
 
 import bpy
 
-from . import core
+from . import core, game
 
 
 def _name(id_block):
@@ -11,7 +11,8 @@ def _name(id_block):
 
 
 def is_nla(scene):
-    return scene.glbg.clip_source == core.SOURCE_NLA
+    """Source « pistes NLA » : scènes seulement ; une entité de jeu exporte ses Actions (mode Actions)."""
+    return scene.glbg.clip_source == core.SOURCE_NLA and not core.is_game(scene)
 
 
 def clip_of(scene, item):
@@ -94,7 +95,9 @@ def to_json(config):
 
 
 def declared_clips(scene):
-    """Noms des clips déclarés (idle + actions), sans doublon ni nom vide."""
+    """Noms des clips déclarés (idle + actions ; entité : rôles de clip ; arène : aucun), sans doublon ni nom vide."""
+    if core.is_game(scene):
+        return [a.name for a in game.entity_actions(scene)] if scene.glbg.kind == core.KIND_ENTITY else []
     s = scene.glbg
     names = [clip_of(scene, i) for i in [s.idle, *s.actions]]
     return list(dict.fromkeys(n for n in names if n))
@@ -109,8 +112,15 @@ def declared_armature_actions(scene):
     """[(armature, [Actions déclarées qui l'animent])].
     Actions : armatures déclarées (idle et actions) et leurs clips.
     Pistes NLA : toute armature de la scène qui porte une piste d'un clip déclaré, et les Actions des bandes de ces
-    pistes (posefix : la pose non clée est perdue comme en mode Actions, test de tête du 21/10)."""
+    pistes (posefix : la pose non clée est perdue comme en mode Actions, test de tête du 21/10).
+    Entité de jeu : son armature et les Actions de ses rôles de clip ; arène : aucune."""
     s = scene.glbg
+    if core.is_game(scene):
+        arm = s.game.obj
+        if s.kind != core.KIND_ENTITY or arm is None or arm.type != 'ARMATURE':
+            return []
+        acts = [a for a in game.entity_actions(scene) if core.is_armature_action(a, arm)]
+        return [(arm, acts)] if acts else []
     if is_nla(scene):
         clips = set(declared_clips(scene))
         out = []
@@ -159,12 +169,34 @@ def clip_frame_range(scene, clip):
     return min(r[0] for r in ranges), max(r[1] for r in ranges)
 
 
+# Propriétés de GLBI_ROOT par type : (version, configuration). Celles de l'autre type sont retirées à l'écriture, pour
+# qu'un .blend changé de type ne garde pas une ancienne configuration (book:check refuse un GLB de scène dans game/).
+SCENE_KEYS = ("glbi_version", "glbi_config")
+GAME_KEYS = ("glbi_game_version", "glbi_game_config")
+
+
+def root_keys(scene):
+    return GAME_KEYS if core.is_game(scene) else SCENE_KEYS
+
+
+def config_of(scene):
+    """Couche 3D du type du .blend : scène (glbi_config) ou jeu (glbi_game_config)."""
+    return game.build_config(scene) if core.is_game(scene) else build_config(scene)
+
+
 def write_root(root, scene):
-    """Écrit glbi_version (entier 2) et glbi_config (chaîne JSON) ; renvoie la chaîne écrite."""
-    text = to_json(build_config(scene))
-    root["glbi_version"] = core.GLBI_VERSION
-    root["glbi_config"] = text
+    """Écrit la version (entier) et la configuration (chaîne JSON) du type du .blend ; renvoie la chaîne écrite.
+    Scène : glbi_version (2) et glbi_config ; entité ou arène : glbi_game_version (1) et glbi_game_config."""
+    is_game = core.is_game(scene)
+    version = core.GAME3D_VERSION if is_game else core.GLBI_VERSION
+    key_version, key_config = root_keys(scene)
+    text = to_json(config_of(scene))
+    for key in SCENE_KEYS if is_game else GAME_KEYS:  # clés de l'autre type
+        if key in root:
+            del root[key]
+    root[key_version] = version
+    root[key_config] = text
     # Piège de JSON.parse("1.0") : la relecture doit donner un objet.
-    if not isinstance(json.loads(root["glbi_config"]), dict) or root["glbi_version"] != core.GLBI_VERSION:
-        raise RuntimeError("relecture de glbi_config incorrecte")
+    if not isinstance(json.loads(root[key_config]), dict) or root[key_version] != version:
+        raise RuntimeError(f"relecture de {key_config} incorrecte")
     return text

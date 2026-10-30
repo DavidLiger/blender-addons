@@ -1,6 +1,6 @@
 import bpy
 
-from . import core, prefs, serialize
+from . import core, game, prefs, serialize
 
 
 class GLBG_PT_main(bpy.types.Panel):
@@ -49,8 +49,21 @@ class GLBG_PT_scene(bpy.types.Panel):
 
     def draw(self, context):
         layout = self.layout
-        layout.prop(context.scene.glbg, "scene_id")
-        layout.label(text="Nom, image, textes, sons : atelier (scenes/<id>.edit.json)", icon='INFO')
+        s = context.scene.glbg
+        layout.prop(s, "kind", expand=True)
+        if s.kind == core.KIND_SCENE:
+            layout.prop(s, "scene_id")
+            layout.label(text="Nom, image, textes, sons : atelier (scenes/<id>.edit.json)", icon='INFO')
+        elif s.kind == core.KIND_ENTITY:
+            layout.prop(s, "scene_id", text="id (nom du fichier)")
+            layout.label(text="Règles, textes, sons du jeu : atelier (game/game.edit.json)", icon='INFO')
+        else:
+            layout.label(text=f"id : {core.GAME_ARENA_ID} (game/{core.GAME_ARENA_ID}.glb)")
+            layout.label(text="Règles, textes, sons du jeu : atelier (game/game.edit.json)", icon='INFO')
+
+
+def _scene_kind(context):
+    return context.scene is not None and context.scene.glbg.kind == core.KIND_SCENE
 
 
 class GLBG_PT_camera(bpy.types.Panel):
@@ -60,6 +73,10 @@ class GLBG_PT_camera(bpy.types.Panel):
     bl_region_type = 'UI'
     bl_category = core.TAB
     bl_parent_id = "GLBG_PT_main"
+
+    @classmethod
+    def poll(cls, context):
+        return _scene_kind(context)
 
     def draw(self, context):
         layout = self.layout
@@ -90,6 +107,10 @@ class GLBG_PT_animations(bpy.types.Panel):
     bl_region_type = 'UI'
     bl_category = core.TAB
     bl_parent_id = "GLBG_PT_main"
+
+    @classmethod
+    def poll(cls, context):
+        return _scene_kind(context)
 
     def draw(self, context):
         layout = self.layout
@@ -133,6 +154,86 @@ class GLBG_PT_animations(bpy.types.Panel):
             col.label(text=f"{event_id} — image {frame} — {time:.3f} s".replace(".", ","))
         if not evs:
             col.label(text="(aucun)")
+
+
+def _m(x):
+    return f"{x:.3f}".replace(".", ",") + " m"
+
+
+class GLBG_PT_entity(bpy.types.Panel):
+    bl_label = "Entité de jeu"
+    bl_idname = "GLBG_PT_entity"
+    bl_space_type = 'VIEW_3D'
+    bl_region_type = 'UI'
+    bl_category = core.TAB
+    bl_parent_id = "GLBG_PT_main"
+
+    @classmethod
+    def poll(cls, context):
+        return context.scene is not None and context.scene.glbg.kind == core.KIND_ENTITY
+
+    def draw(self, context):
+        layout = self.layout
+        scene = context.scene
+        g = scene.glbg.game
+        layout.prop(g, "role", expand=True)
+        layout.prop(g, "obj")
+        required = set(core.GAME_REQUIRED_CLIPS[g.role])
+        box = layout.box()
+        box.label(text="Rôles de clip (* obligatoire)" + (" ; run ou flee pour une proie" if g.role == "prey" else ""))
+        for role in core.GAME_CLIP_ROLES:
+            box.prop(g, "clip_" + role, text=role + (" *" if role in required else ""))
+        box = layout.box()
+        box.label(text="Capsule de collision")
+        box.prop(g, "capsule_manual")
+        if g.capsule_manual:
+            row = box.row(align=True)
+            row.prop(g, "radius")
+            row.prop(g, "height")
+        m = game.last_measure(scene)
+        if m is None:
+            box.label(text="Mesure : « Vérifier » pour mesurer")
+        else:
+            box.label(text=f"Mesure ({m['pose']}) : rayon {_m(m['radius'])}, hauteur {_m(m['height'])}")
+        col = game.collider_object(scene)
+        if col is not None:
+            box.label(text=f"Centre : empty {core.GAME_COLLIDER_NAME}", icon='EMPTY_AXIS')
+        else:
+            box.label(text=f"Centre : pieds à l'origine (empty {core.GAME_COLLIDER_NAME} facultatif)")
+        layout.label(text="Personnage tourné vers −Y (vue de face), pieds à l'origine", icon='INFO')
+
+
+class GLBG_PT_arena(bpy.types.Panel):
+    bl_label = "Arène"
+    bl_idname = "GLBG_PT_arena"
+    bl_space_type = 'VIEW_3D'
+    bl_region_type = 'UI'
+    bl_category = core.TAB
+    bl_parent_id = "GLBG_PT_main"
+
+    @classmethod
+    def poll(cls, context):
+        return context.scene is not None and context.scene.glbg.kind == core.KIND_ARENA
+
+    def draw(self, context):
+        layout = self.layout
+        nodes = game.arena_nodes(context.scene)
+        col = layout.column(align=True)
+        ok = bool(nodes["spawn_player"])
+        col.label(text=f"{core.SPAWN_PLAYER} : " + ("présent" if ok else "absent"), icon='CHECKMARK' if ok else 'ERROR')
+        n = len(nodes["spawn_prey"])
+        col.label(text=f"{core.SPAWN_PREY_PREFIX}* : {n}", icon='CHECKMARK' if n else 'ERROR')
+        cols = nodes["colliders"]
+        floor = [o for o in cols if o.name == core.COL_FLOOR]
+        tri = sum(game.triangles(o) for o in cols)
+        col.label(text=f"{core.COL_PREFIX}* : {len(cols)}, {tri} triangles (budget {game.BUDGET_COLLIDER_TRIANGLES})",
+                  icon='CHECKMARK' if floor and tri <= game.BUDGET_COLLIDER_TRIANGLES else 'ERROR')
+        col.label(text=f"{core.COL_FLOOR} : " + (f"{game.triangles(floor[0])} triangles" if floor else "absent"),
+                  icon='CHECKMARK' if floor else 'ERROR')
+        col.label(text=f"{core.FADE_PREFIX}* : {len(nodes['fade'])}")
+        layout.label(text=f"{core.COL_FLOOR} simple : peu de triangles, plat là où c'est possible", icon='INFO')
+        layout.label(text=f"{core.COL_PREFIX}* non dessinés dans le jeu ; {core.FADE_PREFIX}* estompés devant le joueur",
+                     icon='INFO')
 
 
 class GLBG_PT_report(bpy.types.Panel):

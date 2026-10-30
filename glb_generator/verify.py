@@ -139,3 +139,53 @@ def verify_glb(path, clips, config_text, n_lights=0, clip_objects=None, keyed_ca
         if foreign:
             problems.append("propriétés de scène hors glbi_ dans le GLB : " + ", ".join(foreign))
     return problems
+
+
+def verify_game_glb(path, kind, clips, config_text, n_lights, expected_nodes):
+    """Relecture d'un GLB du mini-jeu (v0.4) : GLBI_ROOT porte glbi_game_version (entier 1) et la couche du jeu écrite,
+    sans couche de scène ; clips exactement ceux des rôles (entité) ou aucun (arène) ; nœuds attendus présents (arène :
+    SPAWN_*, COL_* avec maillage ; entité : armature, COLLIDER) ; lampes ; extras de scène."""
+    try:
+        gltf = read_glb_json(path)
+    except (OSError, ValueError, struct.error) as exc:
+        return [f"GLB illisible : {exc}"]
+    problems = []
+    nodes = gltf.get("nodes", [])
+    roots = [n for n in nodes if n.get("name") == core.ROOT_NAME]
+    if len(roots) != 1:
+        problems.append(f"{len(roots)} nœud(s) {core.ROOT_NAME} dans le GLB (1 attendu)")
+    else:
+        extras = roots[0].get("extras") or {}
+        version = extras.get("glbi_game_version")
+        if type(version) is not int or version != core.GAME3D_VERSION:
+            problems.append(f"glbi_game_version vaut {json.dumps(version)} (entier {core.GAME3D_VERSION} attendu)")
+        if extras.get("glbi_game_config") != config_text:
+            problems.append("glbi_game_config du GLB différent de celui écrit sur GLBI_ROOT")
+        stale = [k for k in ("glbi_version", "glbi_config") if k in extras]
+        if stale:
+            problems.append("couche de scène présente dans un GLB du jeu : " + ", ".join(stale))
+    names = [a.get("name") for a in gltf.get("animations", [])]
+    missing = sorted(set(clips) - set(names))
+    extra = sorted(set(names) - set(clips))
+    if missing:
+        problems.append("clips absents du GLB : " + ", ".join(missing))
+    if extra:
+        problems.append(("clips non déclarés dans le GLB : " if kind == core.KIND_ENTITY
+                         else "animations dans le GLB de l'arène : ") + ", ".join(map(str, extra)))
+    by_name = {}
+    for n in nodes:
+        by_name.setdefault(n.get("name"), n)
+    for name, needs_mesh in expected_nodes:
+        n = by_name.get(name)
+        if n is None:
+            problems.append(f"nœud « {name} » absent du GLB")
+        elif needs_mesh and "mesh" not in n:
+            problems.append(f"nœud « {name} » sans maillage dans le GLB")
+    lit = [n.get("name") for n in nodes if "KHR_lights_punctual" in (n.get("extensions") or {})]
+    if len(lit) != n_lights:
+        problems.append(f"{len(lit)} lampe(s) dans le GLB (KHR_lights_punctual), {n_lights} attendue(s)")
+    for scene in gltf.get("scenes", []):
+        foreign = [k for k in (scene.get("extras") or {}) if not k.startswith("glbi_")]
+        if foreign:
+            problems.append("propriétés de scène hors glbi_ dans le GLB : " + ", ".join(foreign))
+    return problems

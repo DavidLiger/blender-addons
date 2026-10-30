@@ -69,7 +69,47 @@ class GLBG_ActionItem(bpy.types.PropertyGroup):
                     "caméra libre) ; clés de position dans la piste du clip")
 
 
+def _clip_role(role):
+    return bpy.props.PointerProperty(name=role, type=bpy.types.Action, poll=_poll_action,
+                                     description=f"Action jouée pour le rôle de clip « {role} »")
+
+
+class GLBG_GameEntity(bpy.types.PropertyGroup):
+    """Entité du mini-jeu (v0.4, spec-mini-jeu.md §5, §16) : rôle, armature, rôles de clip, capsule."""
+    role: bpy.props.EnumProperty(
+        name="Rôle",
+        items=(("player", "Joueur", "Personnage dirigé par le joueur (idle, walk, run, attack obligatoires)"),
+               ("prey", "Proie", "Personnage chassé (idle, walk, caught, et run ou flee obligatoires)")),
+        default="player",
+    )
+    obj: bpy.props.PointerProperty(name="Armature", type=bpy.types.Object, poll=_poll_armature,
+                                   description="Armature de l'entité (une seule par entité)")
+    clip_idle: _clip_role("idle")
+    clip_walk: _clip_role("walk")
+    clip_run: _clip_role("run")
+    clip_attack: _clip_role("attack")
+    clip_caught: _clip_role("caught")
+    clip_flee: _clip_role("flee")
+    capsule_manual: bpy.props.BoolProperty(
+        name="Saisie manuelle",
+        description="Rayon et hauteur saisis à la main ; décoché : mesurés sur les maillages à la première image d'idle",
+        default=False)
+    radius: bpy.props.FloatProperty(name="Rayon", default=0.5, min=0.01, soft_max=2.0, precision=3, unit='LENGTH')
+    height: bpy.props.FloatProperty(name="Hauteur", default=1.8, min=0.02, soft_max=5.0, precision=3, unit='LENGTH',
+                                    description="Hauteur totale de la capsule (pieds à l'origine sans COLLIDER)")
+
+
 class GLBG_SceneSettings(bpy.types.PropertyGroup):
+    kind: bpy.props.EnumProperty(
+        name="Type",
+        items=(
+            (core.KIND_SCENE, "Scène", "Scène de livre : scenes/<id>.glb"),
+            (core.KIND_ENTITY, "Entité de jeu", "Joueur ou proie du mini-jeu : game/<id>.glb"),
+            (core.KIND_ARENA, "Arène", "Arène du mini-jeu : game/arena.glb"),
+        ),
+        default=core.KIND_SCENE,
+    )
+    game: bpy.props.PointerProperty(type=GLBG_GameEntity)
     scene_id: bpy.props.StringProperty(name="id", description="Nom technique de la scène, égal au nom du fichier GLB")
     camera_target: bpy.props.PointerProperty(
         name="Cible", type=bpy.types.Object, poll=_poll_target,
@@ -91,4 +131,4 @@ class GLBG_SceneSettings(bpy.types.PropertyGroup):
     report: bpy.props.CollectionProperty(type=GLBG_ReportItem)
 
 
-classes = (GLBG_ReportItem, GLBG_Idle, GLBG_ActionItem, GLBG_SceneSettings)
+classes = (GLBG_ReportItem, GLBG_Idle, GLBG_ActionItem, GLBG_GameEntity, GLBG_SceneSettings)

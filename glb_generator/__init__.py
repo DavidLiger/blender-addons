@@ -1,19 +1,19 @@
 bl_info = {
     "name": "GLB Generator",
     "author": "David",
-    "version": (0, 3, 0),
+    "version": (0, 4, 0),
     "blender": (4, 5, 0),
     "location": "View3D > Sidebar (N) > BD > GLBI — GLB Generator",
-    "description": "Configuration GLBInterpreter d'une scène de livre (GLBI_ROOT) et export GLB",
+    "description": "Configuration GLBInterpreter d'une scène de livre ou du mini-jeu (GLBI_ROOT) et export GLB",
     "category": "Import-Export",
 }
 
 # Rechargement (F3 > Reload Scripts) : recharge aussi les sous-modules.
 _reloading = "bpy" in locals()
-from . import core, prefs, props, serialize, schema_check, clipeval, checks, verify, gltf_hook, posefix, ops, ui
+from . import core, prefs, props, game, serialize, schema_check, clipeval, checks, verify, gltf_hook, posefix, ops, ui
 if _reloading:
     import importlib
-    for _m in (core, prefs, props, serialize, schema_check, clipeval, checks, verify, gltf_hook, posefix, ops, ui):
+    for _m in (core, prefs, props, game, serialize, schema_check, clipeval, checks, verify, gltf_hook, posefix, ops, ui):
         importlib.reload(_m)
 
 import bpy
@@ -38,6 +38,8 @@ classes = (
     ui.GLBG_PT_camera,
     ui.GLBG_UL_actions,
     ui.GLBG_PT_animations,
+    ui.GLBG_PT_entity,
+    ui.GLBG_PT_arena,
     ui.GLBG_PT_report,
 )
 

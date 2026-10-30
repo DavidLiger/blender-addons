@@ -4,8 +4,9 @@ import os
 import re
 
 import bpy
+from mathutils import Vector
 
-from . import clipeval, core, posefix, prefs, schema_check, serialize
+from . import clipeval, core, game, posefix, prefs, schema_check, serialize
 
 ERROR, WARNING, INFO = 'ERROR', 'WARNING', 'INFO'
 
@@ -34,7 +35,9 @@ def _declared_items(s):
 
 def _declared_actions(scene):
     """Actions déclarées dont le nom part dans le GLB (source Actions seulement : avec les pistes NLA, le nom du clip
-    est celui de la piste)."""
+    est celui de la piste). Entité de jeu : Actions des rôles de clip ; arène : aucune."""
+    if core.is_game(scene):
+        return game.entity_actions(scene) if scene.glbg.kind == core.KIND_ENTITY else []
     if serialize.is_nla(scene):
         return []
     return [a for a in dict.fromkeys(a for _, _, a in _declared(scene.glbg)) if a is not None]
@@ -162,15 +165,22 @@ def check_8(scene):
 
 
 def check_16(scene):
-    """Couche 3D validée par le JSON Schema exporté de GLBInterpreter (spec-atelier-glbi.md §6)."""
+    """Couche 3D validée par le JSON Schema exporté de GLBInterpreter (spec-atelier-glbi.md §6) ; jeu : $defs.entity
+    ou $defs.arena de schema/glbi-game3d.schema.json (spec-mini-jeu.md §16)."""
+    is_game = core.is_game(scene)
     try:
-        schema = schema_check.load()
+        if is_game:
+            schema = schema_check.load(schema_check.GAME_SCHEMA_PATH)
+            target = schema_check.definition(schema, "arena" if scene.glbg.kind == core.KIND_ARENA else "entity")
+        else:
+            schema = target = schema_check.load()
     except schema_check.SchemaError as exc:
         return [(16, ERROR, f"JSON Schema : {exc} ; dans GLBInterpreter : "
                             "npm run schema:export -- --addon <dossier glb_generator>")]
     out = [(16, INFO, f"JSON Schema : {schema.get('$id', '(sans $id)')}")]
-    for where, message in schema_check.validate(serialize.build_config(scene), schema):
-        out.append((16, ERROR, f"couche 3D {where} : {message}"))
+    label = "couche 3D du jeu" if is_game else "couche 3D"
+    for where, message in schema_check.validate(serialize.config_of(scene), target):
+        out.append((16, ERROR, f"{label} {where} : {message}"))
     return out
 
 
@@ -179,16 +189,17 @@ def _same_path(a, b):
 
 
 def check_15(scene):
-    """Fichier de sortie = <dossier du livre>/scenes/<scene.id>.glb, seul emplacement lu par le build (spec extras §11)."""
+    """Fichier de sortie = <dossier du livre>/scenes/<scene.id>.glb, seul emplacement lu par le build (spec extras §11) ;
+    entité ou arène du jeu : <dossier du livre>/game/<id>.glb (game/arena.glb pour l'arène, spec-mini-jeu.md §5)."""
     root = prefs.book_root()
     if not root:
         return [(15, ERROR, "dossier du livre non trouvé ni défini : " + prefs.NOT_FOUND_HINT)]
     if not os.path.isdir(root):
         return [(15, ERROR, f"dossier du livre introuvable : {root}")]
-    sid = scene.glbg.scene_id.strip()
+    sid = prefs.game_id(scene.glbg) if core.is_game(scene) else scene.glbg.scene_id.strip()
     if not sid:
         return []  # id manquant : contrôle 16
-    expected = prefs.default_output_path(sid)
+    expected = prefs.expected_output_path(scene.glbg)
     actual = prefs.output_path(scene.glbg)
     if _same_path(actual, expected):
         return []
@@ -221,7 +232,14 @@ def check_17(scene):
 
 
 def check_18(scene):
-    """D-8.10 : l'éclairage vient du GLB ; sans lampe exportable, le lecteur pose un éclairage neutre de secours."""
+    """D-8.10 : l'éclairage vient du GLB ; sans lampe exportable, le lecteur pose un éclairage neutre de secours.
+    Entité de jeu : lampes non exportées (le moteur clone chaque personnage ; l'éclairage vient de l'arène)."""
+    if scene.glbg.kind == core.KIND_ENTITY:
+        lamps = [o.name for o in scene.objects if o.type == 'LIGHT']
+        if not lamps:
+            return []
+        return [(18, WARNING, "lampe(s) non exportée(s) pour une entité de jeu (l'éclairage du jeu vient de l'arène) : "
+                              + ", ".join(lamps))]
     out = []
     ignored = [o.name for o in scene.objects if o.type == 'LIGHT' and o.data is not None
                and o.data.type not in core.EXPORTED_LIGHT_TYPES]
@@ -249,7 +267,13 @@ def check_19(scene):
 
 def check_20(scene):
     """DP-2 : le .blend de la scène <id> est blender/<id>.blend (le studio l'ouvre par ce nom). Seulement pour un
-    .blend rangé directement dans <livre>/blender/ (ni sous-dossier, ni repli sur la préférence)."""
+    .blend rangé directement dans <livre>/blender/ (ni sous-dossier, ni repli sur la préférence).
+    Jeu (DP-14) : blender/jeu/<id>.blend (blender/jeu/arena.blend pour l'arène)."""
+    if core.is_game(scene):
+        return _check_20_game(scene)
+    if prefs.blend_in_book_blender_dir(prefs.GAME_BLENDER_DIR):
+        return [(20, WARNING, f"fichier dans blender/{prefs.GAME_BLENDER_DIR}/ (.blend du mini-jeu) avec Type = Scène : "
+                              "choisir Entité de jeu ou Arène (panneau Scène)")]
     sid = scene.glbg.scene_id.strip()
     if not sid or not prefs.blend_in_book_blender_dir():
         return []  # id manquant : contrôle 16
@@ -259,6 +283,22 @@ def check_20(scene):
         return []
     return [(20, WARNING, f"fichier « {name} » : le .blend de la scène « {sid} » doit s'appeler "
                           f"blender/{sid}.blend (Enregistrer sous, Remap Relative coché)")]
+
+
+def _check_20_game(scene):
+    gid = prefs.game_id(scene.glbg)
+    if not gid:
+        return []  # id manquant : contrôle 16
+    name = os.path.basename(bpy.data.filepath)
+    where = f"blender/{prefs.GAME_BLENDER_DIR}/{gid}.blend"
+    if prefs.blend_in_book_blender_dir():
+        return [(20, WARNING, f"fichier « {name} » rangé dans blender/ : le .blend du mini-jeu va dans {where} "
+                              "(Enregistrer sous, Remap Relative coché)")]
+    if not prefs.blend_in_book_blender_dir(prefs.GAME_BLENDER_DIR) or os.path.splitext(name)[0] == gid:
+        return []
+    what = "de l'arène" if gid == core.GAME_ARENA_ID else f"de l'entité « {gid} »"
+    return [(20, WARNING, f"fichier « {name} » : le .blend {what} doit s'appeler {where} "
+                          "(Enregistrer sous, Remap Relative coché)")]
 
 
 def check_13(scene):
@@ -273,6 +313,13 @@ def check_13(scene):
 
 def check_10(scene):
     s = scene.glbg
+    if core.is_game(scene):
+        arm = s.game.obj
+        if s.kind != core.KIND_ENTITY or arm is None or arm.type != 'ARMATURE':
+            return []
+        declared = set(game.entity_actions(scene))
+        return [(10, WARNING, f"Action « {a.name} » de « {arm.name} » sans rôle de clip : non exportée")
+                for a in core.armature_actions(arm) if a not in declared]
     if serialize.is_nla(scene):
         declared = set(_declared_tracks(scene))
         out = []
@@ -551,16 +598,203 @@ def check_30(scene):
     return out
 
 
+# ---------------------------------------------------------------------------
+# Mini-jeu (v0.4, spec-mini-jeu.md §8, §16) : ce que book:check refuserait (erreurs) et budgets du gabarit
+# « poursuite » mesurables dans Blender (avertissements). Le build fait foi.
+# ---------------------------------------------------------------------------
+def _m(x):
+    return f"{x:.3f}".rstrip("0").rstrip(".").replace(".", ",") + " m"
+
+
+def check_31(scene):
+    """Entité : une armature par entité, choisie dans le panneau ; id différent de « arena » (réservé à l'arène)."""
+    g = scene.glbg.game
+    out = []
+    arms = core.scene_armatures(scene)
+    if not arms:
+        out.append((31, ERROR, "aucune armature dans la scène : une entité de jeu est un personnage animé"))
+    elif len(arms) > 1:
+        out.append((31, ERROR, f"{len(arms)} armatures dans la scène ({', '.join(a.name for a in arms)}) : "
+                               "une seule armature par entité (un .blend par entité)"))
+    if g.obj is None:
+        out.append((31, ERROR, "armature de l'entité non choisie (panneau Entité de jeu)"))
+    elif g.obj.name not in scene.objects:
+        out.append((31, ERROR, f"armature « {g.obj.name} » : l'objet n'est pas dans la scène"))
+    elif g.obj.type != 'ARMATURE':
+        out.append((31, ERROR, f"« {g.obj.name} » n'est pas une armature"))
+    if scene.glbg.scene_id.strip() == core.GAME_ARENA_ID:
+        out.append((31, ERROR, f"id « {core.GAME_ARENA_ID} » réservé à l'arène (game/{core.GAME_ARENA_ID}.glb) : "
+                               "choisir Type = Arène, ou un autre id"))
+    return out
+
+
+def check_32(scene):
+    """Entité : rôles de clip obligatoires selon le rôle (joueur : idle, walk, run, attack ; proie : idle, walk, caught,
+    et run ou flee) ; chaque clip est une Action de l'armature."""
+    g = scene.glbg.game
+    clips = game.entity_clips(scene)
+    who = "le joueur" if g.role == "player" else "une proie"
+    out = [(32, ERROR, f"rôle de clip « {r} » obligatoire pour {who}")
+           for r in core.GAME_REQUIRED_CLIPS[g.role] if r not in clips]
+    if g.role == "prey" and "run" not in clips and "flee" not in clips:
+        out.append((32, ERROR, "rôle de clip « run » ou « flee » obligatoire pour une proie (fuite)"))
+    arm = g.obj
+    if arm is None or arm.type != 'ARMATURE':
+        return out  # contrôle 31
+    for role, act in clips.items():
+        if not core.is_armature_action(act, arm):
+            out.append((32, ERROR, f"rôle « {role} » : « {act.name} » n'est pas une Action de « {arm.name} »"))
+    if clips and arm.animation_data is None:
+        out.append((32, ERROR, f"« {arm.name} » n'a aucune donnée d'animation, l'exportateur n'exporterait aucun clip"))
+    return out
+
+
+def check_33(scene):
+    """Entité : l'empty COLLIDER (centre de la capsule) est un empty de la scène, nommé exactement COLLIDER."""
+    out = []
+    for obj in bpy.data.objects:
+        if obj.name != core.GAME_COLLIDER_NAME and not obj.name.startswith(core.GAME_COLLIDER_NAME + "."):
+            continue
+        if obj.name != core.GAME_COLLIDER_NAME:
+            if obj.name in scene.objects:
+                out.append((33, ERROR, f"« {obj.name} » : l'empty du centre de la capsule doit s'appeler "
+                                       f"{core.GAME_COLLIDER_NAME}"))
+        elif obj.name not in scene.objects:
+            out.append((33, ERROR, f"{core.GAME_COLLIDER_NAME} n'est pas dans la scène active"))
+        elif obj.type != 'EMPTY':
+            out.append((33, ERROR, f"{core.GAME_COLLIDER_NAME} n'est pas un empty (le moteur lit sa position comme "
+                                   "centre de la capsule)"))
+    return out
+
+
+def check_34(scene):
+    """Arène : SPAWN_player, au moins un SPAWN_prey_*, COL_sol ; chaque COL_* est un maillage (erreurs du build) ;
+    FADE_* sans maillage (avertissement du build)."""
+    nodes = game.arena_nodes(scene)
+    out = []
+    if not nodes["spawn_player"]:
+        out.append((34, ERROR, f"pas de point d'apparition du joueur (empty « {core.SPAWN_PLAYER} »)"))
+    if not nodes["spawn_prey"]:
+        out.append((34, ERROR, f"pas de point d'apparition des proies (empties « {core.SPAWN_PREY_PREFIX}1 », "
+                               f"« {core.SPAWN_PREY_PREFIX}2 »…)"))
+    if not any(o.name == core.COL_FLOOR for o in nodes["colliders"]):
+        out.append((34, ERROR, f"pas de sol (maillage « {core.COL_FLOOR} »)"))
+    for o in nodes["colliders"]:
+        if not game.has_mesh(o):
+            out.append((34, ERROR, f"collisionneur « {o.name} » sans maillage (objet Mesh avec des faces attendu)"))
+    for o in nodes["fade"]:
+        if not game.has_mesh(o):
+            out.append((34, WARNING, f"décor « {o.name} » ({core.FADE_PREFIX}) sans maillage : rien à rendre transparent"))
+    return out
+
+
+def check_35(scene):
+    """Entité : capsule mesurable (maillages présents, sommet au-dessus des pieds) ; saisie manuelle : hauteur au moins
+    égale au diamètre (règle du contrat perdue à l'export du JSON Schema)."""
+    g = scene.glbg.game
+    if g.capsule_manual:
+        if g.height < 2 * g.radius - 1e-6:
+            return [(35, ERROR, f"capsule : hauteur {_m(g.height)} inférieure au diamètre {_m(2 * g.radius)}")]
+        return [(35, INFO, f"capsule saisie : rayon {_m(g.radius)}, hauteur {_m(g.height)}")]
+    m = game.measure(scene)
+    if m is None:
+        return [(35, ERROR, "capsule non mesurable : aucun maillage dans la scène")]
+    if m["height"] <= 0:
+        return [(35, ERROR, f"capsule non mesurable : sommet des maillages à {_m(m['hi'][2])}, sous les pieds "
+                            "(origine) ; poser les pieds à l'origine ou saisir la capsule à la main")]
+    return [(35, INFO, f"capsule mesurée ({m['pose']}) : rayon {_m(m['radius'])}, hauteur {_m(m['height'])}")]
+
+
+def check_36(scene):
+    radius, _height = game.capsule(scene)
+    if radius <= game.BUDGET_CAPSULE_RADIUS:
+        return []
+    return [(36, WARNING, f"capsule de {_m(radius)} de rayon ({_m(game.BUDGET_CAPSULE_RADIUS)} au plus, budget du "
+                          "gabarit « poursuite ») : coût du pas physique non mesuré au-delà ; réduire l'entité ou "
+                          "saisir la capsule")]
+
+
+def check_37(scene):
+    """Arène : triangles des collisionneurs COL_* (budget 5 000) ; rappel du conseil sur COL_sol."""
+    cols = game.arena_nodes(scene)["colliders"]
+    total = sum(game.triangles(o) for o in cols)
+    floor = sum(game.triangles(o) for o in cols if o.name == core.COL_FLOOR)
+    out = [(37, INFO, f"collisionneurs COL_* : {total} triangles, dont {floor} pour {core.COL_FLOOR} (sol simple : "
+                      "peu de triangles, plat là où c'est possible)")]
+    if total > game.BUDGET_COLLIDER_TRIANGLES:
+        out.append((37, WARNING, f"collisionneurs COL_* de {total} triangles ({game.BUDGET_COLLIDER_TRIANGLES} au plus, "
+                                 "budget du gabarit « poursuite ») : simplifier les maillages COL_*"))
+    return out
+
+
+def check_38(scene):
+    return [(38, WARNING, f"texture « {img.name} » de {w} × {h} px ({game.BUDGET_TEXTURE_PX} px au plus, budget du "
+                          "gabarit « poursuite »)") for img, w, h in game.big_textures(scene)]
+
+
+def check_39(scene):
+    """Entité : sans COLLIDER, le moteur pose la capsule sur l'axe vertical de l'origine, pieds à l'origine ; avec
+    COLLIDER, centrée sur l'empty. Personnage loin de cette capsule : collisions décalées."""
+    m = game.measure(scene)
+    if m is None:
+        return []
+    lo, hi = Vector(m["lo"]), Vector(m["hi"])
+    radius, height = game.capsule(scene)
+    center = (lo + hi) / 2
+    col = m["collider"]
+    out = []
+    if col is None:
+        tol = max(0.02, 0.05 * height)
+        if abs(lo.z) > tol:
+            out.append((39, WARNING, f"pieds à {_m(lo.z)} de hauteur (attendus à l'origine, z = 0) : la capsule part de "
+                                     "l'origine ; déplacer le personnage ou poser un empty COLLIDER"))
+        ref, what = Vector((0.0, 0.0)), "de l'axe vertical de l'origine"
+    else:
+        ref, what = col.xy, f"de l'empty {core.GAME_COLLIDER_NAME}"
+    off = (center.xy - ref).length
+    if radius and off > radius:
+        out.append((39, WARNING, f"personnage centré à {_m(off)} {what} (rayon de la capsule {_m(radius)}) : "
+                                 "collisions décalées ; recentrer le personnage"
+                                 + ("" if col is not None else " ou poser un empty COLLIDER")))
+    return out
+
+
+def check_40(scene):
+    """Scène en source Actions : cible caméra animée. L'exportateur n'anime un empty que par son Action active, hors
+    des clips (même limite que la position de caméra, contrôle 29)."""
+    target = scene.glbg.camera_target
+    if serialize.is_nla(scene) or target is None or target.name not in scene.objects:
+        return []
+    ad = target.animation_data
+    if ad is None:
+        return []
+    animated = core.slot_location_keyed(ad.action, ad.action_slot) or any(len(t.strips) for t in ad.nla_tracks)
+    if not animated:
+        return []
+    return [(40, WARNING, f"cible caméra « {target.name} » animée : en source Actions, l'exportateur n'anime un empty "
+                          "que par son Action active, la caméra ne la suivra pas pendant les clips ; choisir Clips = "
+                          "Pistes NLA et animer la cible dans une piste du nom du clip")]
+
+
 _NOT_APPLICABLE = [
     (9, INFO, "réglages d'export : imposés par Exporter, contrôlés lors d'un export manuel"),
 ]
 
 
+SCENE_CHECKS = (check_1, check_2, check_3, check_4, check_8, check_13, check_15, check_16,
+                check_10, check_11, check_17, check_18, check_19, check_20, check_21, check_22, check_23,
+                check_24, check_25, check_26, check_27, check_28, check_29, check_30, check_40)
+ENTITY_CHECKS = (check_1, check_2, check_31, check_32, check_33, check_15, check_16, check_35,
+                 check_10, check_11, check_18, check_19, check_20, check_36, check_38, check_39)
+ARENA_CHECKS = (check_1, check_2, check_34, check_15, check_16, check_11, check_18, check_20, check_37, check_38)
+
+
 def run_checks(scene):
     results = []
-    for check in (check_1, check_2, check_3, check_4, check_8, check_13, check_15, check_16,
-                  check_10, check_11, check_17, check_18, check_19, check_20, check_21, check_22, check_23,
-                  check_24, check_25, check_26, check_27, check_28, check_29, check_30):
+    game.begin()  # capsule mesurée une fois par passage
+    kind = scene.glbg.kind
+    checks = ENTITY_CHECKS if kind == core.KIND_ENTITY else ARENA_CHECKS if kind == core.KIND_ARENA else SCENE_CHECKS
+    for check in checks:
         results += check(scene)
     results += _NOT_APPLICABLE
     order = {ERROR: 0, WARNING: 1, INFO: 2}

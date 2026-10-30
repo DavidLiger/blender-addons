@@ -2,6 +2,8 @@ import os
 
 import bpy
 
+from . import core
+
 
 class GLBG_Preferences(bpy.types.AddonPreferences):
     bl_idname = __package__
@@ -24,6 +26,7 @@ def get_prefs():
 
 BOOK_FILE = "book.json"
 BLENDER_DIR = "blender"  # dossier réservé du livre (spec-app-bureau.md §5) : blender/<id>.blend
+GAME_BLENDER_DIR = "jeu"  # .blend du mini-jeu (DP-14) : blender/jeu/<id>.blend
 ORIGIN_BLEND = "BLEND"  # dossier déduit de l'emplacement du .blend
 ORIGIN_PREF = "PREF"    # préférence book_root, en repli
 ORIGIN_LABELS = {ORIGIN_BLEND: "déduit du .blend", ORIGIN_PREF: "préférence"}
@@ -62,13 +65,13 @@ def book_root():
     return book_location()[0]
 
 
-def blend_in_book_blender_dir():
-    """Vrai si le dossier est déduit d'un .blend rangé directement dans <livre>/blender/."""
+def blend_in_book_blender_dir(*sub):
+    """Vrai si le dossier est déduit d'un .blend rangé directement dans <livre>/blender/ (ou <livre>/blender/<sub>/)."""
     root, origin = book_location()
     if origin != ORIGIN_BLEND:
         return False
     here = os.path.dirname(os.path.abspath(bpy.data.filepath))
-    return os.path.normcase(here) == os.path.normcase(os.path.join(root, BLENDER_DIR))
+    return os.path.normcase(here) == os.path.normcase(os.path.join(root, BLENDER_DIR, *sub))
 
 
 def default_output_path(scene_id):
@@ -79,7 +82,26 @@ def default_output_path(scene_id):
     return os.path.join(root, "scenes", sid + ".glb")
 
 
+def game_id(settings):
+    """Identifiant du GLB du jeu : « arena » pour l'arène, l'id saisi pour une entité (nom du fichier)."""
+    return core.GAME_ARENA_ID if settings.kind == core.KIND_ARENA else settings.scene_id.strip()
+
+
+def default_game_output_path(gid):
+    root = book_root()
+    if not root or not gid:
+        return ""
+    return os.path.join(root, core.GAME_DIR, gid + ".glb")
+
+
+def expected_output_path(settings):
+    """Seul emplacement lu par le build : scenes/<id>.glb (scène) ou game/<id>.glb (entité, arène)."""
+    if settings.kind == core.KIND_SCENE:
+        return default_output_path(settings.scene_id)
+    return default_game_output_path(game_id(settings))
+
+
 def output_path(settings):
-    """Fichier GLB de sortie : le champ s'il est rempli, sinon <dossier du livre>/scenes/<id>.glb."""
+    """Fichier GLB de sortie : le champ s'il est rempli, sinon l'emplacement attendu par le build."""
     path = settings.output_path.strip()
-    return bpy.path.abspath(path) if path else default_output_path(settings.scene_id)
+    return bpy.path.abspath(path) if path else expected_output_path(settings)

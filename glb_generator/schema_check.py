@@ -1,16 +1,20 @@
 # Validateur JSON Schema générique, sous-ensemble (spec-atelier-glbi.md §6) : type, properties, required,
-# additionalProperties, pattern, enum, const, minimum, maximum, minItems, items. `default` et les annotations
+# additionalProperties, pattern, enum, const, minimum, maximum, minItems, items ; $defs (schémas nommés d'un même
+# fichier, choisis par definition()). `default` et les annotations
 # sont ignorés ; tout autre mot-clé rend le schéma refusé, pour qu'une règle ne soit jamais ignorée en silence.
-# Aucune règle du contrat n'est écrite ici : elles viennent toutes du fichier schema/glbi-layer3d.schema.json,
-# produit par `npm run schema:export -- --addon <dossier glb_generator>` dans GLBInterpreter.
+# Aucune règle du contrat n'est écrite ici : elles viennent toutes des fichiers schema/glbi-layer3d.schema.json (scène) et
+# schema/glbi-game3d.schema.json (jeu : un schéma par $defs, entity et arena), produits par
+# `npm run schema:export -- --addon <dossier glb_generator>` dans GLBInterpreter.
 import json
 import os
 import re
 
-SCHEMA_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "schema", "glbi-layer3d.schema.json")
+_SCHEMA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "schema")
+SCHEMA_PATH = os.path.join(_SCHEMA_DIR, "glbi-layer3d.schema.json")
+GAME_SCHEMA_PATH = os.path.join(_SCHEMA_DIR, "glbi-game3d.schema.json")
 
 _SUPPORTED = {"type", "properties", "required", "additionalProperties", "pattern", "enum", "const",
-              "minimum", "maximum", "minItems", "items"}
+              "minimum", "maximum", "minItems", "items", "$defs"}
 _ANNOTATIONS = {"$schema", "$id", "$comment", "default", "title", "description"}
 
 
@@ -45,6 +49,17 @@ def _unsupported(schema, path):
                 yield from _unsupported(prop, f"{path}.{name}".lstrip("."))
         elif key in ("items", "additionalProperties") and isinstance(sub, dict):
             yield from _unsupported(sub, f"{path}.{key}".lstrip("."))
+        elif key == "$defs":
+            for name, sub_schema in sub.items():
+                yield from _unsupported(sub_schema, f"$defs.{name}")
+
+
+def definition(schema, name):
+    """Schéma $defs.<name> d'un fichier à plusieurs schémas (jeu : entity, arena)."""
+    sub = schema.get("$defs", {}).get(name) if isinstance(schema.get("$defs"), dict) else None
+    if not isinstance(sub, dict):
+        raise SchemaError(f"$defs.{name} absent du schéma {schema.get('$id', '')}".rstrip())
+    return sub
 
 
 def _ecma(pattern):

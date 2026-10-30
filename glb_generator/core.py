@@ -7,6 +7,32 @@ ROOT_NAME = "GLBI_ROOT"
 TAB = "BD"
 GLBI_VERSION = 2  # version de la couche 3D (D-8.9)
 
+# Type du .blend (v0.4) : scène de livre (scenes/<id>.glb), entité ou arène du mini-jeu (game/<id>.glb, DP-14).
+KIND_SCENE = 'SCENE'
+KIND_ENTITY = 'ENTITY'
+KIND_ARENA = 'ARENA'
+GAME3D_VERSION = 1  # glbi_game_version et glbi_game_config.version (spec-mini-jeu.md §16)
+GAME_DIR = "game"
+GAME_ARENA_ID = "arena"
+GAME_ROLES = ("player", "prey")
+GAME_CLIP_ROLES = ("idle", "walk", "run", "attack", "caught", "flee")
+# Rôles de clip obligatoires (spec-mini-jeu.md §8) ; une proie a aussi run ou flee.
+GAME_REQUIRED_CLIPS = {"player": ("idle", "walk", "run", "attack"), "prey": ("idle", "walk", "caught")}
+GAME_COLLIDER_NAME = "COLLIDER"
+SPAWN_PLAYER = "SPAWN_player"
+SPAWN_PREY_PREFIX = "SPAWN_prey_"
+COL_PREFIX = "COL_"
+COL_FLOOR = "COL_sol"
+FADE_PREFIX = "FADE_"
+
+
+def scene_kind(scene):
+    return scene.glbg.kind
+
+
+def is_game(scene):
+    return scene.glbg.kind != KIND_SCENE
+
 _ROOT_RE = re.compile(re.escape(ROOT_NAME) + r"(\.\d+)?")
 
 

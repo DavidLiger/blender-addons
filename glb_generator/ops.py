@@ -2,7 +2,7 @@ import os
 
 import bpy
 
-from . import checks, core, gltf_hook, posefix, prefs, serialize, verify
+from . import checks, core, game, gltf_hook, posefix, prefs, serialize, verify
 
 
 class GLBG_OT_root_ensure(bpy.types.Operator):
@@ -114,7 +114,7 @@ def get_root(scene):
 
 
 class GLBG_OT_apply(bpy.types.Operator):
-    """Écrit glbi_version et glbi_config sur GLBI_ROOT"""
+    """Écrit la couche 3D sur GLBI_ROOT : glbi_version et glbi_config (scène), glbi_game_version et glbi_game_config (jeu)"""
     bl_idname = "glbg.apply"
     bl_label = "Appliquer"
     bl_options = {'REGISTER', 'UNDO'}
@@ -139,7 +139,7 @@ def apply(op, scene):
     if _verify(op, scene):
         return {'CANCELLED'}
     serialize.write_root(get_root(scene), scene)
-    op.report({'INFO'}, "glbi_config écrit sur GLBI_ROOT")
+    op.report({'INFO'}, f"{serialize.root_keys(scene)[1]} écrit sur GLBI_ROOT")
     return {'FINISHED'}
 
 
@@ -228,7 +228,27 @@ ANIMATION_MODES = {core.SOURCE_ACTIONS: 'ACTIONS', core.SOURCE_NLA: 'NLA_TRACKS'
 
 
 def export_settings(scene):
+    kind = scene.glbg.kind
+    if kind == core.KIND_ENTITY:
+        # Entité de jeu : ses Actions (rôles de clip), sans lampes (le moteur clone chaque personnage avec ce qu'il porte).
+        return dict(EXPORT_SETTINGS, export_animation_mode='ACTIONS', export_lights=False)
+    if kind == core.KIND_ARENA:
+        # Arène : lampes de l'éclairage du jeu, aucune animation (le moteur n'en joue pas).
+        return dict(EXPORT_SETTINGS, export_animation_mode='ACTIONS', export_animations=False)
     return dict(EXPORT_SETTINGS, export_animation_mode=ANIMATION_MODES[scene.glbg.clip_source])
+
+
+def expected_game_nodes(scene):
+    """[(nom de nœud, maillage exigé)] que la relecture du GLB du jeu doit trouver."""
+    if scene.glbg.kind == core.KIND_ARENA:
+        nodes = game.arena_nodes(scene)
+        return ([(o.name, False) for o in nodes["spawn_player"] + nodes["spawn_prey"]]
+                + [(o.name, True) for o in nodes["colliders"]])
+    g = scene.glbg.game
+    out = [(g.obj.name, False)] if g.obj is not None else []
+    if game.collider_object(scene) is not None:
+        out.append((core.GAME_COLLIDER_NAME, False))
+    return out
 
 
 def expected_clip_objects(scene):
@@ -249,15 +269,16 @@ class GLBG_OT_export(bpy.types.Operator):
         scene = context.scene
         out = prefs.output_path(scene.glbg)
         if not out:
-            reason = "id de scène manquant" if prefs.book_root() else "dossier du livre non trouvé (" + prefs.NOT_FOUND_HINT + ")"
+            reason = ("id manquant" if core.is_game(scene) else "id de scène manquant") if prefs.book_root() else "dossier du livre non trouvé (" + prefs.NOT_FOUND_HINT + ")"
             self.report({'ERROR'}, "Fichier GLB non défini : " + reason)
             return {'CANCELLED'}
         if apply(self, scene) != {'FINISHED'}:
             return {'CANCELLED'}
-        config_text = get_root(scene)["glbi_config"]
+        is_game = core.is_game(scene)
+        config_text = get_root(scene)[serialize.root_keys(scene)[1]]
         clips = serialize.declared_clips(scene)
-        keyed = [it.ident.strip() for it in scene.glbg.actions
-                 if it.camera_position is not None and serialize.camera_position_keyed(scene, it)]
+        keyed = [] if is_game else [it.ident.strip() for it in scene.glbg.actions
+                                    if it.camera_position is not None and serialize.camera_position_keyed(scene, it)]
         os.makedirs(os.path.dirname(out), exist_ok=True)
         snapshot = core.snapshot_poses(scene)
         temp_keys, pose_summary = [], {}
@@ -276,8 +297,13 @@ class GLBG_OT_export(bpy.types.Operator):
         if 'FINISHED' not in result:
             self.report({'ERROR'}, "L'exportateur glTF a échoué (voir la console)")
             return {'CANCELLED'}
-        problems = verify.verify_glb(out, clips, config_text, len(core.scene_lights(scene)),
-                                     expected_clip_objects(scene), keyed)
+        if is_game:
+            n_lights = len(core.scene_lights(scene)) if scene.glbg.kind == core.KIND_ARENA else 0
+            problems = verify.verify_game_glb(out, scene.glbg.kind, clips, config_text, n_lights,
+                                              expected_game_nodes(scene))
+        else:
+            problems = verify.verify_glb(out, clips, config_text, len(core.scene_lights(scene)),
+                                         expected_clip_objects(scene), keyed)
         report = scene.glbg.report
         for name, (static, _ambiguous) in pose_summary.items():
             if static:
